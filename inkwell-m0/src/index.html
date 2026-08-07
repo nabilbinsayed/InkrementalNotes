@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inkwell M0 — Latency Spike</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="stage">
+  <div id="embedWarning">
+    Running inside an embedded frame. Measurements here are NOT valid.
+    Download and open locally in Edge, or run under Tauri.
+  </div>
+  <canvas id="dry"></canvas>
+  <canvas id="wet"></canvas>
+  <div id="hint">
+    <b>Scribble here — fast, slow, hard, light.</b><br>
+    ~20 seconds of hard scribbling gives the gate enough data.
+  </div>
+</div>
+
+<aside id="panel">
+  <h1>Inkwell M0 <span>latency spike</span></h1>
+  <div class="sub">Blank window. One stroke. Nothing else. This is the gate.</div>
+
+  <section>
+    <div id="gateVerdict" class="verdict idle">Scribble hard for ~20 seconds…</div>
+    <div class="gates">
+      <div id="gPen" class="gate idle" title="Pen detected"></div>
+      <div id="gSample" class="gate idle" title="Sample rate"></div>
+      <div id="gPaint" class="gate idle" title="evt→paint p95"></div>
+      <div id="gJitter" class="gate idle" title="Frame jitter"></div>
+      <div id="gLevels" class="gate idle" title="Pressure levels"></div>
+    </div>
+    <div id="diagnostics"></div>
+  </section>
+
+  <section>
+    <h2>Latency</h2>
+    <div class="card rows">
+      <div class="row"><span class="k">evt→paint p50</span>
+        <span><span class="v big" id="mPaint50">--</span><span class="u">ms</span></span></div>
+      <div class="row"><span class="k">evt→paint p95 &nbsp;<em style="color:#5c6273">≤25</em></span>
+        <span><span class="v big" id="mPaint95">--</span><span class="u">ms</span></span></div>
+      <div class="row"><span class="k">evt→paint p99</span>
+        <span><span class="v" id="mPaint99">--</span><span class="u">ms</span></span></div>
+      <div class="row"><span class="k">evt→js p50 / p95</span>
+        <span><span class="v" id="mJsLat">--</span><span class="u">ms</span></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Input fidelity</h2>
+    <div class="card rows">
+      <div class="row"><span class="k">Sample rate &nbsp;<em style="color:#5c6273">≥150</em></span>
+        <span><span class="v big" id="mSampleHz">--</span><span class="u">Hz</span></span></div>
+      <div class="row"><span class="k">Coalesced / event</span>
+        <span><span class="v" id="mCoalesced">--</span></span></div>
+      <div class="row"><span class="k">Pressure levels &nbsp;<em style="color:#5c6273">≥200</em></span>
+        <span><span class="v" id="mLevels">0</span></span></div>
+      <div class="row"><span class="k">Max pressure seen</span>
+        <span><span class="v" id="mMaxP">--</span></span></div>
+      <div class="row"><span class="k">Pointer type</span>
+        <span><span class="v" id="mType">--</span></span></div>
+      <div class="row"><span class="k">Tilt X, Y</span>
+        <span><span class="v" id="mTilt">--</span></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Frame pacing</h2>
+    <div class="card rows">
+      <div class="row"><span class="k">Frame rate</span>
+        <span><span class="v" id="mFps">--</span><span class="u">fps</span></span></div>
+      <div class="row"><span class="k">Jitter (σ) &nbsp;<em style="color:#5c6273">≤3.0</em></span>
+        <span><span class="v big" id="mJitter">--</span><span class="u">ms</span></span></div>
+      <div class="row"><span class="k">Strokes / samples</span>
+        <span><span class="v"><span id="mStrokes">0</span> / <span id="mSamples">0</span></span></span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The four things that matter</h2>
+    <div class="card">
+      <label class="ctl"><span class="name">Coalesced events
+        <small>OFF = one sample per frame. This is the bug.</small></span>
+        <input type="checkbox" id="cCoalesced"></label>
+      <label class="ctl"><span class="name">pointerrawupdate
+        <small><span id="rawSupported">…</span> · using <code id="evtName">…</code></small></span>
+        <input type="checkbox" id="cRaw"></label>
+      <label class="ctl"><span class="name">Desynchronized canvas
+        <small>Low-latency GPU path. Re-inits canvas.</small></span>
+        <input type="checkbox" id="cDesync"></label>
+      <label class="ctl"><span class="name">Predicted events
+        <small>Visual only, never committed. Try both.</small></span>
+        <input type="checkbox" id="cPredict"></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Brush</h2>
+    <div class="card">
+      <label class="ctl"><span class="name">Width</span>
+        <input type="range" id="cWidth" min="0.5" max="14" step="0.1" value="3.2">
+        <span class="val" id="cWidthVal">3.2</span></label>
+      <label class="ctl"><span class="name">Pressure curve γ
+        <small>&lt;1 softer, &gt;1 sharper</small></span>
+        <input type="range" id="cGamma" min="0.3" max="3" step="0.05" value="1">
+        <span class="val" id="cGammaVal">1</span></label>
+      <label class="ctl"><span class="name">Smoothing</span>
+        <input type="checkbox" id="cSmooth"></label>
+      <label class="ctl"><span class="name">min cutoff
+        <small>lower = smoother, more lag</small></span>
+        <input type="range" id="cMinCutoff" min="0.2" max="6" step="0.1" value="1.7">
+        <span class="val" id="cMinCutoffVal">1.7</span></label>
+      <label class="ctl"><span class="name">beta
+        <small>higher = less lag when fast</small></span>
+        <input type="range" id="cBeta" min="0" max="0.15" step="0.005" value="0.02">
+        <span class="val" id="cBetaVal">0.02</span></label>
+      <label class="ctl"><span class="name">Colour</span>
+        <input type="color" id="cColor" value="#141724"></label>
+      <label class="ctl"><span class="name">Pen only
+        <small>reject mouse &amp; touch (palm rejection)</small></span>
+        <input type="checkbox" id="cPenOnly"></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>Actions</h2>
+    <div class="btns">
+      <button id="btnClear">Clear canvas</button>
+      <button id="btnReset">Reset metrics</button>
+      <button id="btnExport" class="primary">Export capture JSON</button>
+      <button id="btnPanel">Hide panel</button>
+    </div>
+  </section>
+
+  <div class="note">
+    <b>These numbers are a floor, not the truth.</b> JS cannot see the compositor,
+    display scanout, or LCD response — add roughly 8–20 ms on a 60 Hz panel.
+    <br><br>
+    <b>Ground truth:</b> film the screen and your pen tip together at 240 fps
+    (4.17 ms per frame) and count frames between the tip moving and the ink moving.
+    Write the number in your README. Nothing in software replaces this.
+    <br><br>
+    <b>Exported capture JSON</b> uses the same stroke schema as the single-PDF
+    proof, so a real Huion capture converts to a real PDF with no glue code.
+  </div>
+</aside>
+
+<script src="ink.js"></script>
+<script src="hud.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

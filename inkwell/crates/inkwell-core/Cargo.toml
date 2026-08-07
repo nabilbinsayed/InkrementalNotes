@@ -1,0 +1,15 @@
+[package]
+name = "inkwell-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Document model, ink maths, PDF-native file format and crash-safe autosave for Inkwell. No UI, no shell dependency."
+
+[dependencies]
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

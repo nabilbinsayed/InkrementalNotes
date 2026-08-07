@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inkwell — PDF-Native Ink Annotator</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app-container">
+  <div id="stage">
+    <div id="toolbar">
+      <button id="btnPen" class="tool-btn active">🖊️ Pen</button>
+      <button id="btnHighlighter" class="tool-btn">🖍️ Highlighter</button>
+      <button id="btnEraser" class="tool-btn">🧹 Eraser</button>
+      <div class="divider"></div>
+      <input type="color" id="colorPicker" value="#141724" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
+      <div class="divider"></div>
+      <button id="btnUndo" class="tool-btn">↩️ Undo</button>
+      <button id="btnRedo" class="tool-btn">↪️ Redo</button>
+    </div>
+
+    <canvas id="tiles"></canvas>
+    <canvas id="dry"></canvas>
+    <canvas id="wet"></canvas>
+  </div>
+
+  <aside id="sidebar">
+    <h2>Inkwell</h2>
+    
+    <div class="section">
+      <button id="btnOpen" class="btn">📂 Open PDF</button>
+      <button id="btnSave" class="btn btn-secondary">💾 Save Annotations</button>
+    </div>
+
+    <div class="section">
+      <h2>Document Info</h2>
+      <div id="docInfo" class="info-box">
+        <div>No document loaded</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Input Stats</h2>
+      <div id="inputStats" class="info-box">
+        <div>Pointer: --</div>
+        <div>Samples: 0</div>
+        <div>Strokes: 0</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script src="js/ink.js"></script>
+<script src="js/viewport.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

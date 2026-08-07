@@ -1,0 +1,23 @@
+[package]
+name = "inkwell-m0"
+version = "0.1.0"
+edition = "2021"
+description = "Inkwell M0 latency spike"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.dev]
+# Debug builds of the webview host are fine, but never measure latency in a
+# debug build of your own render code once you move rendering into Rust.
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

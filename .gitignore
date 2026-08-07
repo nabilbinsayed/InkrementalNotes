@@ -1,0 +1,25 @@
+# Rust build artifacts
+target/
+**/target/
+Cargo.lock
+
+# Node / JS
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# Large generated fixtures/corpus downloads (keep fixtures/lecture.pdf and MANIFEST.md)
+fixtures/corpus/*.pdf
+!fixtures/lecture.pdf
+
+# Antigravity / IDE settings
+.vscode/
+.idea/
+.gemini/
