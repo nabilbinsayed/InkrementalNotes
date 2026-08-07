@@ -156,19 +156,39 @@ pub fn render_tile(
     px: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, String> {
-    // ponytail: reinitialises PDFium per tile call; add a cached PdfiumDoc to
-    // AppState when tile throughput becomes a measured bottleneck.
-    let pdf_bytes_guard = state.pdf_bytes.lock().unwrap();
-    let bytes = pdf_bytes_guard.as_ref().ok_or("No PDF loaded")?;
+    if px == 0 {
+        return Err("Tile size must be greater than zero".into());
+    }
+    if !(rect[0].is_finite() && rect[1].is_finite() && rect[2].is_finite() && rect[3].is_finite())
+        || rect[2] <= rect[0]
+        || rect[3] <= rect[1]
+    {
+        return Err(format!("Invalid tile rectangle: {rect:?}"));
+    }
+
+    // Keep an owned copy alive for the PDFium document, but do not hold the
+    // application-state lock while a potentially expensive page render runs.
+    let bytes = state.pdf_bytes.lock().unwrap()
+        .as_ref()
+        .cloned()
+        .ok_or("No PDF loaded")?;
 
     let pdfium = inkwell_pdf::init_pdfium().map_err(|e| format!("PDFium init error: {e:?}"))?;
     let doc = pdfium
-        .load_pdf_from_byte_slice(bytes, None)
+        .load_pdf_from_byte_slice(&bytes, None)
         .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
     let rasterizer = inkwell_pdf::PdfiumRasterizer::new(doc);
     let tile = inkwell_core::tiles::PageRasterizer::rasterize(&rasterizer, page, rect, px)
-        .ok_or("Failed to rasterize tile")?;
+        .ok_or_else(|| format!("PDFium did not render page {page} for rect {rect:?} at {px}px"))?;
+
+    let expected_len = px as usize * px as usize * 3;
+    if tile.data.len() != expected_len {
+        return Err(format!(
+            "PDFium returned an invalid tile buffer for page {page}: expected {expected_len} RGB bytes, got {}",
+            tile.data.len()
+        ));
+    }
 
     Ok(tile.data)
 }

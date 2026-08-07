@@ -28,6 +28,7 @@ const state = {
   lassoRect: null,
   laserPos: null,
   laserTimer: null,
+  streamline: null,
 };
 
 let tilesCanvas, dryCanvas, wetCanvas;
@@ -47,6 +48,10 @@ async function fetchTile(page, rect, px) {
   tilesPending.add(key);
   try {
     const raw = await invoke('render_tile', { page, rect, px });
+    const expectedBytes = px * px * 3;
+    if (!raw || raw.length !== expectedBytes) {
+      throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGB bytes, got ${raw ? raw.length : 0}`);
+    }
     const imgData = new ImageData(px, px);
     for (let i = 0; i < px * px; i++) {
       imgData.data[i * 4 + 0] = raw[i * 3 + 0];
@@ -54,8 +59,14 @@ async function fetchTile(page, rect, px) {
       imgData.data[i * 4 + 2] = raw[i * 3 + 2];
       imgData.data[i * 4 + 3] = 255;
     }
-    tileCache.set(key, imgData);
-    return { key, data: imgData };
+    // ImageData is not a CanvasImageSource, so it cannot be passed to
+    // drawImage() directly. Materialise it in a tiny canvas before caching.
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = px;
+    tileCanvas.height = px;
+    tileCanvas.getContext('2d').putImageData(imgData, 0, 0);
+    tileCache.set(key, tileCanvas);
+    return { key, data: tileCanvas };
   } catch (err) {
     console.warn('render_tile error:', err);
     return null;
@@ -92,6 +103,7 @@ function drawPageBackground() {
 }
 
 async function redrawTiles() {
+  const drawEpoch = ++redrawTiles.epoch;
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.clearRect(0, 0, tilesCanvas.width, tilesCanvas.height);
 
@@ -111,16 +123,30 @@ async function redrawTiles() {
   const rx1 = Math.min(pi.width_pt, wx1), ry1 = Math.min(pi.height_pt, wy1);
   if (rx1 <= rx0 || ry1 <= ry0) return;
 
-  const px = Math.min(2048, Math.round((rx1 - rx0) * viewport.zoom * state.dpr));
+  // The current Rust tile protocol produces square pixel buffers. Request a
+  // square in document space too; otherwise portrait pages are copied into
+  // the corner of a square and look blank or badly distorted when blitted.
+  const side = Math.max(rx1 - rx0, ry1 - ry0);
+  const tileRect = [rx0, ry0, rx0 + side, ry0 + side];
+  const px = Math.min(2048, Math.round(side * viewport.zoom * state.dpr));
   if (px < 4) return;
 
-  const result = await fetchTile(state.currentSheet, [rx0, ry0, rx1, ry1], px);
-  if (!result) return;
+  const result = await fetchTile(state.currentSheet, tileRect, px);
+  if (!result || drawEpoch !== redrawTiles.epoch) return;
 
-  const [sx0, sy0] = viewport.worldToScreen(rx0, ry0);
-  const [sx1, sy1] = viewport.worldToScreen(rx1, ry1);
+  const [sx0, sy0] = viewport.worldToScreen(tileRect[0], tileRect[1]);
+  const [sx1, sy1] = viewport.worldToScreen(tileRect[2], tileRect[3]);
+  const [pageX0, pageY0] = viewport.worldToScreen(0, 0);
+  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt);
+  tctx.save();
+  tctx.scale(state.dpr, state.dpr);
+  tctx.beginPath();
+  tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
+  tctx.clip();
   tctx.drawImage(result.data, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  tctx.restore();
 }
+redrawTiles.epoch = 0;
 
 function makeCtx(canvas) {
   return canvas.getContext('2d', { desynchronized: true, alpha: true });
@@ -233,8 +259,9 @@ function consume(e) {
   if (!state.cur) return;
   const [x, y] = localXY(e);
   const p = e.pressure > 0 ? e.pressure : 0.5;
+  const smoothed = state.streamline.filter(x, y, p);
   const prev = state.cur.last;
-  const pt = state.cur.push(x, y, p, e.timeStamp);
+  const pt = state.cur.push(smoothed.x, smoothed.y, smoothed.p, e.timeStamp);
   if (!pt) return;
   state.samplesCount++;
 
@@ -435,7 +462,9 @@ function onDown(e) {
     kind: state.activeTool,
     rgb: state.color,
     baseWidth: isHighlighter ? 12.0 : state.baseWidth,
+    smoothing: false,
   });
+  state.streamline = new Ink.Streamline();
   consume(e);
   e.preventDefault();
 }
@@ -1030,6 +1059,7 @@ function attachPointerHandlers() {
     clearLaser();
     state.isErasing = false;
     state.cur = null;
+    state.streamline = null;
     clearWet();
     $('toolbar').classList.remove('pen-down');
   });

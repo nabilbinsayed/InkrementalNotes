@@ -22,10 +22,13 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     }
     if let Ok(cwd) = std::env::current_dir() {
         candidate_paths.push(cwd.clone());
+        candidate_paths.push(cwd.join("bin"));
         if let Some(parent) = cwd.parent() {
             candidate_paths.push(parent.to_path_buf());
+            candidate_paths.push(parent.join("bin"));
             if let Some(grandparent) = parent.parent() {
                 candidate_paths.push(grandparent.to_path_buf());
+                candidate_paths.push(grandparent.join("bin"));
             }
         }
     }
@@ -34,8 +37,9 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
         let dll_path = dir.join("pdfium.dll");
         if dll_path.exists() {
             let lib_name = Pdfium::pdfium_platform_library_name_at_path(&dir);
-            if let Ok(b) = Pdfium::bind_to_library(&lib_name) {
-                return Ok(Pdfium::new(b));
+            match Pdfium::bind_to_library(&lib_name) {
+                Ok(bindings) => return Ok(Pdfium::new(bindings)),
+                Err(error) => eprintln!("Failed to load PDFium from {dll_path:?}: {error:?}"),
             }
         }
     }

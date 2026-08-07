@@ -13,7 +13,10 @@ impl<'a> PdfiumRasterizer<'a> {
 
 impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
     fn page_size_pt(&self, page: u32) -> Option<(f64, f64)> {
-        let p = self.document.pages().get(page as i32).ok()?;
+        let p = self.document.pages().get(page as i32).map_err(|e| {
+            eprintln!("PDFium could not get page {page}: {e:?}");
+            e
+        }).ok()?;
         Some((p.width().value as f64, p.height().value as f64))
     }
 
@@ -24,20 +27,24 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let rw = rect[2] - rect[0];
         let rh = rect[3] - rect[1];
         if rw <= 0.0 || rh <= 0.0 {
+            eprintln!("PDFium received invalid tile rect: {rect:?}");
             return None;
         }
         
         let page_w = p.width().value as f64;
         let page_h = p.height().value as f64;
         let scale = (px as f64) / rw.max(rh);
-        let target_w = (page_w * scale) as i32;
-        let target_h = (page_h * scale) as i32;
+        let target_w = (page_w * scale).ceil().max(1.0) as i32;
+        let target_h = (page_h * scale).ceil().max(1.0) as i32;
         
         let config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h);
             
-        let bitmap = p.render_with_config(&config).ok()?;
+        let bitmap = p.render_with_config(&config).map_err(|e| {
+            eprintln!("PDFium failed to render page {page}: {e:?}");
+            e
+        }).ok()?;
         let bgra_bytes = bitmap.as_raw_bytes();
         let bitmap_w = bitmap.width() as u32;
         let bitmap_h = bitmap.height() as u32;
@@ -57,6 +64,7 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         
         // Ensure bounds
         if x0 >= bitmap_w || y0 >= bitmap_h {
+            eprintln!("Tile rect {rect:?} lies outside rendered page {page} ({bitmap_w}x{bitmap_h})");
             return None;
         }
         

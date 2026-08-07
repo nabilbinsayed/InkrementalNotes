@@ -32,6 +32,31 @@ class OneEuro {
   }
 }
 
+// A light trailing spring removes digitizer tremor without trying to predict
+// the pen. The first point is kept exact so a stroke never visibly starts late.
+class Streamline {
+  constructor(positionLerp = 0.45, pressureLerp = 0.35) {
+    this.positionLerp = positionLerp;
+    this.pressureLerp = pressureLerp;
+    this.curX = null;
+    this.curY = null;
+    this.curP = null;
+  }
+
+  filter(x, y, p) {
+    if (this.curX === null) {
+      this.curX = x;
+      this.curY = y;
+      this.curP = p;
+    } else {
+      this.curX += (x - this.curX) * this.positionLerp;
+      this.curY += (y - this.curY) * this.positionLerp;
+      this.curP += (p - this.curP) * this.pressureLerp;
+    }
+    return { x: this.curX, y: this.curY, p: this.curP };
+  }
+}
+
 class Stroke {
   constructor(opts = {}) {
     this.id = crypto.randomUUID ? crypto.randomUUID()
@@ -68,7 +93,7 @@ class Stroke {
     const last = this._pts[this._pts.length - 1];
     if (last && Math.hypot(fx - last.x, fy - last.y) < 0.05) return null; // dedup
 
-    const pt = { x: fx, y: fy, w: this.widthFor(this._p) };
+    const pt = { x: fx, y: fy, w: this.widthFor(this._p), p: this._p, t: tMs };
     this._pts.push(pt);
     this.samples.push([+fx.toFixed(3), +fy.toFixed(3), +this._p.toFixed(4), +tMs.toFixed(1)]);
     return pt;
@@ -174,6 +199,38 @@ function cubicAt(p0, cubic, t) {
   };
 }
 
+function chaikinSubdivide(points, iterations = 2) {
+  let out = points.slice();
+  for (let pass = 0; pass < iterations && out.length > 2; pass++) {
+    const next = [out[0]];
+    for (let i = 0; i < out.length - 1; i++) {
+      const a = out[i], b = out[i + 1];
+      next.push({
+        x: 0.75 * a.x + 0.25 * b.x,
+        y: 0.75 * a.y + 0.25 * b.y,
+        w: 0.75 * a.w + 0.25 * b.w,
+      });
+      next.push({
+        x: 0.25 * a.x + 0.75 * b.x,
+        y: 0.25 * a.y + 0.75 * b.y,
+        w: 0.25 * a.w + 0.75 * b.w,
+      });
+    }
+    next.push(out[out.length - 1]);
+    out = next;
+  }
+  return out;
+}
+
+function quadraticAt(p0, control, p1, t) {
+  const u = 1 - t;
+  return {
+    x: u * u * p0.x + 2 * u * t * control.x + t * t * p1.x,
+    y: u * u * p0.y + 2 * u * t * control.y + t * t * p1.y,
+    w: u * u * p0.w + 2 * u * t * control.w + t * t * p1.w,
+  };
+}
+
 function drawStroke(ctx, stroke) {
   const rawPts = stroke.points;
   if (!rawPts || !rawPts.length) return;
@@ -181,19 +238,33 @@ function drawStroke(ctx, stroke) {
   if (rawPts.length === 1) { drawDot(ctx, rawPts[0]); return; }
   if (rawPts.length === 2) { drawDot(ctx, rawPts[0]); drawSegment(ctx, rawPts[0], rawPts[1]); return; }
 
-  const cubics = openPolylineToCubics(rawPts);
-  let pPrev = rawPts[0];
+  const points = chaikinSubdivide(rawPts);
+  let pPrev = points[0];
   drawDot(ctx, pPrev);
 
-  for (let i = 0; i < cubics.length; i++) {
-    const c = cubics[i];
-    const steps = 6;
+  // Midpoint quadratics are C1-continuous; sampling them into the existing
+  // variable-width ribbon preserves the pressure taper of the input stroke.
+  for (let i = 1; i < points.length - 1; i++) {
+    const start = pPrev;
+    const end = {
+      x: (points[i].x + points[i + 1].x) / 2,
+      y: (points[i].y + points[i + 1].y) / 2,
+      w: (points[i].w + points[i + 1].w) / 2,
+    };
+    const steps = 3;
     for (let s = 1; s <= steps; s++) {
-      const pCurr = cubicAt(pPrev, c, s / steps);
+      const pCurr = quadraticAt(start, points[i], end, s / steps);
       drawSegment(ctx, pPrev, pCurr);
       pPrev = pCurr;
     }
   }
+  const last = points[points.length - 1];
+  const start = pPrev;
+  for (let s = 1; s <= 3; s++) {
+    const pCurr = quadraticAt(start, points[points.length - 2], last, s / 3);
+    drawSegment(ctx, pPrev, pCurr);
+    pPrev = pCurr;
+  }
 }
 
-window.Ink = { OneEuro, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt };
