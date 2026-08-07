@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Inkwell — PDF-Native Ink Annotator</title>
+<meta name="description" content="Pressure-sensitive PDF annotation with ink that lives inside the PDF. Free and open source.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,16 +12,56 @@
 <div id="app-container">
   <div id="stage">
     <div id="toolbar">
-      <button id="btnPen" class="tool-btn active">🖊️ Pen</button>
-      <button id="btnHighlighter" class="tool-btn">🖍️ Highlighter</button>
-      <button id="btnEraser" class="tool-btn">🧹 Eraser</button>
-      <button id="btnLasso" class="tool-btn">⬚ Lasso</button>
-      <button id="btnRuler" class="tool-btn">📐 Ruler</button>
+      <button id="btnPen" class="tool-btn active" title="Pen (P)">🖊️</button>
+      <button id="btnHighlighter" class="tool-btn" title="Highlighter (H)">🖍️</button>
+      <button id="btnEraser" class="tool-btn" title="Eraser — hold E for spring-load (E)">🧹</button>
       <div class="divider"></div>
-      <input type="color" id="colorPicker" value="#141724" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
+      <button id="btnLasso" class="tool-btn" title="Lasso erase (V)">⬚</button>
+      <button id="btnRuler" class="tool-btn" title="Line — Shift to snap 45° (R)">📐</button>
+      <button id="btnRect" class="tool-btn" title="Rectangle — Shift for square (Q)">▭</button>
+      <button id="btnEllipse" class="tool-btn" title="Ellipse — Shift for circle (O)">◯</button>
       <div class="divider"></div>
-      <button id="btnUndo" class="tool-btn">↩️ Undo</button>
-      <button id="btnRedo" class="tool-btn">↪️ Redo</button>
+      <button id="btnLaser" class="tool-btn" title="Laser pointer — hold L (L)">🔴</button>
+      <div class="divider"></div>
+      <button id="btnProp" class="tool-btn" title="Tool Properties">⚙️</button>
+      <input type="color" id="colorPicker" value="#141724" title="Ink colour" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
+      <div class="divider"></div>
+      <button id="btnSplit" class="tool-btn" title="Toggle Split View">◫</button>
+      <button id="btnCmdPalette" class="tool-btn" title="Command Palette (Ctrl+Shift+P)">🔍</button>
+      <div class="divider"></div>
+      <button id="btnUndo" class="tool-btn" title="Undo (Ctrl+Z)">↩️</button>
+      <button id="btnRedo" class="tool-btn" title="Redo (Ctrl+Y)">↪️</button>
+    </div>
+
+    <!-- Out-of-bounds Ink Warning Banner -->
+    <div id="oobBanner" class="oob-banner hidden">⚠️ Ink drawn outside page boundary</div>
+
+    <!-- Tool Property Popover -->
+    <div id="propPopover" class="popover hidden">
+      <div class="popover-title">Tool Properties</div>
+      <div class="popover-row">
+        <label>Stroke Width</label>
+        <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6">
+        <span id="widthVal">1.6 pt</span>
+      </div>
+      <div class="popover-row">
+        <label>Presets</label>
+        <div class="color-swatches">
+          <button class="swatch" data-color="#141724" style="background:#141724"></button>
+          <button class="swatch" data-color="#dc2626" style="background:#dc2626"></button>
+          <button class="swatch" data-color="#2563eb" style="background:#2563eb"></button>
+          <button class="swatch" data-color="#16a34a" style="background:#16a34a"></button>
+          <button class="swatch" data-color="#ca8a04" style="background:#ca8a04"></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Page navigation bar at bottom -->
+    <div id="pageNav">
+      <button id="btnPrev" class="nav-btn" disabled>‹</button>
+      <span id="pageNum">—</span>
+      <button id="btnNext" class="nav-btn" disabled>›</button>
+      <button id="btnAddPage" class="nav-btn" title="Insert Blank Page">+</button>
     </div>
 
     <canvas id="tiles"></canvas>
@@ -30,14 +71,16 @@
 
   <aside id="sidebar">
     <h2>Inkwell</h2>
-    
+
     <div class="section">
+      <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" style="display:none;">
       <button id="btnOpen" class="btn">📂 Open PDF</button>
-      <button id="btnSave" class="btn btn-secondary">💾 Save Annotations</button>
+      <button id="btnSave" class="btn btn-secondary">💾 Save (Ctrl+S)</button>
+      <button id="btnInsertBlank" class="btn btn-secondary">📄 Insert Blank Page</button>
     </div>
 
     <div class="section">
-      <h2>Document Info</h2>
+      <h2>Document</h2>
       <div id="docInfo" class="info-box">
         <div>No document loaded</div>
       </div>
@@ -51,7 +94,41 @@
         <div>Strokes: 0</div>
       </div>
     </div>
+
+    <div class="section keys-hint">
+      <h2>Shortcuts</h2>
+      <div class="info-box">
+        <div><kbd>P</kbd> Pen · <kbd>H</kbd> Highlighter</div>
+        <div><kbd>E</kbd> Eraser (spring) · <kbd>L</kbd> Laser (spring)</div>
+        <div><kbd>V</kbd> Lasso · <kbd>R</kbd> Ruler</div>
+        <div><kbd>Q</kbd> Rect · <kbd>O</kbd> Ellipse</div>
+        <div><kbd>Ctrl+Shift+P</kbd> Command Palette</div>
+        <div><kbd>Right Click / Barrel</kbd> Radial Menu</div>
+        <div><kbd>Ctrl Z/Y</kbd> Undo/Redo · <kbd>Ctrl S</kbd> Save</div>
+      </div>
+    </div>
   </aside>
+</div>
+
+<!-- Command Palette Modal -->
+<div id="cmdPaletteModal" class="modal-overlay hidden">
+  <div class="cmd-palette">
+    <input type="text" id="cmdPaletteInput" placeholder="Type a command or search..." autocomplete="off">
+    <div id="cmdPaletteResults" class="cmd-results"></div>
+  </div>
+</div>
+
+<!-- Radial Quick Menu -->
+<div id="radialMenu" class="radial-menu hidden">
+  <div class="radial-center">
+    <span id="radialLabel">Inkwell</span>
+  </div>
+  <div class="radial-item" data-tool="pen" style="--angle: 0deg;">🖊️<span class="tip">Pen</span></div>
+  <div class="radial-item" data-tool="highlighter" style="--angle: 60deg;">🖍️<span class="tip">Highlighter</span></div>
+  <div class="radial-item" data-tool="eraser" style="--angle: 120deg;">🧹<span class="tip">Eraser</span></div>
+  <div class="radial-item" data-tool="lasso" style="--angle: 180deg;">⬚<span class="tip">Lasso</span></div>
+  <div class="radial-item" data-action="undo" style="--angle: 240deg;">↩️<span class="tip">Undo</span></div>
+  <div class="radial-item" data-action="palette" style="--angle: 300deg;">🔍<span class="tip">Palette</span></div>
 </div>
 
 <script src="js/ink.js"></script>

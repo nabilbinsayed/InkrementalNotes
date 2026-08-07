@@ -31,3 +31,14 @@ gen/
 .vscode/
 .idea/
 .gemini/
+
+# PDFium binaries & SDK extracts
+pdfium.dll
+**/pdfium.dll
+pdfium.tgz
+bin/
+lib/
+include/
+licenses/
+args.gn
+PDFiumConfig.cmake

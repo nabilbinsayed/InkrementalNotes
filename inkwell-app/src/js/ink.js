@@ -15,7 +15,7 @@ class LowPass {
 }
 
 class OneEuro {
-  constructor(minCutoff = 1.7, beta = 0.02, dCutoff = 1.0) {
+  constructor(minCutoff = 0.8, beta = 0.004, dCutoff = 1.0) {
     this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
     this.x = new LowPass(); this.dx = new LowPass(); this.tPrev = null;
   }
@@ -33,7 +33,7 @@ class OneEuro {
 }
 
 class Stroke {
-  constructor(opts) {
+  constructor(opts = {}) {
     this.id = crypto.randomUUID ? crypto.randomUUID()
                                 : String(Math.random()).slice(2);
     this.kind = opts.kind || 'pen';
@@ -41,8 +41,10 @@ class Stroke {
     this.base_width = opts.baseWidth || 3.2;
     this.samples = [];
     this._pts = [];            // {x, y, w} in CSS px, post-filter
-    this._fx = new OneEuro(opts.minCutoff, opts.beta);
-    this._fy = new OneEuro(opts.minCutoff, opts.beta);
+    const minCut = opts.minCutoff !== undefined ? opts.minCutoff : 0.8;
+    const bCut = opts.beta !== undefined ? opts.beta : 0.004;
+    this._fx = new OneEuro(minCut, bCut);
+    this._fy = new OneEuro(minCut, bCut);
     this._p = null;
     this._gamma = opts.gamma || 1.0;
     this._smoothing = opts.smoothing !== false;
@@ -99,13 +101,99 @@ function drawDot(ctx, p) {
   ctx.fill();
 }
 
-function drawStroke(ctx, stroke) {
-  const pts = stroke.points;
-  if (!pts.length) return;
-  ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
-  if (pts.length === 1) { drawDot(ctx, pts[0]); return; }
-  drawDot(ctx, pts[0]);
-  for (let i = 1; i < pts.length; i++) drawSegment(ctx, pts[i - 1], pts[i]);
+function openPolylineToCubics(p) {
+  const n = p.length;
+  if (n < 2) return [];
+  if (n === 2) {
+    const a = p[0], b = p[1];
+    const dx = b.x - a.x, dy = b.y - a.y, dw = b.w - a.w;
+    return [[
+      { x: a.x + dx / 3, y: a.y + dy / 3, w: a.w + dw / 3 },
+      { x: a.x + 2 * dx / 3, y: a.y + 2 * dy / 3, w: a.w + 2 * dw / 3 },
+      b
+    ]];
+  }
+
+  const t = new Array(n).fill(0);
+  for (let i = 1; i < n; i++) {
+    const dist = Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+    t[i] = t[i - 1] + Math.max(1e-4, Math.sqrt(dist));
+  }
+
+  const m = new Array(n);
+  for (let i = 1; i < n - 1; i++) {
+    const dt = t[i + 1] - t[i - 1];
+    m[i] = {
+      x: (p[i + 1].x - p[i - 1].x) / dt,
+      y: (p[i + 1].y - p[i - 1].y) / dt,
+      w: (p[i + 1].w - p[i - 1].w) / dt,
+    };
+  }
+
+  const dt0 = t[1] - t[0], dt1 = (n > 2) ? (t[2] - t[1]) : dt0;
+  m[0] = {
+    x: ((2 * dt0 + dt1) * (p[1].x - p[0].x) / dt0 - dt0 * ((p[2] ? p[2].x : p[1].x) - p[1].x) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
+    y: ((2 * dt0 + dt1) * (p[1].y - p[0].y) / dt0 - dt0 * ((p[2] ? p[2].y : p[1].y) - p[1].y) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
+    w: ((2 * dt0 + dt1) * (p[1].w - p[0].w) / dt0 - dt0 * ((p[2] ? p[2].w : p[1].w) - p[1].w) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
+  };
+
+  const dtn2 = t[n - 1] - t[n - 2];
+  const dtn3 = (n > 2) ? (t[n - 2] - t[n - 3]) : dtn2;
+  const pPrev2 = p[n - 3] || p[n - 2];
+  m[n - 1] = {
+    x: ((2 * dtn2 + dtn3) * (p[n - 1].x - p[n - 2].x) / dtn2 - dtn2 * (p[n - 2].x - pPrev2.x) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
+    y: ((2 * dtn2 + dtn3) * (p[n - 1].y - p[n - 2].y) / dtn2 - dtn2 * (p[n - 2].y - pPrev2.y) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
+    w: ((2 * dtn2 + dtn3) * (p[n - 1].w - p[n - 2].w) / dtn2 - dtn2 * (p[n - 2].w - pPrev2.w) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
+  };
+
+  const cubics = [];
+  for (let i = 0; i < n - 1; i++) {
+    const dt = t[i + 1] - t[i];
+    const c1 = {
+      x: p[i].x + (m[i].x * dt) / 3,
+      y: p[i].y + (m[i].y * dt) / 3,
+      w: p[i].w + (m[i].w * dt) / 3,
+    };
+    const c2 = {
+      x: p[i + 1].x - (m[i + 1].x * dt) / 3,
+      y: p[i + 1].y - (m[i + 1].y * dt) / 3,
+      w: p[i + 1].w - (m[i + 1].w * dt) / 3,
+    };
+    cubics.push([c1, c2, p[i + 1]]);
+  }
+  return cubics;
 }
 
-window.Ink = { OneEuro, Stroke, drawSegment, drawDot, drawStroke };
+function cubicAt(p0, cubic, t) {
+  const u = 1 - t;
+  const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return {
+    x: a * p0.x + b * cubic[0].x + c * cubic[1].x + d * cubic[2].x,
+    y: a * p0.y + b * cubic[0].y + c * cubic[1].y + d * cubic[2].y,
+    w: a * p0.w + b * cubic[0].w + c * cubic[1].w + d * cubic[2].w,
+  };
+}
+
+function drawStroke(ctx, stroke) {
+  const rawPts = stroke.points;
+  if (!rawPts || !rawPts.length) return;
+  ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  if (rawPts.length === 1) { drawDot(ctx, rawPts[0]); return; }
+  if (rawPts.length === 2) { drawDot(ctx, rawPts[0]); drawSegment(ctx, rawPts[0], rawPts[1]); return; }
+
+  const cubics = openPolylineToCubics(rawPts);
+  let pPrev = rawPts[0];
+  drawDot(ctx, pPrev);
+
+  for (let i = 0; i < cubics.length; i++) {
+    const c = cubics[i];
+    const steps = 6;
+    for (let s = 1; s <= steps; s++) {
+      const pCurr = cubicAt(pPrev, c, s / steps);
+      drawSegment(ctx, pPrev, pCurr);
+      pPrev = pCurr;
+    }
+  }
+}
+
+window.Ink = { OneEuro, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt };

@@ -20,9 +20,11 @@ fn main() {
     );
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::open_pdf,
+            commands::open_pdf_bytes,
             commands::render_tile,
             commands::commit_stroke,
             commands::delete_stroke,
@@ -30,6 +32,7 @@ fn main() {
             commands::erase_strokes_in_rect,
             commands::save_pdf,
             commands::get_document_info,
+            commands::insert_blank_page,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

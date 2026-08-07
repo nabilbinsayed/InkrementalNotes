@@ -1,8 +1,20 @@
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use tauri::State;
-use std::path::PathBuf;
-use inkwell_core::{Document, StrokeBuilder, ToolKind, Brush, PdfFile, wal::atomic_write};
+use std::path::{Path, PathBuf};
+use inkwell_core::{Document, StrokeBuilder, ToolKind, Brush, PdfFile, wal::{atomic_write, Wal, WalEntry}};
+
+/// Derive a temp-dir WAL path for `doc_path` that stays out of the synced
+/// folder. Key = hex-encoded FNV-1a of the canonical path bytes.
+fn wal_path_for(doc_path: &Path) -> PathBuf {
+    let s = doc_path.to_string_lossy();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    std::env::temp_dir().join(format!("inkwell-wal-{:016x}.bin", h))
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PageInfo {
@@ -43,13 +55,15 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
         Err(e) => return Err(format!("Failed to parse PDF: {e}")),
     };
 
-    let n_pages = pdf_file.page_count();
-    let doc = Document::for_pdf(n_pages);
-
-    let page_infos: Vec<PageInfo> = {
+    let (n_pages, page_infos) = {
         let pdfium_opt = inkwell_pdf::init_pdfium().ok();
         let pdfium_doc_opt = pdfium_opt.as_ref().and_then(|p| p.load_pdf_from_byte_slice(&valid_bytes, None).ok());
-        (0..n_pages)
+
+        let n = pdfium_doc_opt.as_ref()
+            .map(|d| d.pages().len() as usize)
+            .unwrap_or_else(|| pdf_file.page_count().max(1));
+
+        let infos: Vec<PageInfo> = (0..n)
             .map(|i| {
                 let (w, h) = pdfium_doc_opt.as_ref()
                     .and_then(|d| d.pages().get(i as i32).ok())
@@ -57,12 +71,80 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
                     .unwrap_or((595.0, 842.0));
                 PageInfo { page_index: i, width_pt: w, height_pt: h }
             })
-            .collect()
+            .collect();
+        (n, infos)
     };
 
+    let doc = Document::for_pdf(n_pages);
+
     *state.doc.lock().unwrap() = Some(doc);
-    *state.pdf_path.lock().unwrap() = Some(path);
+    *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
+
+    // Open WAL in temp dir (not the synced folder).
+    let wp = wal_path_for(&path);
+    match Wal::open(&wp) {
+        Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
+        Err(e) => { eprintln!("WAL init failed ({wp:?}): {e}"); }
+    }
+
+    Ok(page_infos)
+}
+
+#[tauri::command]
+pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) -> Result<Vec<PageInfo>, String> {
+    let path = std::env::temp_dir().join(&name);
+    let _ = std::fs::write(&path, &bytes);
+
+    let open_res = PdfFile::open(bytes.clone());
+    let (valid_bytes, pdf_file) = match open_res {
+        Ok(f) => (bytes, f),
+        Err(inkwell_core::pdfobj::Error::XrefStream) => {
+            match inkwell_pdf::init_pdfium() {
+                Ok(pdfium) => {
+                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes)
+                        .map_err(|e| format!("PDFium normalisation failed: {e:?}"))?;
+                    let f = PdfFile::open(norm_bytes.clone())
+                        .map_err(|e| format!("Failed to open normalised PDF: {e}"))?;
+                    (norm_bytes, f)
+                }
+                Err(e) => return Err(format!("PDF uses object streams and PDFium is unavailable: {e:?}")),
+            }
+        }
+        Err(e) => return Err(format!("Failed to parse PDF: {e}")),
+    };
+
+    let (n_pages, page_infos) = {
+        let pdfium_opt = inkwell_pdf::init_pdfium().ok();
+        let pdfium_doc_opt = pdfium_opt.as_ref().and_then(|p| p.load_pdf_from_byte_slice(&valid_bytes, None).ok());
+
+        let n = pdfium_doc_opt.as_ref()
+            .map(|d| d.pages().len() as usize)
+            .unwrap_or_else(|| pdf_file.page_count().max(1));
+
+        let infos: Vec<PageInfo> = (0..n)
+            .map(|i| {
+                let (w, h) = pdfium_doc_opt.as_ref()
+                    .and_then(|d| d.pages().get(i as i32).ok())
+                    .map(|p| (p.width().value as f64, p.height().value as f64))
+                    .unwrap_or((595.0, 842.0));
+                PageInfo { page_index: i, width_pt: w, height_pt: h }
+            })
+            .collect();
+        (n, infos)
+    };
+
+    let doc = Document::for_pdf(n_pages);
+
+    *state.doc.lock().unwrap() = Some(doc);
+    *state.pdf_path.lock().unwrap() = Some(path.clone());
+    *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
+
+    let wp = wal_path_for(&path);
+    match Wal::open(&wp) {
+        Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
+        Err(e) => { eprintln!("WAL init failed ({wp:?}): {e}"); }
+    }
 
     Ok(page_infos)
 }
@@ -74,6 +156,8 @@ pub fn render_tile(
     px: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, String> {
+    // ponytail: reinitialises PDFium per tile call; add a cached PdfiumDoc to
+    // AppState when tile throughput becomes a measured bottleneck.
     let pdf_bytes_guard = state.pdf_bytes.lock().unwrap();
     let bytes = pdf_bytes_guard.as_ref().ok_or("No PDF loaded")?;
 
@@ -88,6 +172,7 @@ pub fn render_tile(
 
     Ok(tile.data)
 }
+
 
 #[tauri::command]
 pub fn commit_stroke(
@@ -123,7 +208,12 @@ pub fn commit_stroke(
     }
 
     let stroke = b.finish(0.3);
-    doc.push_stroke(sheet, stroke);
+    doc.push_stroke(sheet, stroke.clone());
+
+    // Append to WAL (fsynced inside wal.append).
+    if let Some(wal) = state.wal.lock().unwrap().as_mut() {
+        let _ = wal.append(&WalEntry::Added(stroke));
+    }
 
     Ok(stroke_id.to_string())
 }
@@ -207,4 +297,23 @@ pub fn get_document_info(state: State<'_, AppState>) -> Result<serde_json::Value
         "strokes": doc.stroke_count(),
         "samples": doc.sample_count(),
     }))
+}
+
+#[tauri::command]
+pub fn insert_blank_page(
+    index: usize,
+    width_pt: f64,
+    height_pt: f64,
+    state: State<'_, AppState>,
+) -> Result<PageInfo, String> {
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+
+    doc.insert_sheet(index);
+
+    Ok(PageInfo {
+        page_index: index,
+        width_pt,
+        height_pt,
+    })
 }

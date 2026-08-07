@@ -40,6 +40,12 @@ impl Sheet {
             layers: vec![Layer::new("Ink")],
         }
     }
+    pub fn blank() -> Self {
+        Self {
+            kind: SheetKind::BoundedPage { source_pdf_page: usize::MAX },
+            layers: vec![Layer::new("Ink")],
+        }
+    }
     pub fn strokes(&self) -> impl Iterator<Item = &Stroke> {
         self.layers.iter().flat_map(|l| l.strokes.iter())
     }
@@ -101,6 +107,15 @@ impl Document {
     /// Create a document shadowing an imported PDF of `n` pages.
     pub fn for_pdf(n_pages: usize) -> Self {
         Self { sheets: (0..n_pages).map(Sheet::bounded).collect(), ..Default::default() }
+    }
+
+    pub fn insert_sheet(&mut self, index: usize) {
+        let sh = Sheet::blank();
+        if index <= self.sheets.len() {
+            self.sheets.insert(index, sh);
+        } else {
+            self.sheets.push(sh);
+        }
     }
 
     pub fn stroke_count(&self) -> usize {
