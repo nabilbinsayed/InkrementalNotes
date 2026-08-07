@@ -12,24 +12,30 @@ use pdfium_render::prelude::*;
 pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     let mut candidate_paths = Vec::new();
 
+    let mut add_dir_and_subdirs = |p: std::path::PathBuf| {
+        candidate_paths.push(p.clone());
+        candidate_paths.push(p.join("bin"));
+        candidate_paths.push(p.join("src-tauri"));
+    };
+
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            candidate_paths.push(parent.to_path_buf());
-            if let Some(grandparent) = parent.parent() {
-                candidate_paths.push(grandparent.to_path_buf());
-            }
+        let mut curr = exe.parent().map(|p| p.to_path_buf());
+        let mut depth = 0;
+        while let Some(dir) = curr {
+            add_dir_and_subdirs(dir.clone());
+            curr = dir.parent().map(|p| p.to_path_buf());
+            depth += 1;
+            if depth > 8 { break; }
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidate_paths.push(cwd.clone());
-        candidate_paths.push(cwd.join("bin"));
-        if let Some(parent) = cwd.parent() {
-            candidate_paths.push(parent.to_path_buf());
-            candidate_paths.push(parent.join("bin"));
-            if let Some(grandparent) = parent.parent() {
-                candidate_paths.push(grandparent.to_path_buf());
-                candidate_paths.push(grandparent.join("bin"));
-            }
+        let mut curr = Some(cwd);
+        let mut depth = 0;
+        while let Some(dir) = curr {
+            add_dir_and_subdirs(dir.clone());
+            curr = dir.parent().map(|p| p.to_path_buf());
+            depth += 1;
+            if depth > 8 { break; }
         }
     }
 
@@ -38,7 +44,10 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
         if dll_path.exists() {
             let lib_name = Pdfium::pdfium_platform_library_name_at_path(&dir);
             match Pdfium::bind_to_library(&lib_name) {
-                Ok(bindings) => return Ok(Pdfium::new(bindings)),
+                Ok(bindings) => {
+                    eprintln!("Successfully loaded PDFium library from {:?}", dll_path);
+                    return Ok(Pdfium::new(bindings));
+                }
                 Err(error) => eprintln!("Failed to load PDFium from {dll_path:?}: {error:?}"),
             }
         }

@@ -23,23 +23,21 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
     fn rasterize(&self, page: u32, rect: [f64; 4], px: u32) -> Option<Tile> {
         let p = self.document.pages().get(page as i32).ok()?;
         
-        // Calculate scale so rect fills px×px
-        let rw = rect[2] - rect[0];
-        let rh = rect[3] - rect[1];
-        if rw <= 0.0 || rh <= 0.0 {
-            eprintln!("PDFium received invalid tile rect: {rect:?}");
-            return None;
-        }
+        let rw = (rect[2] - rect[0]).max(1.0);
+        let rh = (rect[3] - rect[1]).max(1.0);
         
         let page_w = p.width().value as f64;
         let page_h = p.height().value as f64;
-        let scale = (px as f64) / rw.max(rh);
-        let target_w = (page_w * scale).ceil().max(1.0) as i32;
-        let target_h = (page_h * scale).ceil().max(1.0) as i32;
+        
+        let scale_x = (px as f64) / rw;
+        let scale_y = (px as f64) / rh;
+        let target_w = (page_w * scale_x).ceil().max(1.0) as i32;
+        let target_h = (page_h * scale_y).ceil().max(1.0) as i32;
         
         let config = PdfRenderConfig::new()
             .set_target_width(target_w)
-            .set_maximum_height(target_h);
+            .set_maximum_height(target_h)
+            .set_clear_color(PdfColor::WHITE);
             
         let bitmap = p.render_with_config(&config).map_err(|e| {
             eprintln!("PDFium failed to render page {page}: {e:?}");
@@ -49,29 +47,21 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let bitmap_w = bitmap.width() as u32;
         let bitmap_h = bitmap.height() as u32;
         
-        // Find crop region
-        let x0 = (rect[0] * scale).max(0.0) as u32;
-        let y0 = (rect[1] * scale).max(0.0) as u32;
-        
-        // In PDF points, Y is bottom-up. But PDFium rendering might use top-down.
-        // Usually, PDFium renders with (0,0) at top-left.
-        // Our rect might be bottom-up or top-down depending on coordinate system.
-        // Let's assume standard top-down image coordinates for now.
-        // Wait, standard PDF is bottom-up. If `rect` is standard PDF coords, we need to invert Y.
-        // But for a V1, let's just crop.
-        // TODO: optimize this to use FPDF_RenderPageBitmapWithMatrix directly,
-        // and fix any coordinate system inversions.
-        
-        // Ensure bounds
-        if x0 >= bitmap_w || y0 >= bitmap_h {
-            eprintln!("Tile rect {rect:?} lies outside rendered page {page} ({bitmap_w}x{bitmap_h})");
-            return None;
-        }
-        
-        let crop_w = px.min(bitmap_w - x0);
-        let crop_h = px.min(bitmap_h - y0);
+        let x0 = (rect[0] * scale_x).round().max(0.0) as u32;
+        let y0 = (rect[1] * scale_y).round().max(0.0) as u32;
         
         let mut rgb_data = vec![255; (px * px * 3) as usize];
+        
+        if x0 >= bitmap_w || y0 >= bitmap_h {
+            return Some(Tile {
+                w: px,
+                h: px,
+                data: rgb_data,
+            });
+        }
+        
+        let crop_w = px.min(bitmap_w.saturating_sub(x0));
+        let crop_h = px.min(bitmap_h.saturating_sub(y0));
         
         for y in 0..crop_h {
             for x in 0..crop_w {
@@ -82,10 +72,16 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
                     let b = bgra_bytes[src_idx];
                     let g = bgra_bytes[src_idx + 1];
                     let r = bgra_bytes[src_idx + 2];
+                    let a = bgra_bytes[src_idx + 3] as u32;
                     
-                    rgb_data[dst_idx] = r;
-                    rgb_data[dst_idx + 1] = g;
-                    rgb_data[dst_idx + 2] = b;
+                    // Alpha-blend over white background
+                    let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
+                    let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;
+                    let blended_b = ((b as u32 * a + 255 * (255 - a)) / 255) as u8;
+                    
+                    rgb_data[dst_idx] = blended_r;
+                    rgb_data[dst_idx + 1] = blended_g;
+                    rgb_data[dst_idx + 2] = blended_b;
                 }
             }
         }

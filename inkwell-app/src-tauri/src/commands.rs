@@ -36,23 +36,19 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
     let path = PathBuf::from(&path_str);
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
-    let open_res = PdfFile::open(bytes.clone());
-    let (valid_bytes, pdf_file) = match open_res {
-        Ok(f) => (bytes, f),
-        Err(inkwell_core::pdfobj::Error::XrefStream) => {
-            // Normalise xref stream PDFs using PDFium
+    let (valid_bytes, _pdf_file) = match PdfFile::open(bytes.clone()) {
+        Ok(f) => (bytes, Some(f)),
+        Err(e) => {
+            eprintln!("inkwell-core shallow PDF parser error ({e:?}), attempting PDFium normalisation fallback...");
             match inkwell_pdf::init_pdfium() {
                 Ok(pdfium) => {
-                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes)
-                        .map_err(|e| format!("PDFium normalisation failed: {e:?}"))?;
-                    let f = PdfFile::open(norm_bytes.clone())
-                        .map_err(|e| format!("Failed to open normalised PDF: {e}"))?;
+                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes).unwrap_or_else(|_| bytes.clone());
+                    let f = PdfFile::open(norm_bytes.clone()).ok();
                     (norm_bytes, f)
                 }
-                Err(e) => return Err(format!("PDF uses object streams and PDFium is unavailable: {e:?}")),
+                Err(_) => (bytes, None),
             }
         }
-        Err(e) => return Err(format!("Failed to parse PDF: {e}")),
     };
 
     let (n_pages, page_infos) = {
@@ -61,7 +57,7 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
 
         let n = pdfium_doc_opt.as_ref()
             .map(|d| d.pages().len() as usize)
-            .unwrap_or_else(|| pdf_file.page_count().max(1));
+            .unwrap_or_else(|| _pdf_file.as_ref().map(|f| f.page_count()).unwrap_or(1));
 
         let infos: Vec<PageInfo> = (0..n)
             .map(|i| {
@@ -96,22 +92,19 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     let path = std::env::temp_dir().join(&name);
     let _ = std::fs::write(&path, &bytes);
 
-    let open_res = PdfFile::open(bytes.clone());
-    let (valid_bytes, pdf_file) = match open_res {
-        Ok(f) => (bytes, f),
-        Err(inkwell_core::pdfobj::Error::XrefStream) => {
+    let (valid_bytes, _pdf_file) = match PdfFile::open(bytes.clone()) {
+        Ok(f) => (bytes, Some(f)),
+        Err(e) => {
+            eprintln!("inkwell-core shallow PDF parser error ({e:?}), attempting PDFium normalisation fallback...");
             match inkwell_pdf::init_pdfium() {
                 Ok(pdfium) => {
-                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes)
-                        .map_err(|e| format!("PDFium normalisation failed: {e:?}"))?;
-                    let f = PdfFile::open(norm_bytes.clone())
-                        .map_err(|e| format!("Failed to open normalised PDF: {e}"))?;
+                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes).unwrap_or_else(|_| bytes.clone());
+                    let f = PdfFile::open(norm_bytes.clone()).ok();
                     (norm_bytes, f)
                 }
-                Err(e) => return Err(format!("PDF uses object streams and PDFium is unavailable: {e:?}")),
+                Err(_) => (bytes, None),
             }
         }
-        Err(e) => return Err(format!("Failed to parse PDF: {e}")),
     };
 
     let (n_pages, page_infos) = {
@@ -120,7 +113,7 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
 
         let n = pdfium_doc_opt.as_ref()
             .map(|d| d.pages().len() as usize)
-            .unwrap_or_else(|| pdf_file.page_count().max(1));
+            .unwrap_or_else(|| _pdf_file.as_ref().map(|f| f.page_count()).unwrap_or(1));
 
         let infos: Vec<PageInfo> = (0..n)
             .map(|i| {
@@ -261,8 +254,20 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
         state.pdf_path.lock().unwrap().clone().ok_or("No target file path")?
     };
 
-    let mut pdf_file = PdfFile::open(input_bytes.clone())
-        .map_err(|e| format!("Failed to open base PDF for writing: {e}"))?;
+    let (norm_bytes, mut pdf_file) = match PdfFile::open(input_bytes.clone()) {
+        Ok(f) => (input_bytes.clone(), f),
+        Err(e) => {
+            eprintln!("base PDF requires normalisation for writing ({e:?})...");
+            let pdfium = inkwell_pdf::init_pdfium().map_err(|pdfium_err| {
+                format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation: {pdfium_err:?}")
+            })?;
+            let nb = inkwell_pdf::normalise(&pdfium, input_bytes)
+                .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
+            let f = PdfFile::open(nb.clone())
+                .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
+            (nb, f)
+        }
+    };
 
     pdf_file.write_document(doc, inkwell_core::pdf::DEFAULT_GROUP)
         .map_err(|e| format!("Failed to write document ink layers: {e}"))?;
@@ -270,6 +275,9 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
     let final_bytes = pdf_file.finish();
     atomic_write(&target_path, &final_bytes)
         .map_err(|e| format!("Failed atomic save to {:?}: {e}", target_path))?;
+
+    // Update in-memory state with normalised base bytes
+    *state.pdf_bytes.lock().unwrap() = Some(norm_bytes);
 
     if let Some(wal) = state.wal.lock().unwrap().as_mut() {
         let _ = wal.truncate();

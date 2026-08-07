@@ -1,6 +1,7 @@
 # Rust build artifacts
 target/
 **/target/
+**/target-codex/
 Cargo.lock
 
 # Node / JS

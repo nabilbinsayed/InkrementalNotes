@@ -19,7 +19,14 @@ const state = {
   dpr: 1,
   samplesCount: 0,
   isErasing: false,
-  currentSheet: 0,       // active PDF page index
+  leftSheet: 0,       // active PDF page index for left pane
+  rightSheet: 0,      // active PDF page index for right pane
+  get currentSheet() { return paneSheet(state.drawingPane || 'left'); },
+  set currentSheet(v) {
+    const pane = state.drawingPane || 'left';
+    if (pane === 'right' && viewport.splitMode) state.rightSheet = v;
+    else state.leftSheet = v;
+  },
   pageInfos: [],         // [{page_index, width_pt, height_pt}, ...]
   shapeStart: null,
   shapeEnd: null,
@@ -31,6 +38,11 @@ const state = {
   streamline: null,
   drawingPane: 'left',
 };
+
+function paneSheet(pane = 'left') {
+  if (pane === 'right' && viewport.splitMode) return state.rightSheet;
+  return state.leftSheet;
+}
 
 let tilesCanvas, dryCanvas, wetCanvas;
 let tctx, dctx, wctx;
@@ -113,7 +125,8 @@ async function fetchTile(page, rect, px) {
 // ---- Page background (white paper rect with red border like Xournal++) ----
 function drawPageBackground(pane = 'left') {
   if (!state.pageInfos.length) return;
-  const pi = state.pageInfos[state.currentSheet];
+  const sheetIdx = paneSheet(pane);
+  const pi = state.pageInfos[sheetIdx];
   if (!pi) return;
   const [sx0, sy0] = viewport.worldToScreen(0, 0, pane);
   const [sx1, sy1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
@@ -147,14 +160,15 @@ async function redrawTiles() {
 
   if (!state.pageInfos.length) return;
 
-  const pi = state.pageInfos[state.currentSheet];
-  if (!pi) return;
-
-  await Promise.all(visiblePanes().map(pane => redrawTilesForPane(pane, pi, drawEpoch)));
+  await Promise.all(visiblePanes().map(pane => {
+    const sheetIdx = paneSheet(pane);
+    const pi = state.pageInfos[sheetIdx];
+    return pi ? redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) : Promise.resolve();
+  }));
 }
 redrawTiles.epoch = 0;
 
-async function redrawTilesForPane(pane, pi, drawEpoch) {
+async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
   const bounds = paneBounds(pane);
 
   const [wx0, wy0] = viewport.screenToWorld(bounds.x, bounds.y, pane);
@@ -167,12 +181,12 @@ async function redrawTilesForPane(pane, pi, drawEpoch) {
   // square in document space too; otherwise portrait pages are copied into
   // the corner of a square and look blank or badly distorted when blitted.
   const side = Math.max(rx1 - rx0, ry1 - ry0);
-  const tileRect = [rx0, ry0, rx0 + side, ry0 + side];
+  const tileRect = [rx0, ry0, Math.min(pi.width_pt, rx0 + side), Math.min(pi.height_pt, ry0 + side)];
   const zoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
   const px = Math.min(2048, Math.round(side * zoom * state.dpr));
   if (px < 4) return;
 
-  const result = await fetchTile(state.currentSheet, tileRect, px);
+  const result = await fetchTile(sheetIdx, tileRect, px);
   if (!result || drawEpoch !== redrawTiles.epoch) return;
 
   const [sx0, sy0] = viewport.worldToScreen(tileRect[0], tileRect[1], pane);
@@ -220,11 +234,12 @@ function redrawAll() {
   dctx.clearRect(0, 0, dryCanvas.width, dryCanvas.height);
   dctx.scale(state.dpr, state.dpr);
   for (const pane of visiblePanes()) {
+    const sheetIdx = paneSheet(pane);
     dctx.save();
     clipToPane(dctx, pane);
     paneTransform(dctx, pane);
     for (const s of state.strokes) {
-      if (!s.deleted && s.sheet === state.currentSheet) Ink.drawStroke(dctx, s);
+      if (!s.deleted && s.sheet === sheetIdx) Ink.drawStroke(dctx, s);
     }
     dctx.restore();
   }
@@ -232,6 +247,7 @@ function redrawAll() {
 
 function drawCommittedStroke(stroke) {
   for (const pane of visiblePanes()) {
+    if (stroke.sheet !== paneSheet(pane)) continue;
     dctx.save();
     dctx.setTransform(1, 0, 0, 1, 0, 0);
     dctx.scale(state.dpr, state.dpr);
@@ -254,11 +270,14 @@ function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
 }
 
 // ---- Page navigation ----
-function goToPage(i) {
+function goToPage(i, pane = viewport.activePane || 'left') {
   if (i < 0 || i >= state.pageInfos.length) return;
-  state.currentSheet = i;
+  if (pane === 'right' && viewport.splitMode) {
+    state.rightSheet = i;
+  } else {
+    state.leftSheet = i;
+  }
   tileCache.clear(); // clear so new page's tiles are fetched fresh
-  // Center the page
   const pi = state.pageInfos[i];
   centerPageInPanes(pi);
   updatePageUI();
@@ -283,20 +302,24 @@ function centerPageInPanes(pi = state.pageInfos[state.currentSheet]) {
 
 function updatePageUI() {
   const total = state.pageInfos.length;
-  const cur = state.currentSheet + 1;
-  $('pageNum').textContent = total ? `${cur} / ${total}` : '—';
-  $('btnPrev').disabled = state.currentSheet <= 0;
-  $('btnNext').disabled = state.currentSheet >= total - 1;
+  const activeSheet = paneSheet(viewport.activePane || 'left');
+  const cur = activeSheet + 1;
+  const paneTag = viewport.splitMode ? ` (${(viewport.activePane || 'left').toUpperCase()})` : '';
+  $('pageNum').textContent = total ? `${cur} / ${total}${paneTag}` : '—';
+  $('btnPrev').disabled = activeSheet <= 0;
+  $('btnNext').disabled = activeSheet >= total - 1;
 }
 
 // ---- Eraser (stroke-erase by proximity) ----
 function eraseStrokesAt(e) {
-  const [wx, wy] = localXY(e);
+  const pane = state.drawingPane || paneForEvent(e);
+  const targetSheet = paneSheet(pane);
+  const [wx, wy] = localXY(e, pane);
   const radius = 10 / viewport.zoom;
   let erased = [];
 
   for (const s of state.strokes) {
-    if (s.deleted || s.sheet !== state.currentSheet) continue;
+    if (s.deleted || s.sheet !== targetSheet) continue;
     for (const pt of s.points) {
       if (Math.hypot(pt.x - wx, pt.y - wy) < radius + pt.w / 2) {
         s.deleted = true;
@@ -705,7 +728,6 @@ async function onUp(e) {
 
   drawCommittedStroke(strokeRec);
   state.cur = null;
-  state.drawingPane = 'left';
   clearWet();
   try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
 }
@@ -802,14 +824,26 @@ async function insertBlankPage() {
   goToPage(newIndex);
 }
 
-// ---- Split View ----
+// ---- Split View & Sidebar ----
 function toggleSplitView() {
   const isSplit = viewport.toggleSplitMode();
+  if (isSplit && state.rightSheet === state.leftSheet && state.pageInfos.length > 1) {
+    state.rightSheet = Math.min(state.leftSheet + 1, state.pageInfos.length - 1);
+  }
   $('stage').classList.toggle('split-view', isSplit);
   centerPageInPanes();
   $('btnSplit') && $('btnSplit').classList.toggle('active', isSplit);
   redrawTiles();
   redrawAll();
+}
+
+function toggleSidebar() {
+  const sidebar = $('sidebar');
+  if (!sidebar) return;
+  const collapsed = sidebar.classList.toggle('collapsed');
+  $('btnToggleSidebar') && $('btnToggleSidebar').classList.toggle('active', !collapsed);
+  $('btnExpandSidebar') && $('btnExpandSidebar').classList.toggle('hidden', !collapsed);
+  resize();
 }
 
 // ---- Command Palette ----
@@ -818,6 +852,7 @@ const COMMANDS = [
   { id: 'save_pdf', title: 'Save PDF Document', category: 'File', shortcut: 'Ctrl+S', action: () => $('btnSave').click() },
   { id: 'insert_blank', title: 'Insert Blank Page', category: 'Document', shortcut: '', action: () => insertBlankPage() },
   { id: 'toggle_split', title: 'Toggle Split View (Dual Pane)', category: 'View', shortcut: '', action: () => toggleSplitView() },
+  { id: 'toggle_sidebar', title: 'Toggle Right Sidebar Panel', category: 'View', shortcut: 'Ctrl+B', action: () => toggleSidebar() },
   { id: 'tool_pen', title: 'Switch Tool: Pen', category: 'Tools', shortcut: 'P', action: () => setTool('pen') },
   { id: 'tool_highlighter', title: 'Switch Tool: Highlighter', category: 'Tools', shortcut: 'H', action: () => setTool('highlighter') },
   { id: 'tool_eraser', title: 'Switch Tool: Eraser', category: 'Tools', shortcut: 'E', action: () => setTool('eraser') },
@@ -906,6 +941,9 @@ function bindUI() {
   $('btnRedo').addEventListener('click', redo);
 
   $('btnSplit') && $('btnSplit').addEventListener('click', toggleSplitView);
+  $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', toggleSidebar);
+  $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
+  $('btnExpandSidebar') && $('btnExpandSidebar').addEventListener('click', toggleSidebar);
   $('btnCmdPalette') && $('btnCmdPalette').addEventListener('click', openCommandPalette);
   $('btnAddPage') && $('btnAddPage').addEventListener('click', insertBlankPage);
   $('btnInsertBlank') && $('btnInsertBlank').addEventListener('click', insertBlankPage);
@@ -935,30 +973,37 @@ function bindUI() {
   $('btnOpen').addEventListener('click', async () => {
     if (window.__TAURI__) {
       try {
-        const dlg = window.__TAURI_PLUGIN_DIALOG__ || (window.__TAURI__ && window.__TAURI__.dialog);
-        if (dlg && dlg.open) {
-          const selected = await dlg.open({ filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-          if (selected) {
-            const p = typeof selected === 'string' ? selected : selected.path;
-            if (p) {
-              const infos = await window.__TAURI__.core.invoke('open_pdf', { pathStr: p });
-              state.pageInfos = infos;
-              state.strokes = [];
-              state.selectedStrokes = [];
-              state.undoStack = [];
-              state.redoStack = [];
-              tileCache.clear();
-              goToPage(0);
-              $('docInfo').innerHTML = `
-                <div>Loaded: ${p.split('\\').pop().split('/').pop()}</div>
-                <div>Pages: ${infos.length}</div>
-              `;
-              return;
-            }
-          }
+        const invoke = (window.__TAURI__.core && window.__TAURI__.core.invoke) || window.__TAURI__.invoke;
+        let selectedPath = null;
+        if (window.__TAURI_PLUGIN_DIALOG__ && window.__TAURI_PLUGIN_DIALOG__.open) {
+          const res = await window.__TAURI_PLUGIN_DIALOG__.open({ filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+          selectedPath = typeof res === 'string' ? res : (res && res.path);
+        } else if (invoke) {
+          const res = await invoke('plugin:dialog|open', {
+            multiple: false,
+            directory: false,
+            filters: [{ name: 'PDF', extensions: ['pdf'] }],
+          });
+          selectedPath = typeof res === 'string' ? res : (res && res.path);
+        }
+
+        if (selectedPath) {
+          const infos = await invoke('open_pdf', { pathStr: selectedPath });
+          state.pageInfos = infos;
+          state.strokes = [];
+          state.selectedStrokes = [];
+          state.undoStack = [];
+          state.redoStack = [];
+          tileCache.clear();
+          goToPage(0);
+          $('docInfo').innerHTML = `
+            <div>Loaded: ${selectedPath.split('\\').pop().split('/').pop()}</div>
+            <div>Pages: ${infos.length}</div>
+          `;
+          return;
         }
       } catch (err) {
-        console.warn('Tauri dialog failed, using file picker input:', err);
+        console.warn('Tauri dialog failed, using file picker input fallback:', err);
       }
     }
     $('pdfFileInput') && $('pdfFileInput').click();
@@ -968,10 +1013,28 @@ function bindUI() {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     try {
+      const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
+                     (window.__TAURI__ && window.__TAURI__.invoke);
+      if (file.path && invoke) {
+        const infos = await invoke('open_pdf', { pathStr: file.path });
+        state.pageInfos = infos;
+        state.strokes = [];
+        state.selectedStrokes = [];
+        state.undoStack = [];
+        state.redoStack = [];
+        tileCache.clear();
+        goToPage(0);
+        $('docInfo').innerHTML = `
+          <div>Loaded: ${file.name}</div>
+          <div>Pages: ${infos.length}</div>
+        `;
+        return;
+      }
+
       const arrayBuf = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuf));
-      if (window.__TAURI__) {
-        const infos = await window.__TAURI__.core.invoke('open_pdf_bytes', { name: file.name, bytes });
+      if (invoke) {
+        const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
         state.pageInfos = infos;
         state.strokes = [];
         state.selectedStrokes = [];
@@ -987,12 +1050,8 @@ function bindUI() {
       }
     } catch (err) {
       console.warn('pdfFileInput error:', err);
+      alert('Failed to open PDF: ' + err);
     }
-    state.pageInfos = [{ page_index: 0, width_pt: 595.0, height_pt: 842.0 }];
-    state.strokes = [];
-    tileCache.clear();
-    goToPage(0);
-    $('docInfo').innerHTML = `<div>Loaded: ${file.name}</div><div>Pages: 1</div>`;
   });
 
   $('btnSave').addEventListener('click', async () => {
@@ -1097,6 +1156,7 @@ function bindUI() {
       if (e.key === 'y' || (e.shiftKey && e.key === 'Z')) { e.preventDefault(); redo(); return; }
       if (e.key === 's') { e.preventDefault(); $('btnSave').click(); return; }
       if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); return; }
+      if (e.key === 'b') { e.preventDefault(); toggleSidebar(); return; }
       return;
     }
 

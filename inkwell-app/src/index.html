@@ -27,6 +27,7 @@
       <input type="color" id="colorPicker" value="#141724" title="Ink colour" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
       <div class="divider"></div>
       <button id="btnSplit" class="tool-btn" title="Toggle Split View">◫</button>
+      <button id="btnToggleSidebar" class="tool-btn active" title="Toggle Sidebar Panel (Ctrl+B)">📑</button>
       <button id="btnCmdPalette" class="tool-btn" title="Command Palette (Ctrl+Shift+P)">🔍</button>
       <div class="divider"></div>
       <button id="btnUndo" class="tool-btn" title="Undo (Ctrl+Z)">↩️</button>
@@ -67,10 +68,14 @@
     <canvas id="tiles"></canvas>
     <canvas id="dry"></canvas>
     <canvas id="wet"></canvas>
+    <button id="btnExpandSidebar" class="floating-expand-btn hidden" title="Expand Right Panel (Ctrl+B)">📑</button>
   </div>
 
   <aside id="sidebar">
-    <h2>Inkwell</h2>
+    <div class="sidebar-header">
+      <h2>Inkwell</h2>
+      <button id="btnCollapseSidebar" class="icon-btn" title="Collapse Panel (Ctrl+B)">▶</button>
+    </div>
 
     <div class="section">
       <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" style="display:none;">
