@@ -2,6 +2,9 @@
 
 ![Inkwell Banner](inkwell-m0/screenshot.png)
 
+> [!CAUTION]
+> **WORK IN PROGRESS**: Inkwell is currently an early-stage experimental prototype under active development. Many core functionalities—including full PDF background page rasterization and real-time stroke curve smoothing algorithms—are still actively being worked on and are not yet fully implemented or finalized. Features, UI behaviors, and internal APIs remain subject to rapid change.
+
 **Inkwell** is a high-performance, low-latency digital handwriting and PDF annotation desktop application engineered for tablet digitizers (e.g. Wacom, Huion, Microsoft Surface, iPad Pencil). Built with **Rust**, **PDFium**, and **Tauri v2**, Inkwell combines zero-latency stroke response with full vector PDF standard `/Ink` interop.
 
 ---
