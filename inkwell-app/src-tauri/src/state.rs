@@ -6,6 +6,7 @@ pub struct AppState {
     pub doc: Mutex<Option<Document>>,
     pub pdf_path: Mutex<Option<PathBuf>>,
     pub pdf_bytes: Mutex<Option<Vec<u8>>>,
+    #[allow(dead_code)]
     pub tile_cache: Mutex<TileCache>,
     pub wal: Mutex<Option<Wal>>,
 }

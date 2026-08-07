@@ -8,7 +8,7 @@ camera can close that loop.
 import math, pathlib, sys, json
 from playwright.sync_api import sync_playwright
 
-ROOT = pathlib.Path("/home/user/inkwell-m0")
+ROOT = pathlib.Path(__file__).resolve().parent
 URL = (ROOT / "src" / "index.html").as_uri()
 errors, warnings = [], []
 results = []

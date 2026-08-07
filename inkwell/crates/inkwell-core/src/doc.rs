@@ -132,6 +132,45 @@ impl Document {
         }
         false
     }
+
+    /// Erase all strokes on a given sheet whose centreline passes within
+    /// `radius` (in PDF user-units) of point `(px, py)`.
+    /// Returns the IDs of removed strokes.
+    pub fn erase_strokes_near(&mut self, sheet: usize, px: f64, py: f64, radius: f64) -> Vec<u128> {
+        let mut removed = Vec::new();
+        let Some(sh) = self.sheets.get_mut(sheet) else { return removed };
+        for layer in &mut sh.layers {
+            layer.strokes.retain(|s| {
+                let hit = s.samples.iter().any(|samp| {
+                    let (sx, sy) = (samp.x, samp.y);
+                    (sx - px).hypot(sy - py) < radius + s.brush.base_width * 0.5
+                });
+                if hit { removed.push(s.id); }
+                !hit
+            });
+        }
+        removed
+    }
+
+    /// Erase all strokes on a given sheet whose bounding box intersects the
+    /// axis-aligned rectangle `[x0, y0, x1, y1]` (PDF user-units).
+    /// Returns the IDs of removed strokes.
+    pub fn erase_strokes_in_rect(&mut self, sheet: usize, x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<u128> {
+        let mut removed = Vec::new();
+        let (rx0, rx1) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
+        let (ry0, ry1) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+        let Some(sh) = self.sheets.get_mut(sheet) else { return removed };
+        for layer in &mut sh.layers {
+            layer.strokes.retain(|s| {
+                let hit = s.samples.iter().any(|samp| {
+                    samp.x >= rx0 && samp.x <= rx1 && samp.y >= ry0 && samp.y <= ry1
+                });
+                if hit { removed.push(s.id); }
+                !hit
+            });
+        }
+        removed
+    }
 }
 
 // ---------------------------------------------------------------------------

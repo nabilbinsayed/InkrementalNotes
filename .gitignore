@@ -19,6 +19,14 @@ Thumbs.db
 fixtures/corpus/*.pdf
 !fixtures/lecture.pdf
 
+# Python / Venv
+.venv/
+**/.venv/
+
+# Tauri generated
+gen/
+**/gen/
+
 # Antigravity / IDE settings
 .vscode/
 .idea/

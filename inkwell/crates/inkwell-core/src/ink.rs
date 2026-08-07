@@ -550,6 +550,7 @@ pub fn ribbon_path(s: &Stroke, cap_steps: usize) -> Vec<PathCmd> {
 }
 
 /// The two offset curves, before caps are attached.
+#[allow(clippy::type_complexity)]
 pub fn ribbon_edges(s: &Stroke) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     let pts = &s.samples;
     let n = pts.len();

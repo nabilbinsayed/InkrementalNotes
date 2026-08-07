@@ -136,8 +136,9 @@ impl Wal {
     /// Called after the PDF has been written successfully. Order matters:
     /// flush the PDF first, then truncate the journal. Never the other way.
     pub fn truncate(&mut self) -> std::io::Result<()> {
-        self.file.set_len(0)?;
-        self.file.sync_all()?;
+        let file = OpenOptions::new().create(true).write(true).truncate(true).open(&self.path)?;
+        file.sync_all()?;
+        self.file = OpenOptions::new().create(true).read(true).append(true).open(&self.path)?;
         self.records = 0;
         Ok(())
     }

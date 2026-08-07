@@ -13,12 +13,12 @@ impl<'a> PdfiumRasterizer<'a> {
 
 impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
     fn page_size_pt(&self, page: u32) -> Option<(f64, f64)> {
-        let p = self.document.pages().get(page as u16).ok()?;
+        let p = self.document.pages().get(page as i32).ok()?;
         Some((p.width().value as f64, p.height().value as f64))
     }
 
     fn rasterize(&self, page: u32, rect: [f64; 4], px: u32) -> Option<Tile> {
-        let p = self.document.pages().get(page as u16).ok()?;
+        let p = self.document.pages().get(page as i32).ok()?;
         
         // Calculate scale so rect fills px×px
         let rw = rect[2] - rect[0];
@@ -34,17 +34,17 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let target_h = (page_h * scale) as i32;
         
         let config = PdfRenderConfig::new()
-            .set_target_width(target_w as u16)
-            .set_maximum_height(target_h as u16);
+            .set_target_width(target_w)
+            .set_maximum_height(target_h);
             
         let bitmap = p.render_with_config(&config).ok()?;
-        let bgra_bytes = bitmap.as_bytes();
+        let bgra_bytes = bitmap.as_raw_bytes();
         let bitmap_w = bitmap.width() as u32;
         let bitmap_h = bitmap.height() as u32;
         
         // Find crop region
         let x0 = (rect[0] * scale).max(0.0) as u32;
-        let mut y0 = (rect[1] * scale).max(0.0) as u32;
+        let y0 = (rect[1] * scale).max(0.0) as u32;
         
         // In PDF points, Y is bottom-up. But PDFium rendering might use top-down.
         // Usually, PDFium renders with (0,0) at top-left.

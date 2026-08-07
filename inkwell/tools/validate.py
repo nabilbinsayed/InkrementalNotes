@@ -37,7 +37,7 @@ def main():
     if not os.path.exists(OUT):
         print("run the annotate example first (see tools/run_validation.sh)")
         return 2
-    summary = json.load(open(os.path.join(ROOT, "out", "summary.json")))
+    summary = json.load(open(os.path.join(ROOT, "out", "summary.json"), encoding="utf-8-sig"))
 
     print("\n=== V1  Rust self-report ===")
     check("append-only prefix preserved", summary["prefix_preserved"])

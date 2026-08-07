@@ -220,7 +220,7 @@ fn degenerate_polygons_do_not_panic() {
     assert!(polygon_to_cubics(&[(0.0, 0.0), (1.0, 1.0)]).is_empty());
     assert_eq!(polygon_to_cubics(&[(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]).len(), 3);
     // all-identical points must not produce NaN control points
-    for c in polygon_to_cubics(&vec![(5.0, 5.0); 6]) {
+    for c in polygon_to_cubics(&[(5.0, 5.0); 6]) {
         for p in c {
             assert!(p.0.is_finite() && p.1.is_finite());
         }

@@ -23,8 +23,12 @@ fn main() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::open_pdf,
+            commands::render_tile,
             commands::commit_stroke,
             commands::delete_stroke,
+            commands::erase_strokes_near,
+            commands::erase_strokes_in_rect,
+            commands::save_pdf,
             commands::get_document_info,
         ])
         .run(tauri::generate_context!())

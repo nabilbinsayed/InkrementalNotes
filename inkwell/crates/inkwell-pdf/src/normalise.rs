@@ -1,4 +1,5 @@
-use inkwell_core::pdfobj::{PdfFile, Error as PdfObjError};
+use inkwell_core::pdf::PdfFile;
+use inkwell_core::pdfobj::Error as PdfObjError;
 use pdfium_render::prelude::*;
 use log::debug;
 
