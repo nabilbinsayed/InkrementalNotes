@@ -39,6 +39,20 @@ html, body {
   background: #1a1c24;
 }
 
+#stage.split-view::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-1px);
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  z-index: 4;
+}
+
 canvas {
   position: absolute;
   top: 0; left: 0;
@@ -392,4 +406,3 @@ kbd {
   border-radius: 4px;
 }
 .radial-item:hover .tip { display: block; }
-

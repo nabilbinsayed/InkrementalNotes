@@ -92,13 +92,14 @@ class ViewportManager {
     element.addEventListener('wheel', e => {
       const stageRect = element.getBoundingClientRect();
       const relX = e.clientX - stageRect.left;
+      const relY = e.clientY - stageRect.top;
       const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
       this.activePane = pane;
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.1 : 0.9;
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
-        this.setZoom(curZoom * factor, [e.clientX, e.clientY], pane);
+        this.setZoom(curZoom * factor, [relX, relY], pane);
       } else {
         e.preventDefault();
         const curPanX = pane === 'right' ? this.rightPanX : this.panX;

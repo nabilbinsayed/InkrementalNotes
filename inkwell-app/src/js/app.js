@@ -29,6 +29,7 @@ const state = {
   laserPos: null,
   laserTimer: null,
   streamline: null,
+  drawingPane: 'left',
 };
 
 let tilesCanvas, dryCanvas, wetCanvas;
@@ -36,7 +37,37 @@ let tctx, dctx, wctx;
 let viewport;
 
 const tileCache = new Map();
-let tilesPending = new Set();
+const tilesPending = new Map();
+
+function paneBounds(pane = 'left') {
+  const width = tilesCanvas.width / state.dpr;
+  const height = tilesCanvas.height / state.dpr;
+  if (!viewport || !viewport.splitMode) return { x: 0, y: 0, width, height };
+  const half = width / 2;
+  return pane === 'right' ? { x: half, y: 0, width: half, height } : { x: 0, y: 0, width: half, height };
+}
+
+function visiblePanes() {
+  return viewport && viewport.splitMode ? ['left', 'right'] : ['left'];
+}
+
+function paneForEvent(e) {
+  const r = wetCanvas.getBoundingClientRect();
+  return viewport.splitMode && e.clientX - r.left > r.width / 2 ? 'right' : 'left';
+}
+
+function paneTransform(ctx, pane) {
+  const isRight = pane === 'right' && viewport.splitMode;
+  ctx.translate(isRight ? viewport.rightPanX : viewport.panX, isRight ? viewport.rightPanY : viewport.panY);
+  ctx.scale(isRight ? viewport.rightZoom : viewport.zoom, isRight ? viewport.rightZoom : viewport.zoom);
+}
+
+function clipToPane(ctx, pane) {
+  const bounds = paneBounds(pane);
+  ctx.beginPath();
+  ctx.rect(bounds.x, bounds.y, bounds.width, bounds.height);
+  ctx.clip();
+}
 
 async function fetchTile(page, rect, px) {
   const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
@@ -44,9 +75,10 @@ async function fetchTile(page, rect, px) {
   if (!invoke) return null;
   const key = `${page}:${rect.join(',')}:${px}`;
   if (tileCache.has(key)) return { key, data: tileCache.get(key) };
-  if (tilesPending.has(key)) return null;
-  tilesPending.add(key);
-  try {
+  if (tilesPending.has(key)) return tilesPending.get(key);
+
+  const task = (async () => {
+    try {
     const raw = await invoke('render_tile', { page, rect, px });
     const expectedBytes = px * px * 3;
     if (!raw || raw.length !== expectedBytes) {
@@ -67,25 +99,29 @@ async function fetchTile(page, rect, px) {
     tileCanvas.getContext('2d').putImageData(imgData, 0, 0);
     tileCache.set(key, tileCanvas);
     return { key, data: tileCanvas };
-  } catch (err) {
-    console.warn('render_tile error:', err);
-    return null;
-  } finally {
-    tilesPending.delete(key);
-  }
+    } catch (err) {
+      console.warn('render_tile error:', err);
+      return null;
+    } finally {
+      tilesPending.delete(key);
+    }
+  })();
+  tilesPending.set(key, task);
+  return task;
 }
 
 // ---- Page background (white paper rect with red border like Xournal++) ----
-function drawPageBackground() {
+function drawPageBackground(pane = 'left') {
   if (!state.pageInfos.length) return;
   const pi = state.pageInfos[state.currentSheet];
   if (!pi) return;
-  const [sx0, sy0] = viewport.worldToScreen(0, 0);
-  const [sx1, sy1] = viewport.worldToScreen(pi.width_pt, pi.height_pt);
+  const [sx0, sy0] = viewport.worldToScreen(0, 0, pane);
+  const [sx1, sy1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
 
   tctx.save();
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.scale(state.dpr, state.dpr);
+  clipToPane(tctx, pane);
   // Paper drop shadow
   tctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
   tctx.shadowBlur = 20;
@@ -107,18 +143,22 @@ async function redrawTiles() {
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.clearRect(0, 0, tilesCanvas.width, tilesCanvas.height);
 
-  drawPageBackground();
+  for (const pane of visiblePanes()) drawPageBackground(pane);
 
   if (!state.pageInfos.length) return;
 
   const pi = state.pageInfos[state.currentSheet];
   if (!pi) return;
 
-  const cssW = tilesCanvas.width / state.dpr;
-  const cssH = tilesCanvas.height / state.dpr;
+  await Promise.all(visiblePanes().map(pane => redrawTilesForPane(pane, pi, drawEpoch)));
+}
+redrawTiles.epoch = 0;
 
-  const [wx0, wy0] = viewport.screenToWorld(0, 0);
-  const [wx1, wy1] = viewport.screenToWorld(cssW, cssH);
+async function redrawTilesForPane(pane, pi, drawEpoch) {
+  const bounds = paneBounds(pane);
+
+  const [wx0, wy0] = viewport.screenToWorld(bounds.x, bounds.y, pane);
+  const [wx1, wy1] = viewport.screenToWorld(bounds.x + bounds.width, bounds.y + bounds.height, pane);
   const rx0 = Math.max(0, wx0), ry0 = Math.max(0, wy0);
   const rx1 = Math.min(pi.width_pt, wx1), ry1 = Math.min(pi.height_pt, wy1);
   if (rx1 <= rx0 || ry1 <= ry0) return;
@@ -128,25 +168,26 @@ async function redrawTiles() {
   // the corner of a square and look blank or badly distorted when blitted.
   const side = Math.max(rx1 - rx0, ry1 - ry0);
   const tileRect = [rx0, ry0, rx0 + side, ry0 + side];
-  const px = Math.min(2048, Math.round(side * viewport.zoom * state.dpr));
+  const zoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+  const px = Math.min(2048, Math.round(side * zoom * state.dpr));
   if (px < 4) return;
 
   const result = await fetchTile(state.currentSheet, tileRect, px);
   if (!result || drawEpoch !== redrawTiles.epoch) return;
 
-  const [sx0, sy0] = viewport.worldToScreen(tileRect[0], tileRect[1]);
-  const [sx1, sy1] = viewport.worldToScreen(tileRect[2], tileRect[3]);
-  const [pageX0, pageY0] = viewport.worldToScreen(0, 0);
-  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt);
+  const [sx0, sy0] = viewport.worldToScreen(tileRect[0], tileRect[1], pane);
+  const [sx1, sy1] = viewport.worldToScreen(tileRect[2], tileRect[3], pane);
+  const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
+  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
   tctx.save();
   tctx.scale(state.dpr, state.dpr);
+  clipToPane(tctx, pane);
   tctx.beginPath();
   tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
   tctx.clip();
   tctx.drawImage(result.data, sx0, sy0, sx1 - sx0, sy1 - sy0);
   tctx.restore();
 }
-redrawTiles.epoch = 0;
 
 function makeCtx(canvas) {
   return canvas.getContext('2d', { desynchronized: true, alpha: true });
@@ -169,7 +210,7 @@ function resize() {
   wctx = makeCtx(wetCanvas);
 
   for (const ctx of [tctx, dctx, wctx]) ctx.scale(state.dpr, state.dpr);
-  drawPageBackground();
+  for (const pane of visiblePanes()) drawPageBackground(pane);
   redrawTiles();
   redrawAll();
 }
@@ -178,13 +219,27 @@ function redrawAll() {
   dctx.setTransform(1, 0, 0, 1, 0, 0);
   dctx.clearRect(0, 0, dryCanvas.width, dryCanvas.height);
   dctx.scale(state.dpr, state.dpr);
-  dctx.save();
-  dctx.translate(viewport.panX, viewport.panY);
-  dctx.scale(viewport.zoom, viewport.zoom);
-  for (const s of state.strokes) {
-    if (!s.deleted && s.sheet === state.currentSheet) Ink.drawStroke(dctx, s);
+  for (const pane of visiblePanes()) {
+    dctx.save();
+    clipToPane(dctx, pane);
+    paneTransform(dctx, pane);
+    for (const s of state.strokes) {
+      if (!s.deleted && s.sheet === state.currentSheet) Ink.drawStroke(dctx, s);
+    }
+    dctx.restore();
   }
-  dctx.restore();
+}
+
+function drawCommittedStroke(stroke) {
+  for (const pane of visiblePanes()) {
+    dctx.save();
+    dctx.setTransform(1, 0, 0, 1, 0, 0);
+    dctx.scale(state.dpr, state.dpr);
+    clipToPane(dctx, pane);
+    paneTransform(dctx, pane);
+    Ink.drawStroke(dctx, stroke);
+    dctx.restore();
+  }
 }
 
 function clearWet() {
@@ -193,9 +248,9 @@ function clearWet() {
   wctx.scale(state.dpr, state.dpr);
 }
 
-function localXY(e) {
+function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
   const r = wetCanvas.getBoundingClientRect();
-  return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top);
+  return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
 }
 
 // ---- Page navigation ----
@@ -205,16 +260,25 @@ function goToPage(i) {
   tileCache.clear(); // clear so new page's tiles are fetched fresh
   // Center the page
   const pi = state.pageInfos[i];
-  const cssW = tilesCanvas.width / state.dpr;
-  const cssH = tilesCanvas.height / state.dpr;
-  const zoom = Math.min(cssW / pi.width_pt, cssH / pi.height_pt) * 0.9;
-  viewport.zoom = Math.max(0.2, Math.min(16.0, zoom));
-  viewport.panX = (cssW - pi.width_pt * viewport.zoom) / 2;
-  viewport.panY = (cssH - pi.height_pt * viewport.zoom) / 2;
+  centerPageInPanes(pi);
   updatePageUI();
-  drawPageBackground();
   redrawTiles();
   redrawAll();
+}
+
+function centerPageInPanes(pi = state.pageInfos[state.currentSheet]) {
+  if (!pi) return;
+  const left = paneBounds('left');
+  const zoom = Math.min(left.width / pi.width_pt, left.height / pi.height_pt) * 0.9;
+  viewport.zoom = Math.max(0.2, Math.min(16.0, zoom));
+  viewport.panX = left.x + (left.width - pi.width_pt * viewport.zoom) / 2;
+  viewport.panY = left.y + (left.height - pi.height_pt * viewport.zoom) / 2;
+  if (viewport.splitMode) {
+    const right = paneBounds('right');
+    viewport.rightZoom = viewport.zoom;
+    viewport.rightPanX = right.x + (right.width - pi.width_pt * viewport.rightZoom) / 2;
+    viewport.rightPanY = right.y + (right.height - pi.height_pt * viewport.rightZoom) / 2;
+  }
 }
 
 function updatePageUI() {
@@ -257,7 +321,7 @@ function eraseStrokesAt(e) {
 // ---- consume (wet layer drawing) ----
 function consume(e) {
   if (!state.cur) return;
-  const [x, y] = localXY(e);
+  const [x, y] = localXY(e, state.drawingPane);
   const p = e.pressure > 0 ? e.pressure : 0.5;
   const smoothed = state.streamline.filter(x, y, p);
   const prev = state.cur.last;
@@ -266,8 +330,8 @@ function consume(e) {
   state.samplesCount++;
 
   wctx.save();
-  wctx.translate(viewport.panX, viewport.panY);
-  wctx.scale(viewport.zoom, viewport.zoom);
+  clipToPane(wctx, state.drawingPane);
+  paneTransform(wctx, state.drawingPane);
   wctx.fillStyle = `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
   if (state.cur.kind === 'highlighter') {
     wctx.globalCompositeOperation = 'multiply';
@@ -282,11 +346,12 @@ function consume(e) {
 // ---- Shape overlay helpers ----
 function drawShapeOverlay() {
   if (!state.shapeStart || !state.shapeEnd) return;
-  const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1]);
-  const [sx1, sy1] = viewport.worldToScreen(state.shapeEnd[0], state.shapeEnd[1]);
+  const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1], state.drawingPane);
+  const [sx1, sy1] = viewport.worldToScreen(state.shapeEnd[0], state.shapeEnd[1], state.drawingPane);
   wctx.save();
   wctx.setTransform(1, 0, 0, 1, 0, 0);
   wctx.scale(state.dpr, state.dpr);
+  clipToPane(wctx, state.drawingPane);
   const color = `rgb(${state.color.map(v => Math.round(v * 255)).join(',')})`;
   wctx.strokeStyle = color;
   wctx.lineWidth = state.baseWidth;
@@ -312,8 +377,8 @@ function drawLassoOverlay() {
 
   if (state.lassoRect) {
     const { x0, y0, x1, y1 } = state.lassoRect;
-    const [sx0, sy0] = viewport.worldToScreen(x0, y0);
-    const [sx1, sy1] = viewport.worldToScreen(x1, y1);
+    const [sx0, sy0] = viewport.worldToScreen(x0, y0, state.drawingPane);
+    const [sx1, sy1] = viewport.worldToScreen(x1, y1, state.drawingPane);
     wctx.strokeStyle = 'rgba(79,70,229,0.9)';
     wctx.fillStyle = 'rgba(79,70,229,0.12)';
     wctx.lineWidth = 1.5;
@@ -332,8 +397,8 @@ function drawLassoOverlay() {
       }
     }
     if (minX < maxX && minY < maxY) {
-      const [sx0, sy0] = viewport.worldToScreen(minX - 4, minY - 4);
-      const [sx1, sy1] = viewport.worldToScreen(maxX + 4, maxY + 4);
+      const [sx0, sy0] = viewport.worldToScreen(minX - 4, minY - 4, state.drawingPane);
+      const [sx1, sy1] = viewport.worldToScreen(maxX + 4, maxY + 4, state.drawingPane);
       wctx.strokeStyle = '#6366f1';
       wctx.fillStyle = 'rgba(99,102,241,0.08)';
       wctx.lineWidth = 2;
@@ -361,10 +426,11 @@ function drawLassoOverlay() {
 // ---- Laser pointer ----
 function drawLaser() {
   if (!state.laserPos) return;
-  const [sx, sy] = viewport.worldToScreen(state.laserPos[0], state.laserPos[1]);
+  const [sx, sy] = viewport.worldToScreen(state.laserPos[0], state.laserPos[1], state.drawingPane);
   wctx.save();
   wctx.setTransform(1, 0, 0, 1, 0, 0);
   wctx.scale(state.dpr, state.dpr);
+  clipToPane(wctx, state.drawingPane);
   wctx.beginPath();
   wctx.arc(sx, sy, 8, 0, Math.PI * 2);
   wctx.fillStyle = 'rgba(239,68,68,0.15)';
@@ -416,7 +482,9 @@ function onDown(e) {
   try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
   $('toolbar').classList.add('pen-down');
 
-  const [wx, wy] = localXY(e);
+  state.drawingPane = paneForEvent(e);
+  viewport.activePane = state.drawingPane;
+  const [wx, wy] = localXY(e, state.drawingPane);
 
   if (state.activeTool === 'laser') {
     state.laserPos = [wx, wy];
@@ -470,7 +538,7 @@ function onDown(e) {
 }
 
 function onMove(e) {
-  const [wx, wy] = localXY(e);
+  const [wx, wy] = localXY(e, state.drawingPane);
 
   if (state.activeTool === 'laser') {
     state.laserPos = [wx, wy];
@@ -509,11 +577,12 @@ function onMove(e) {
     clearWet();
     if (state.shapeKind === 'line') {
       // Reuse ruler overlay draw logic inline
-      const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1]);
-      const [sx1, sy1] = viewport.worldToScreen(ex, ey);
+      const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1], state.drawingPane);
+      const [sx1, sy1] = viewport.worldToScreen(ex, ey, state.drawingPane);
       wctx.save();
       wctx.setTransform(1, 0, 0, 1, 0, 0);
       wctx.scale(state.dpr, state.dpr);
+      clipToPane(wctx, state.drawingPane);
       wctx.strokeStyle = `rgb(${state.color.map(v => Math.round(v * 255)).join(',')})`;
       wctx.lineWidth = state.baseWidth;
       wctx.lineCap = 'round';
@@ -634,8 +703,9 @@ async function onUp(e) {
     } catch (err) { console.warn('Failed to commit stroke to Rust core:', err); }
   }
 
-  redrawAll();
+  drawCommittedStroke(strokeRec);
   state.cur = null;
+  state.drawingPane = 'left';
   clearWet();
   try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
 }
@@ -735,7 +805,11 @@ async function insertBlankPage() {
 // ---- Split View ----
 function toggleSplitView() {
   const isSplit = viewport.toggleSplitMode();
+  $('stage').classList.toggle('split-view', isSplit);
+  centerPageInPanes();
   $('btnSplit') && $('btnSplit').classList.toggle('active', isSplit);
+  redrawTiles();
+  redrawAll();
 }
 
 // ---- Command Palette ----
