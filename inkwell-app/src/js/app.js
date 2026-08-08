@@ -4,6 +4,19 @@
 
 const $ = id => document.getElementById(id);
 
+function getInvoke() {
+  if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+    return window.__TAURI__.core.invoke;
+  }
+  if (window.__TAURI__ && window.__TAURI__.invoke) {
+    return window.__TAURI__.invoke;
+  }
+  if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+    return window.__TAURI_INTERNALS__.invoke;
+  }
+  return null;
+}
+
 const state = {
   activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler',
                           // 'rect', 'ellipse', 'laser'
@@ -50,6 +63,8 @@ let viewport;
 
 const tileCache = new Map();
 const tilesPending = new Map();
+// Tracks the last tile render error message (null = no error).
+let tileRenderError = null;
 
 function paneBounds(pane = 'left') {
   const width = tilesCanvas.width / state.dpr;
@@ -81,9 +96,37 @@ function clipToPane(ctx, pane) {
   ctx.clip();
 }
 
+const TILE_PT = 512;
+const TILE_CACHE_MAX = 200;
+
+function evictTileCache() {
+  if (tileCache.size <= TILE_CACHE_MAX) return;
+  let count = tileCache.size - TILE_CACHE_MAX;
+  for (const key of tileCache.keys()) {
+    if (count-- <= 0) break;
+    tileCache.delete(key);
+  }
+}
+
+function tileGridForRect(rx0, ry0, rx1, ry1) {
+  const tiles = [];
+  const tx0 = Math.floor(rx0 / TILE_PT);
+  const ty0 = Math.floor(ry0 / TILE_PT);
+  const tx1 = Math.ceil(rx1 / TILE_PT);
+  const ty1 = Math.ceil(ry1 / TILE_PT);
+  for (let ty = ty0; ty < ty1; ty++) {
+    for (let tx = tx0; tx < tx1; tx++) {
+      tiles.push({
+        tx, ty,
+        rect: [tx * TILE_PT, ty * TILE_PT, (tx + 1) * TILE_PT, (ty + 1) * TILE_PT]
+      });
+    }
+  }
+  return tiles;
+}
+
 async function fetchTile(page, rect, px) {
-  const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
-                 (window.__TAURI__ && window.__TAURI__.invoke);
+  const invoke = getInvoke();
   if (!invoke) return null;
   const key = `${page}:${rect.join(',')}:${px}`;
   if (tileCache.has(key)) return { key, data: tileCache.get(key) };
@@ -91,28 +134,35 @@ async function fetchTile(page, rect, px) {
 
   const task = (async () => {
     try {
-    const raw = await invoke('render_tile', { page, rect, px });
-    const expectedBytes = px * px * 3;
-    if (!raw || raw.length !== expectedBytes) {
-      throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGB bytes, got ${raw ? raw.length : 0}`);
-    }
-    const imgData = new ImageData(px, px);
-    for (let i = 0; i < px * px; i++) {
-      imgData.data[i * 4 + 0] = raw[i * 3 + 0];
-      imgData.data[i * 4 + 1] = raw[i * 3 + 1];
-      imgData.data[i * 4 + 2] = raw[i * 3 + 2];
-      imgData.data[i * 4 + 3] = 255;
-    }
-    // ImageData is not a CanvasImageSource, so it cannot be passed to
-    // drawImage() directly. Materialise it in a tiny canvas before caching.
-    const tileCanvas = document.createElement('canvas');
-    tileCanvas.width = px;
-    tileCanvas.height = px;
-    tileCanvas.getContext('2d').putImageData(imgData, 0, 0);
-    tileCache.set(key, tileCanvas);
-    return { key, data: tileCanvas };
+      const raw = await invoke('render_tile', { page, rect, px });
+      const rw = rect[2] - rect[0];
+      const rh = rect[3] - rect[1];
+      const scale = px / Math.max(rw, rh);
+      const tileW = Math.round(rw * scale) || 1;
+      const tileH = Math.round(rh * scale) || 1;
+      const expectedBytes = tileW * tileH * 3;
+      if (!raw || raw.length !== expectedBytes) {
+        throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGB bytes (${tileW}x${tileH}), got ${raw ? raw.length : 0}`);
+      }
+      const imgData = new ImageData(tileW, tileH);
+      for (let i = 0; i < tileW * tileH; i++) {
+        imgData.data[i * 4 + 0] = raw[i * 3 + 0];
+        imgData.data[i * 4 + 1] = raw[i * 3 + 1];
+        imgData.data[i * 4 + 2] = raw[i * 3 + 2];
+        imgData.data[i * 4 + 3] = 255;
+      }
+      const tileCanvas = document.createElement('canvas');
+      tileCanvas.width = tileW;
+      tileCanvas.height = tileH;
+      tileCanvas.getContext('2d').putImageData(imgData, 0, 0);
+      tileCache.set(key, tileCanvas);
+      tileRenderError = null;
+      return { key, data: tileCanvas };
     } catch (err) {
-      console.warn('render_tile error:', err);
+      const msg = err && err.message ? err.message : String(err);
+      console.error('[inkwell] render_tile error:', msg);
+      tileRenderError = msg;
+      scheduleRedrawTiles();
       return null;
     } finally {
       tilesPending.delete(key);
@@ -151,6 +201,53 @@ function drawPageBackground(pane = 'left') {
   tctx.restore();
 }
 
+function drawSplitDivider() {
+  if (!viewport || !viewport.splitMode) return;
+  const w = tilesCanvas.width / state.dpr;
+  const h = tilesCanvas.height / state.dpr;
+  const cx = w / 2;
+  tctx.save();
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+  tctx.scale(state.dpr, state.dpr);
+  tctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  tctx.lineWidth = 2;
+  tctx.beginPath();
+  tctx.moveTo(cx, 0);
+  tctx.lineTo(cx, h);
+  tctx.stroke();
+  tctx.restore();
+}
+
+function drawZoomIndicator() {
+  if (!viewport) return;
+  const panes = visiblePanes();
+  tctx.save();
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
+  tctx.scale(state.dpr, state.dpr);
+  tctx.font = '11px system-ui, -apple-system, sans-serif';
+  tctx.textBaseline = 'bottom';
+  
+  for (const pane of panes) {
+    const bounds = paneBounds(pane);
+    const z = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+    const pct = Math.round(z * 100) + '%';
+    tctx.textAlign = 'right';
+    tctx.fillStyle = 'rgba(255,255,255,0.45)';
+    tctx.fillText(pct, bounds.x + bounds.width - 12, bounds.y + bounds.height - 8);
+  }
+  tctx.restore();
+}
+
+let redrawPending = false;
+function scheduleRedrawTiles() {
+  if (redrawPending) return;
+  redrawPending = true;
+  requestAnimationFrame(() => {
+    redrawPending = false;
+    redrawTiles();
+  });
+}
+
 async function redrawTiles() {
   const drawEpoch = ++redrawTiles.epoch;
   tctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -158,13 +255,17 @@ async function redrawTiles() {
 
   for (const pane of visiblePanes()) drawPageBackground(pane);
 
-  if (!state.pageInfos.length) return;
+  if (state.pageInfos.length) {
+    await Promise.all(visiblePanes().map(pane => {
+      const sheetIdx = paneSheet(pane);
+      const pi = state.pageInfos[sheetIdx];
+      return pi ? redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) : Promise.resolve();
+    }));
+  }
 
-  await Promise.all(visiblePanes().map(pane => {
-    const sheetIdx = paneSheet(pane);
-    const pi = state.pageInfos[sheetIdx];
-    return pi ? redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) : Promise.resolve();
-  }));
+  drawSplitDivider();
+  drawZoomIndicator();
+  evictTileCache();
 }
 redrawTiles.epoch = 0;
 
@@ -177,30 +278,66 @@ async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
   const rx1 = Math.min(pi.width_pt, wx1), ry1 = Math.min(pi.height_pt, wy1);
   if (rx1 <= rx0 || ry1 <= ry0) return;
 
-  // The current Rust tile protocol produces square pixel buffers. Request a
-  // square in document space too; otherwise portrait pages are copied into
-  // the corner of a square and look blank or badly distorted when blitted.
-  const side = Math.max(rx1 - rx0, ry1 - ry0);
-  const tileRect = [rx0, ry0, Math.min(pi.width_pt, rx0 + side), Math.min(pi.height_pt, ry0 + side)];
   const zoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
-  const px = Math.min(2048, Math.round(side * zoom * state.dpr));
+  const gridTiles = tileGridForRect(rx0, ry0, rx1, ry1);
+  const px = Math.min(1024, Math.round(TILE_PT * zoom * state.dpr));
   if (px < 4) return;
 
-  const result = await fetchTile(sheetIdx, tileRect, px);
-  if (!result || drawEpoch !== redrawTiles.epoch) return;
+  const promises = gridTiles.map(async gt => {
+    const tr = [
+      Math.max(0, gt.rect[0]),
+      Math.max(0, gt.rect[1]),
+      Math.min(pi.width_pt, gt.rect[2]),
+      Math.min(pi.height_pt, gt.rect[3])
+    ];
+    if (tr[2] <= tr[0] || tr[3] <= tr[1]) return;
 
-  const [sx0, sy0] = viewport.worldToScreen(tileRect[0], tileRect[1], pane);
-  const [sx1, sy1] = viewport.worldToScreen(tileRect[2], tileRect[3], pane);
-  const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
-  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
-  tctx.save();
-  tctx.scale(state.dpr, state.dpr);
-  clipToPane(tctx, pane);
-  tctx.beginPath();
-  tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
-  tctx.clip();
-  tctx.drawImage(result.data, sx0, sy0, sx1 - sx0, sy1 - sy0);
-  tctx.restore();
+    const result = await fetchTile(sheetIdx, tr, px);
+    if (!result || drawEpoch !== redrawTiles.epoch) return;
+
+    const [sx0, sy0] = viewport.worldToScreen(tr[0], tr[1], pane);
+    const [sx1, sy1] = viewport.worldToScreen(tr[2], tr[3], pane);
+    const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
+    const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
+
+    tctx.save();
+    tctx.scale(state.dpr, state.dpr);
+    clipToPane(tctx, pane);
+    tctx.beginPath();
+    tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
+    tctx.clip();
+    tctx.drawImage(result.data, sx0, sy0, sx1 - sx0, sy1 - sy0);
+    tctx.restore();
+  });
+
+  await Promise.all(promises);
+
+  if (tileRenderError && drawEpoch === redrawTiles.epoch) {
+    const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
+    const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
+    const pw = pageX1 - pageX0, ph = pageY1 - pageY0;
+    tctx.save();
+    tctx.scale(state.dpr, state.dpr);
+    clipToPane(tctx, pane);
+    tctx.fillStyle = 'rgba(239,68,68,0.10)';
+    tctx.fillRect(pageX0, pageY0, pw, ph);
+    tctx.fillStyle = '#ef4444';
+    tctx.font = `bold ${Math.min(24, pw * 0.06)}px system-ui, sans-serif`;
+    tctx.textAlign = 'center';
+    tctx.textBaseline = 'middle';
+    const cx = pageX0 + pw / 2, cy = pageY0 + ph / 2;
+    tctx.fillText('⚠ PDF render failed', cx, cy - 18);
+    tctx.font = `${Math.min(13, pw * 0.032)}px system-ui, sans-serif`;
+    tctx.fillStyle = '#b91c1c';
+    const errText = tileRenderError.length > 80
+      ? tileRenderError.slice(0, 77) + '…'
+      : tileRenderError;
+    tctx.fillText(errText, cx, cy + 10);
+    tctx.fillStyle = '#6b7280';
+    tctx.font = `${Math.min(11, pw * 0.027)}px system-ui, sans-serif`;
+    tctx.fillText('Check console (F12) for full details', cx, cy + 30);
+    tctx.restore();
+  }
 }
 
 function makeCtx(canvas) {
@@ -225,7 +362,7 @@ function resize() {
 
   for (const ctx of [tctx, dctx, wctx]) ctx.scale(state.dpr, state.dpr);
   for (const pane of visiblePanes()) drawPageBackground(pane);
-  redrawTiles();
+  scheduleRedrawTiles();
   redrawAll();
 }
 
@@ -270,44 +407,65 @@ function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
 }
 
 // ---- Page navigation ----
-function goToPage(i, pane = viewport.activePane || 'left') {
+function goToPage(i, pane = 'left') {
   if (i < 0 || i >= state.pageInfos.length) return;
   if (pane === 'right' && viewport.splitMode) {
     state.rightSheet = i;
   } else {
     state.leftSheet = i;
   }
-  tileCache.clear(); // clear so new page's tiles are fetched fresh
   const pi = state.pageInfos[i];
   centerPageInPanes(pi);
   updatePageUI();
-  redrawTiles();
+  scheduleRedrawTiles();
   redrawAll();
 }
 
 function centerPageInPanes(pi = state.pageInfos[state.currentSheet]) {
   if (!pi) return;
   const left = paneBounds('left');
-  const zoom = Math.min(left.width / pi.width_pt, left.height / pi.height_pt) * 0.9;
-  viewport.zoom = Math.max(0.2, Math.min(16.0, zoom));
-  viewport.panX = left.x + (left.width - pi.width_pt * viewport.zoom) / 2;
-  viewport.panY = left.y + (left.height - pi.height_pt * viewport.zoom) / 2;
+  const piLeft = state.pageInfos[state.leftSheet] || pi;
+  const zoomLeft = Math.min(left.width / piLeft.width_pt, left.height / piLeft.height_pt) * 0.9;
+  viewport.zoom = Math.max(0.2, Math.min(16.0, zoomLeft));
+  viewport.panX = left.x + (left.width - piLeft.width_pt * viewport.zoom) / 2;
+  viewport.panY = left.y + (left.height - piLeft.height_pt * viewport.zoom) / 2;
+
   if (viewport.splitMode) {
     const right = paneBounds('right');
-    viewport.rightZoom = viewport.zoom;
-    viewport.rightPanX = right.x + (right.width - pi.width_pt * viewport.rightZoom) / 2;
-    viewport.rightPanY = right.y + (right.height - pi.height_pt * viewport.rightZoom) / 2;
+    const piRight = state.pageInfos[state.rightSheet] || pi;
+    const zoomRight = Math.min(right.width / piRight.width_pt, right.height / piRight.height_pt) * 0.9;
+    viewport.rightZoom = Math.max(0.2, Math.min(16.0, zoomRight));
+    viewport.rightPanX = right.x + (right.width - piRight.width_pt * viewport.rightZoom) / 2;
+    viewport.rightPanY = right.y + (right.height - piRight.height_pt * viewport.rightZoom) / 2;
   }
 }
 
 function updatePageUI() {
   const total = state.pageInfos.length;
-  const activeSheet = paneSheet(viewport.activePane || 'left');
-  const cur = activeSheet + 1;
-  const paneTag = viewport.splitMode ? ` (${(viewport.activePane || 'left').toUpperCase()})` : '';
-  $('pageNum').textContent = total ? `${cur} / ${total}${paneTag}` : '—';
-  $('btnPrev').disabled = activeSheet <= 0;
-  $('btnNext').disabled = activeSheet >= total - 1;
+  if (!total) {
+    $('pageNum').textContent = '—';
+    $('btnPrev').disabled = true;
+    $('btnNext').disabled = true;
+    $('splitPageNav') && $('splitPageNav').classList.add('hidden');
+    $('leftNavLabel') && $('leftNavLabel').classList.add('hidden');
+    return;
+  }
+
+  const isSplit = viewport.splitMode;
+  $('leftNavLabel') && $('leftNavLabel').classList.toggle('hidden', !isSplit);
+  $('splitPageNav') && $('splitPageNav').classList.toggle('hidden', !isSplit);
+
+  const leftCur = state.leftSheet + 1;
+  $('pageNum').textContent = isSplit ? `${leftCur}` : `${leftCur} / ${total}`;
+  $('btnPrev').disabled = state.leftSheet <= 0;
+  $('btnNext').disabled = state.leftSheet >= total - 1;
+
+  if (isSplit) {
+    const rightCur = state.rightSheet + 1;
+    $('rightPageNum') && ($('rightPageNum').textContent = `${rightCur}`);
+    $('btnRightPrev') && ($('btnRightPrev').disabled = state.rightSheet <= 0);
+    $('btnRightNext') && ($('btnRightNext').disabled = state.rightSheet >= total - 1);
+  }
 }
 
 // ---- Eraser (stroke-erase by proximity) ----
@@ -333,10 +491,14 @@ function eraseStrokesAt(e) {
     state.undoStack.push({ type: 'erase', strokes: erased });
     state.redoStack = [];
     redrawAll();
-    if (window.__TAURI__) {
-      window.__TAURI__.core.invoke('erase_strokes_near', {
-        sheet: state.currentSheet, px: wx, py: wy, radius,
-      }).catch(err => console.warn('erase_strokes_near failed:', err));
+    const invoke = getInvoke();
+    if (invoke) {
+      invoke('erase_strokes_near', {
+        sheet: sheetIdx,
+        px: x,
+        py: y,
+        radius: radius,
+      }).catch(err => console.warn('erase IPC failed:', err));
     }
   }
 }
@@ -490,9 +652,10 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
   state.undoStack.push({ type: 'add', stroke });
   state.redoStack = [];
   redrawAll();
-  if (window.__TAURI__) {
+  const invoke = getInvoke();
+  if (invoke) {
     const payload = samples.map(([x, y], i) => ({ x, y, pressure: 0.7, t_ms: i * 10 }));
-    window.__TAURI__.core.invoke('commit_stroke', {
+    invoke('commit_stroke', {
       sheet: state.currentSheet, tool: 'pen', rgb: state.color,
       baseWidth: state.baseWidth, samples: payload,
     }).catch(err => console.warn('shape commit_stroke failed:', err));
@@ -587,7 +750,7 @@ function onMove(e) {
       const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       const len = Math.hypot(dx, dy);
       ex = state.shapeStart[0] + Math.cos(angle) * len;
-      ey = state.shapeStart[1] + Math.sin(angle) * len;
+      ey = state.shapeStart[0] + Math.sin(angle) * len;
     } else if (e.shiftKey) {
       // square / circle constraint
       const dx = Math.abs(wx - state.shapeStart[0]);
@@ -671,7 +834,7 @@ async function onUp(e) {
         const rulerStroke = new Ink.Stroke({ kind: 'pen', rgb: state.color, baseWidth: state.baseWidth });
         rulerStroke.push(ax, ay, 0.7, 0);
         rulerStroke.push(bx, by, 0.7, 50);
-        const s = { ...rulerStroke, sheet: state.currentSheet, deleted: false };
+        const stroke = { ...rulerStroke, sheet: state.currentSheet, deleted: false };
         // Ink.Stroke is a class; clone its points
         const finishedStroke = {
           id: rulerStroke.id, kind: rulerStroke.kind, rgb: rulerStroke.rgb,
@@ -682,8 +845,9 @@ async function onUp(e) {
         state.undoStack.push({ type: 'add', stroke: finishedStroke });
         state.redoStack = [];
         redrawAll();
-        if (window.__TAURI__) {
-          window.__TAURI__.core.invoke('commit_stroke', {
+        const invoke = getInvoke();
+        if (invoke) {
+          invoke('commit_stroke', {
             sheet: state.currentSheet, tool: 'pen', rgb: state.color,
             baseWidth: state.baseWidth,
             samples: [{ x: ax, y: ay, pressure: 0.7, t_ms: 0 },
@@ -711,12 +875,13 @@ async function onUp(e) {
   state.undoStack.push({ type: 'add', stroke: strokeRec });
   state.redoStack = [];
 
-  if (window.__TAURI__) {
+  const invoke = getInvoke();
+  if (invoke) {
     try {
       const samplesPayload = finishedStroke.points.map(pt => ({
         x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
       }));
-      await window.__TAURI__.core.invoke('commit_stroke', {
+      await invoke('commit_stroke', {
         sheet: state.currentSheet,
         tool: finishedStroke.kind,
         rgb: finishedStroke.rgb,
@@ -807,9 +972,10 @@ function checkOutOfBounds(stroke) {
 async function insertBlankPage() {
   const newIndex = state.pageInfos.length;
   const width_pt = 595.0, height_pt = 842.0;
-  if (window.__TAURI__) {
+  const invoke = getInvoke();
+  if (invoke) {
     try {
-      const pageInfo = await window.__TAURI__.core.invoke('insert_blank_page', {
+      const pageInfo = await invoke('insert_blank_page', {
         index: newIndex, widthPt: width_pt, heightPt: height_pt,
       });
       state.pageInfos.push(pageInfo);
@@ -833,7 +999,7 @@ function toggleSplitView() {
   $('stage').classList.toggle('split-view', isSplit);
   centerPageInPanes();
   $('btnSplit') && $('btnSplit').classList.toggle('active', isSplit);
-  redrawTiles();
+  scheduleRedrawTiles();
   redrawAll();
 }
 
@@ -967,18 +1133,21 @@ function bindUI() {
     });
   });
 
-  $('btnPrev') && $('btnPrev').addEventListener('click', () => goToPage(state.currentSheet - 1));
-  $('btnNext') && $('btnNext').addEventListener('click', () => goToPage(state.currentSheet + 1));
+  $('btnPrev') && $('btnPrev').addEventListener('click', () => goToPage(state.leftSheet - 1, 'left'));
+  $('btnNext') && $('btnNext').addEventListener('click', () => goToPage(state.leftSheet + 1, 'left'));
+
+  $('btnRightPrev') && $('btnRightPrev').addEventListener('click', () => goToPage(state.rightSheet - 1, 'right'));
+  $('btnRightNext') && $('btnRightNext').addEventListener('click', () => goToPage(state.rightSheet + 1, 'right'));
 
   $('btnOpen').addEventListener('click', async () => {
-    if (window.__TAURI__) {
+    const invoke = getInvoke();
+    if (invoke) {
       try {
-        const invoke = (window.__TAURI__.core && window.__TAURI__.core.invoke) || window.__TAURI__.invoke;
         let selectedPath = null;
         if (window.__TAURI_PLUGIN_DIALOG__ && window.__TAURI_PLUGIN_DIALOG__.open) {
           const res = await window.__TAURI_PLUGIN_DIALOG__.open({ filters: [{ name: 'PDF', extensions: ['pdf'] }] });
           selectedPath = typeof res === 'string' ? res : (res && res.path);
-        } else if (invoke) {
+        } else {
           const res = await invoke('plugin:dialog|open', {
             multiple: false,
             directory: false,
@@ -995,6 +1164,7 @@ function bindUI() {
           state.undoStack = [];
           state.redoStack = [];
           tileCache.clear();
+          tileRenderError = null;
           goToPage(0);
           $('docInfo').innerHTML = `
             <div>Loaded: ${selectedPath.split('\\').pop().split('/').pop()}</div>
@@ -1003,7 +1173,7 @@ function bindUI() {
           return;
         }
       } catch (err) {
-        console.warn('Tauri dialog failed, using file picker input fallback:', err);
+        console.warn('[inkwell] Native dialog open failed, falling back to file picker:', err);
       }
     }
     $('pdfFileInput') && $('pdfFileInput').click();
@@ -1013,16 +1183,17 @@ function bindUI() {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
     try {
-      const invoke = (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) ||
-                     (window.__TAURI__ && window.__TAURI__.invoke);
-      if (file.path && invoke) {
-        const infos = await invoke('open_pdf', { pathStr: file.path });
+      const invoke = getInvoke();
+      const filePath = file.path || file.webkitRelativePath;
+      if (filePath && invoke) {
+        const infos = await invoke('open_pdf', { pathStr: filePath });
         state.pageInfos = infos;
         state.strokes = [];
         state.selectedStrokes = [];
         state.undoStack = [];
         state.redoStack = [];
         tileCache.clear();
+        tileRenderError = null;
         goToPage(0);
         $('docInfo').innerHTML = `
           <div>Loaded: ${file.name}</div>
@@ -1033,6 +1204,9 @@ function bindUI() {
 
       const arrayBuf = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuf));
+      if (bytes.length > 5 * 1024 * 1024) {
+        console.warn('[inkwell] Large PDF (>5 MB) sent via IPC bytes path — this may be slow or fail. Consider using file.path if available.');
+      }
       if (invoke) {
         const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
         state.pageInfos = infos;
@@ -1041,6 +1215,7 @@ function bindUI() {
         state.undoStack = [];
         state.redoStack = [];
         tileCache.clear();
+        tileRenderError = null;
         goToPage(0);
         $('docInfo').innerHTML = `
           <div>Loaded: ${file.name}</div>
@@ -1048,16 +1223,18 @@ function bindUI() {
         `;
         return;
       }
+      alert('Tauri IPC is unavailable in this environment.');
     } catch (err) {
-      console.warn('pdfFileInput error:', err);
-      alert('Failed to open PDF: ' + err);
+      console.error('[inkwell] pdfFileInput error:', err);
+      alert('Failed to open PDF: ' + (err.message || err));
     }
   });
 
   $('btnSave').addEventListener('click', async () => {
-    if (window.__TAURI__) {
+    const invoke = getInvoke();
+    if (invoke) {
       try {
-        const savedPath = await window.__TAURI__.core.invoke('save_pdf', { outPathStr: null });
+        const savedPath = await invoke('save_pdf', { outPathStr: null });
         alert('Saved to: ' + savedPath);
       } catch (err) { alert('Failed to save PDF: ' + err); }
     } else {
@@ -1209,8 +1386,7 @@ window.addEventListener('DOMContentLoaded', () => {
   wetCanvas = $('wet');
 
   viewport = new ViewportManager(() => {
-    drawPageBackground();
-    redrawTiles();
+    scheduleRedrawTiles();
     redrawAll();
   });
   viewport.attachListeners($('stage'));

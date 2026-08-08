@@ -59,9 +59,18 @@
 
     <!-- Page navigation bar at bottom -->
     <div id="pageNav">
+      <span id="leftNavLabel" class="nav-label hidden">L:</span>
       <button id="btnPrev" class="nav-btn" disabled>‹</button>
       <span id="pageNum">—</span>
       <button id="btnNext" class="nav-btn" disabled>›</button>
+
+      <div id="splitPageNav" class="split-nav hidden">
+        <span class="nav-label">R:</span>
+        <button id="btnRightPrev" class="nav-btn">‹</button>
+        <span id="rightPageNum">—</span>
+        <button id="btnRightNext" class="nav-btn">›</button>
+      </div>
+
       <button id="btnAddPage" class="nav-btn" title="Insert Blank Page">+</button>
     </div>
 

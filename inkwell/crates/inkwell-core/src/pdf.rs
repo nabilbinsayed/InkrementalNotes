@@ -139,6 +139,29 @@ impl PdfFile {
         self.add(body)
     }
 
+    pub fn page_height(&self, page_num: u32) -> f64 {
+        if let Ok(dict) = self.obj_dict(page_num) {
+            let box_ref = po::dict_get(&self.base, dict, "/MediaBox")
+                .or_else(|| po::dict_get(&self.base, dict, "/CropBox"));
+            if let Some(r) = box_ref {
+                let slice = &self.base[r.0..r.1];
+                let s = String::from_utf8_lossy(slice);
+                let nums: Vec<f64> = s
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .split_whitespace()
+                    .filter_map(|t| t.parse::<f64>().ok())
+                    .collect();
+                if nums.len() == 4 {
+                    let h = (nums[3] - nums[1]).abs();
+                    if h > 10.0 {
+                        return h;
+                    }
+                }
+            }
+        }
+        842.0
+    }
+
     // -- the interesting part ---------------------------------------------
 
     /// Write `doc` into the file as a new incremental generation.
@@ -162,10 +185,11 @@ impl PdfFile {
             };
             let _ = sheet_idx;
 
+            let h = self.page_height(page_num);
             let strokes: Vec<&Stroke> = sheet.strokes().collect();
             let mut annots = Vec::new();
             for chunk in strokes.chunks(group) {
-                if let Some(a) = self.emit_group(chunk) {
+                if let Some(a) = self.emit_group(chunk, h) {
                     annots.push(a);
                 }
             }
@@ -196,15 +220,15 @@ impl PdfFile {
 
     /// One `/Ink` annotation covering `strokes`, with an `/AP` appearance stream
     /// holding their filled ribbons.
-    fn emit_group(&mut self, strokes: &[&Stroke]) -> Option<u32> {
-        let mut bbox = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    fn emit_group(&mut self, strokes: &[&Stroke], page_height: f64) -> Option<u32> {
+        let mut bbox_canvas = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
         let mut any = false;
         for s in strokes {
             if let Some(b) = s.bbox() {
-                bbox[0] = bbox[0].min(b[0]);
-                bbox[1] = bbox[1].min(b[1]);
-                bbox[2] = bbox[2].max(b[2]);
-                bbox[3] = bbox[3].max(b[3]);
+                bbox_canvas[0] = bbox_canvas[0].min(b[0]);
+                bbox_canvas[1] = bbox_canvas[1].min(b[1]);
+                bbox_canvas[2] = bbox_canvas[2].max(b[2]);
+                bbox_canvas[3] = bbox_canvas[3].max(b[3]);
                 any = true;
             }
         }
@@ -212,7 +236,13 @@ impl PdfFile {
             return None;
         }
         let pad = 1.0;
-        let bbox = [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad];
+        // Transform canvas bounding box to PDF user space coordinate system (y_pdf = page_height - y_canvas)
+        let bbox_pdf = [
+            bbox_canvas[0] - pad,
+            page_height - bbox_canvas[3] - pad,
+            bbox_canvas[2] + pad,
+            page_height - bbox_canvas[1] + pad,
+        ];
 
         // appearance content: one fill per stroke
         let mut content = Vec::new();
@@ -234,23 +264,25 @@ impl PdfFile {
                 "q\n{gs} gs\n{:.4} {:.4} {:.4} rg\n",
                 s.rgb[0], s.rgb[1], s.rgb[2]
             );
-            // Cubics along the two long edges, chords around the round caps.
-            // A pure polyline facets past ~400% zoom (0.046 pt error on the test
-            // circle); smoothing straight through the cap corners instead
-            // overshoots (2.37 pt). Both were measured. Both were wrong.
+            // Transform y_canvas -> y_pdf = page_height - y_canvas
             for cmd in &path {
                 match cmd {
                     PathCmd::MoveTo(p) => {
-                        let _ = writeln!(content, "{:.3} {:.3} m", p.0, p.1);
+                        let _ = writeln!(content, "{:.3} {:.3} m", p.0, page_height - p.1);
                     }
                     PathCmd::LineTo(p) => {
-                        let _ = writeln!(content, "{:.3} {:.3} l", p.0, p.1);
+                        let _ = writeln!(content, "{:.3} {:.3} l", p.0, page_height - p.1);
                     }
                     PathCmd::CurveTo(c) => {
                         let _ = writeln!(
                             content,
                             "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} c",
-                            c[0].0, c[0].1, c[1].0, c[1].1, c[2].0, c[2].1
+                            c[0].0,
+                            page_height - c[0].1,
+                            c[1].0,
+                            page_height - c[1].1,
+                            c[2].0,
+                            page_height - c[2].1
                         );
                     }
                     PathCmd::Close => {
@@ -271,21 +303,19 @@ impl PdfFile {
         let ap = self.add_stream(
             &format!(
                 "/Type /XObject /Subtype /Form /BBox [{}] /Resources << /ExtGState << {gstates} >> >>",
-                fmt_rect(&bbox)
+                fmt_rect(&bbox_pdf)
             ),
             &content,
             true,
         );
 
-        // /InkList: decimated centrelines, so third-party readers understand it
+        // /InkList: decimated centrelines converted to PDF user space (y_pdf = page_height - y_canvas)
         let mut inklist = String::new();
         for s in strokes {
             inklist.push('[');
             for (x, y) in s.centreline(3) {
-                // push_str rather than write!: `std::io::Write` is already in
-                // scope for the Vec<u8> content buffer, and importing
-                // `std::fmt::Write` too would make `write!` ambiguous.
-                inklist.push_str(&format!("{x:.2} {y:.2} "));
+                let y_pdf = page_height - y;
+                inklist.push_str(&format!("{x:.2} {y_pdf:.2} "));
             }
             inklist.push(']');
         }
@@ -296,7 +326,7 @@ impl PdfFile {
                  /InkList [{inklist}] /C [{:.4} {:.4} {:.4}] \
                  /BS << /W {:.2} /S /S >> /T (Inkwell) /NM ({}) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({}) /Inkw_N {} >>",
-                fmt_rect(&bbox),
+                fmt_rect(&bbox_pdf),
                 head.rgb[0],
                 head.rgb[1],
                 head.rgb[2],

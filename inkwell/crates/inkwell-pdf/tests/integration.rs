@@ -47,9 +47,8 @@ fn test_pdfium_integration_or_graceful_skip() {
             let tile = rasterizer.rasterize(0, [0.0, 0.0, page_w, page_h], 256);
             assert!(tile.is_some(), "Tile rasterize should produce 256x256 tile");
             let t = tile.unwrap();
-            assert_eq!(t.w, 256);
-            assert_eq!(t.h, 256);
-            assert_eq!(t.data.len(), 256 * 256 * 3);
+            assert_eq!(t.w.max(t.h), 256);
+            assert_eq!(t.data.len(), (t.w * t.h * 3) as usize);
             assert!(
                 t.data.chunks_exact(3).any(|rgb| rgb != [255, 255, 255]),
                 "A text-bearing fixture must not rasterize to an all-white tile"

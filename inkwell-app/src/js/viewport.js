@@ -107,6 +107,35 @@ class ViewportManager {
         this.setPan(curPanX - e.deltaX, curPanY - e.deltaY, pane);
       }
     }, { passive: false });
+
+    // Middle-mouse button panning
+    element.addEventListener('pointerdown', e => {
+      if (e.button !== 1) return; // middle button only
+      e.preventDefault();
+      const stageRect = element.getBoundingClientRect();
+      const relX = e.clientX - stageRect.left;
+      this.isPanning = true;
+      this.lastPanPt = [e.clientX, e.clientY];
+      this.activePane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+      try { element.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    element.addEventListener('pointermove', e => {
+      if (!this.isPanning) return;
+      const dx = e.clientX - this.lastPanPt[0];
+      const dy = e.clientY - this.lastPanPt[1];
+      this.lastPanPt = [e.clientX, e.clientY];
+      const pane = this.activePane;
+      const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+      const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+      this.setPan(curPanX + dx, curPanY + dy, pane);
+    });
+
+    element.addEventListener('pointerup', e => {
+      if (e.button !== 1) return;
+      this.isPanning = false;
+      try { element.releasePointerCapture(e.pointerId); } catch (_) {}
+    });
   }
 }
 

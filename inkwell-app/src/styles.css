@@ -446,3 +446,16 @@ kbd {
   border-radius: 4px;
 }
 .radial-item:hover .tip { display: block; }
+
+/* Split View Navigation */
+#splitPageNav, .split-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  border-left: 1px solid rgba(255,255,255,0.15);
+  padding-left: 8px;
+}
+#splitPageNav.hidden, .split-nav.hidden {
+  display: none !important;
+}

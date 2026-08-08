@@ -31,48 +31,95 @@ pub struct RawSampleInput {
     pub t_ms: f64,
 }
 
+/// Extract page count and dimensions from PDF bytes using the cached PDFium instance.
+/// Falls back to the shallow `PdfFile` reader if PDFium is unavailable.
+fn get_page_infos(
+    bytes: &[u8],
+    state: &AppState,
+    pdf_file_fallback: Option<&PdfFile>,
+) -> Vec<PageInfo> {
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    if let Some(pdfium) = pdfium_guard.as_ref() {
+        match pdfium.load_pdf_from_byte_slice(bytes, None) {
+            Ok(doc) => {
+                let n = doc.pages().len() as usize;
+                return (0..n)
+                    .map(|i| {
+                        let (w, h) = doc.pages()
+                            .get(i as i32)
+                            .ok()
+                            .map(|p| (p.width().value as f64, p.height().value as f64))
+                            .unwrap_or((595.0, 842.0));
+                        PageInfo { page_index: i, width_pt: w, height_pt: h }
+                    })
+                    .collect();
+            }
+            Err(e) => {
+                eprintln!("[inkwell] PDFium failed to load PDF for page info: {e:?}");
+            }
+        }
+    } else {
+        eprintln!("[inkwell] PDFium not available — falling back to shallow reader for page info.");
+    }
+
+    // Fallback: use the shallow PdfFile reader (only works for classic-xref PDFs)
+    let n = pdf_file_fallback
+        .map(|f| f.page_count())
+        .unwrap_or(1);
+    (0..n)
+        .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0 })
+        .collect()
+}
+
+/// Normalise PDF bytes using the cached PDFium instance.
+/// Returns the original bytes unchanged if PDFium is unavailable or normalisation fails.
+fn normalise_if_needed(bytes: Vec<u8>, state: &AppState) -> Result<(Vec<u8>, Option<PdfFile>), String> {
+    match PdfFile::open(bytes.clone()) {
+        Ok(f) => Ok((bytes, Some(f))),
+        Err(e) => {
+            eprintln!("[inkwell] Shallow PDF parser error ({e:?}), attempting PDFium normalisation...");
+            let pdfium_guard = state.pdfium.lock().unwrap();
+            match pdfium_guard.as_ref() {
+                Some(pdfium) => {
+                    match inkwell_pdf::normalise(pdfium, &bytes) {
+                        Ok(norm_bytes) => {
+                            eprintln!("[inkwell] PDFium normalisation succeeded ({} bytes -> {} bytes).", bytes.len(), norm_bytes.len());
+                            // The normalised bytes should parse with the shallow reader now.
+                            let f = PdfFile::open(norm_bytes.clone()).ok();
+                            Ok((norm_bytes, f))
+                        }
+                        Err(norm_err) => {
+                            // Normalisation failed: surface a real error rather than silently
+                            // loading malformed bytes and showing a blank document.
+                            Err(format!(
+                                "Failed to parse PDF ({e}) and PDFium normalisation also failed: {norm_err:?}"
+                            ))
+                        }
+                    }
+                }
+                None => {
+                    // PDFium not available — this PDF format requires it.
+                    Err(format!(
+                        "Failed to parse PDF ({e}). PDFium is not available (pdfium.dll not found). \
+                         This PDF format requires PDFium to open."
+                    ))
+                }
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<PageInfo>, String> {
     let path = PathBuf::from(&path_str);
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
-    let (valid_bytes, _pdf_file) = match PdfFile::open(bytes.clone()) {
-        Ok(f) => (bytes, Some(f)),
-        Err(e) => {
-            eprintln!("inkwell-core shallow PDF parser error ({e:?}), attempting PDFium normalisation fallback...");
-            match inkwell_pdf::init_pdfium() {
-                Ok(pdfium) => {
-                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes).unwrap_or_else(|_| bytes.clone());
-                    let f = PdfFile::open(norm_bytes.clone()).ok();
-                    (norm_bytes, f)
-                }
-                Err(_) => (bytes, None),
-            }
-        }
-    };
+    let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
 
-    let (n_pages, page_infos) = {
-        let pdfium_opt = inkwell_pdf::init_pdfium().ok();
-        let pdfium_doc_opt = pdfium_opt.as_ref().and_then(|p| p.load_pdf_from_byte_slice(&valid_bytes, None).ok());
-
-        let n = pdfium_doc_opt.as_ref()
-            .map(|d| d.pages().len() as usize)
-            .unwrap_or_else(|| _pdf_file.as_ref().map(|f| f.page_count()).unwrap_or(1));
-
-        let infos: Vec<PageInfo> = (0..n)
-            .map(|i| {
-                let (w, h) = pdfium_doc_opt.as_ref()
-                    .and_then(|d| d.pages().get(i as i32).ok())
-                    .map(|p| (p.width().value as f64, p.height().value as f64))
-                    .unwrap_or((595.0, 842.0));
-                PageInfo { page_index: i, width_pt: w, height_pt: h }
-            })
-            .collect();
-        (n, infos)
-    };
+    let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
+    let n_pages = page_infos.len();
 
     let doc = Document::for_pdf(n_pages);
-
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
@@ -81,9 +128,10 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
     let wp = wal_path_for(&path);
     match Wal::open(&wp) {
         Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
-        Err(e) => { eprintln!("WAL init failed ({wp:?}): {e}"); }
+        Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
+    eprintln!("[inkwell] Opened PDF: {:?} — {} pages", path, n_pages);
     Ok(page_infos)
 }
 
@@ -92,43 +140,12 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     let path = std::env::temp_dir().join(&name);
     let _ = std::fs::write(&path, &bytes);
 
-    let (valid_bytes, _pdf_file) = match PdfFile::open(bytes.clone()) {
-        Ok(f) => (bytes, Some(f)),
-        Err(e) => {
-            eprintln!("inkwell-core shallow PDF parser error ({e:?}), attempting PDFium normalisation fallback...");
-            match inkwell_pdf::init_pdfium() {
-                Ok(pdfium) => {
-                    let norm_bytes = inkwell_pdf::normalise(&pdfium, &bytes).unwrap_or_else(|_| bytes.clone());
-                    let f = PdfFile::open(norm_bytes.clone()).ok();
-                    (norm_bytes, f)
-                }
-                Err(_) => (bytes, None),
-            }
-        }
-    };
+    let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
 
-    let (n_pages, page_infos) = {
-        let pdfium_opt = inkwell_pdf::init_pdfium().ok();
-        let pdfium_doc_opt = pdfium_opt.as_ref().and_then(|p| p.load_pdf_from_byte_slice(&valid_bytes, None).ok());
-
-        let n = pdfium_doc_opt.as_ref()
-            .map(|d| d.pages().len() as usize)
-            .unwrap_or_else(|| _pdf_file.as_ref().map(|f| f.page_count()).unwrap_or(1));
-
-        let infos: Vec<PageInfo> = (0..n)
-            .map(|i| {
-                let (w, h) = pdfium_doc_opt.as_ref()
-                    .and_then(|d| d.pages().get(i as i32).ok())
-                    .map(|p| (p.width().value as f64, p.height().value as f64))
-                    .unwrap_or((595.0, 842.0));
-                PageInfo { page_index: i, width_pt: w, height_pt: h }
-            })
-            .collect();
-        (n, infos)
-    };
+    let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
+    let n_pages = page_infos.len();
 
     let doc = Document::for_pdf(n_pages);
-
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
@@ -136,9 +153,10 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     let wp = wal_path_for(&path);
     match Wal::open(&wp) {
         Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
-        Err(e) => { eprintln!("WAL init failed ({wp:?}): {e}"); }
+        Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
+    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages", name, n_pages);
     Ok(page_infos)
 }
 
@@ -159,14 +177,21 @@ pub fn render_tile(
         return Err(format!("Invalid tile rectangle: {rect:?}"));
     }
 
-    // Keep an owned copy alive for the PDFium document, but do not hold the
-    // application-state lock while a potentially expensive page render runs.
+    // Grab PDF bytes without holding the lock during rendering.
     let bytes = state.pdf_bytes.lock().unwrap()
         .as_ref()
         .cloned()
         .ok_or("No PDF loaded")?;
 
-    let pdfium = inkwell_pdf::init_pdfium().map_err(|e| format!("PDFium init error: {e:?}"))?;
+    // Use the cached PDFium instance — no per-tile DLL loading.
+    // We must hold the MutexGuard alive for the entire render because PdfDocument
+    // borrows from the Pdfium instance behind the guard.
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+        "PDFium is not available (pdfium.dll was not found at startup). \
+         PDF tiles cannot be rendered.".to_string()
+    })?;
+
     let doc = pdfium
         .load_pdf_from_byte_slice(&bytes, None)
         .map_err(|e| format!("PDFium load error: {e:?}"))?;
@@ -174,6 +199,10 @@ pub fn render_tile(
     let rasterizer = inkwell_pdf::PdfiumRasterizer::new(doc);
     let tile = inkwell_core::tiles::PageRasterizer::rasterize(&rasterizer, page, rect, px)
         .ok_or_else(|| format!("PDFium did not render page {page} for rect {rect:?} at {px}px"))?;
+
+    // Rasterization done — release the PDFium lock before validating output.
+    drop(rasterizer);
+    drop(pdfium_guard);
 
     let expected_len = px as usize * px as usize * 3;
     if tile.data.len() != expected_len {
@@ -257,11 +286,12 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
     let (norm_bytes, mut pdf_file) = match PdfFile::open(input_bytes.clone()) {
         Ok(f) => (input_bytes.clone(), f),
         Err(e) => {
-            eprintln!("base PDF requires normalisation for writing ({e:?})...");
-            let pdfium = inkwell_pdf::init_pdfium().map_err(|pdfium_err| {
-                format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation: {pdfium_err:?}")
+            eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
+            let pdfium_guard = state.pdfium.lock().unwrap();
+            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+                format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
             })?;
-            let nb = inkwell_pdf::normalise(&pdfium, input_bytes)
+            let nb = inkwell_pdf::normalise(pdfium, input_bytes)
                 .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
             let f = PdfFile::open(nb.clone())
                 .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
@@ -277,6 +307,8 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
         .map_err(|e| format!("Failed atomic save to {:?}: {e}", target_path))?;
 
     // Update in-memory state with normalised base bytes
+    drop(bytes_guard);
+    drop(doc_guard);
     *state.pdf_bytes.lock().unwrap() = Some(norm_bytes);
 
     if let Some(wal) = state.wal.lock().unwrap().as_mut() {

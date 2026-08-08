@@ -19,9 +19,25 @@ fn main() {
          --disable-background-timer-throttling",
     );
 
+    // Initialize PDFium once at startup and store in AppState.
+    // All commands that need PDFium will borrow this cached instance.
+    let app_state = AppState::default();
+    match inkwell_pdf::init_pdfium() {
+        Ok(pdfium) => {
+            eprintln!("[inkwell] PDFium initialized successfully at startup.");
+            *app_state.pdfium.lock().unwrap() = Some(pdfium);
+        }
+        Err(e) => {
+            eprintln!(
+                "[inkwell] WARNING: PDFium failed to initialize at startup: {e:?}\n\
+                 PDF rendering will not work. Ensure pdfium.dll is next to the executable."
+            );
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::open_pdf,
             commands::open_pdf_bytes,

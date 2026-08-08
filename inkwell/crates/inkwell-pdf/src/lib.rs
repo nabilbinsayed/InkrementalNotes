@@ -6,7 +6,9 @@ pub use normalise::normalise;
 pub use rasterizer::PdfiumRasterizer;
 pub use text::extract_text;
 
-use pdfium_render::prelude::*;
+// Re-export core PDFium types so dependents don't need a direct pdfium_render dependency.
+pub use pdfium_render::prelude::{Pdfium, PdfiumError};
+
 
 /// Initialize PDFium binding by checking absolute paths at executable directory, CWD, parent paths, or system library.
 pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {

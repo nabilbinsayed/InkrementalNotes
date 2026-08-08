@@ -29,10 +29,12 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let page_w = p.width().value as f64;
         let page_h = p.height().value as f64;
         
-        let scale_x = (px as f64) / rw;
-        let scale_y = (px as f64) / rh;
-        let target_w = (page_w * scale_x).ceil().max(1.0) as i32;
-        let target_h = (page_h * scale_y).ceil().max(1.0) as i32;
+        let scale = (px as f64) / rw.max(rh);
+        let out_w = (rw * scale).round().max(1.0) as u32;
+        let out_h = (rh * scale).round().max(1.0) as u32;
+        
+        let target_w = (page_w * scale).round().max(1.0) as i32;
+        let target_h = (page_h * scale).round().max(1.0) as i32;
         
         let config = PdfRenderConfig::new()
             .set_target_width(target_w)
@@ -47,26 +49,26 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let bitmap_w = bitmap.width() as u32;
         let bitmap_h = bitmap.height() as u32;
         
-        let x0 = (rect[0] * scale_x).round().max(0.0) as u32;
-        let y0 = (rect[1] * scale_y).round().max(0.0) as u32;
+        let x0 = (rect[0] * scale).round().max(0.0) as u32;
+        let y0 = (rect[1] * scale).round().max(0.0) as u32;
         
-        let mut rgb_data = vec![255; (px * px * 3) as usize];
+        let mut rgb_data = vec![255; (out_w * out_h * 3) as usize];
         
         if x0 >= bitmap_w || y0 >= bitmap_h {
             return Some(Tile {
-                w: px,
-                h: px,
+                w: out_w,
+                h: out_h,
                 data: rgb_data,
             });
         }
         
-        let crop_w = px.min(bitmap_w.saturating_sub(x0));
-        let crop_h = px.min(bitmap_h.saturating_sub(y0));
+        let crop_w = out_w.min(bitmap_w.saturating_sub(x0));
+        let crop_h = out_h.min(bitmap_h.saturating_sub(y0));
         
         for y in 0..crop_h {
             for x in 0..crop_w {
                 let src_idx = ((y0 + y) * bitmap_w + (x0 + x)) as usize * 4;
-                let dst_idx = (y * px + x) as usize * 3;
+                let dst_idx = (y * out_w + x) as usize * 3;
                 
                 if src_idx + 3 < bgra_bytes.len() {
                     let b = bgra_bytes[src_idx];
@@ -87,8 +89,8 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         }
         
         Some(Tile {
-            w: px,
-            h: px,
+            w: out_w,
+            h: out_h,
             data: rgb_data,
         })
     }
