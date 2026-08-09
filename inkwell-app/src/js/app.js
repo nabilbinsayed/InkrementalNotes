@@ -229,9 +229,9 @@ function drawPageBackground(pane = 'left') {
 
   tctx.shadowBlur = 0;
   tctx.shadowOffsetY = 0;
-  // Red page border matching Xournal++
-  tctx.strokeStyle = '#ef4444';
-  tctx.lineWidth = 1.5;
+  // Subtle dark page border
+  tctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+  tctx.lineWidth = 1;
   tctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
   tctx.restore();
 }
@@ -1222,10 +1222,15 @@ function toggleSplitView() {
     state.rightSheet = Math.min(state.leftSheet + 1, state.pageInfos.length - 1);
   }
   $('stage').classList.toggle('split-view', isSplit);
-  centerPageInPanes();
   $('btnSplit') && $('btnSplit').classList.toggle('active', isSplit);
-  scheduleRedrawTiles();
-  redrawAll();
+  requestAnimationFrame(() => {
+    resize();
+    viewport.updateStageRect();
+    const pi = state.pageInfos[state.leftSheet];
+    if (pi) centerPageInPanes(pi);
+    scheduleRedrawTiles();
+    redrawAll();
+  });
 }
 
 function toggleSidebar() {
@@ -1233,12 +1238,14 @@ function toggleSidebar() {
   if (!sidebar) return;
   const collapsed = sidebar.classList.toggle('collapsed');
   $('btnToggleSidebar') && $('btnToggleSidebar').classList.toggle('active', !collapsed);
-  resize();
-  viewport.updateStageRect();
-  const pi = state.pageInfos[state.leftSheet];
-  if (pi) recenterPanesOnly(pi);
-  scheduleRedrawTiles();
-  redrawAll();
+  requestAnimationFrame(() => {
+    resize();
+    viewport.updateStageRect();
+    const pi = state.pageInfos[state.leftSheet];
+    if (pi) centerPageInPanes(pi);
+    scheduleRedrawTiles();
+    redrawAll();
+  });
 }
 
 function toggleFullscreen() {
