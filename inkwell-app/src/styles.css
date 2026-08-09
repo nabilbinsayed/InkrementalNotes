@@ -72,13 +72,17 @@ canvas {
   transform: translateX(-50%);
   z-index: 10;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 4px;
+  row-gap: 4px;
+  max-width: calc(100% - 24px);
   background: var(--bg-panel);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 6px 16px;
+  border-radius: 20px;
+  padding: 5px 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   transition: opacity 0.2s ease;
 }
@@ -91,19 +95,25 @@ canvas {
   background: transparent;
   border: none;
   color: var(--text-main);
-  padding: 8px 14px;
-  border-radius: 16px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
   cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  line-height: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  transition: background 0.15s ease;
+  justify-content: center;
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
 .tool-btn:hover {
   background: rgba(255, 255, 255, 0.08);
+}
+
+.tool-btn:active {
+  transform: scale(0.94);
 }
 
 .tool-btn.active {
@@ -112,8 +122,33 @@ canvas {
 
 .divider {
   width: 1px;
-  height: 20px;
+  height: 16px;
   background: var(--border);
+  margin: 0 2px;
+}
+
+/* Floating zoom control (bottom-right) */
+#zoomControl {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+#zoomControl .tool-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 13px;
+  border-radius: 8px;
 }
 
 /* Sidebar panel */
@@ -128,6 +163,10 @@ canvas {
   flex-direction: column;
   padding: 16px;
   gap: 16px;
+}
+
+#sidebar.collapsed {
+  display: none !important;
 }
 
 .sidebar-header {
@@ -149,25 +188,6 @@ canvas {
 .icon-btn:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-main);
-}
-
-.floating-expand-btn {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 15;
-  background: var(--bg-panel);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-  color: var(--text-main);
-  padding: 8px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-  transition: background 0.15s;
-}
-.floating-expand-btn:hover {
-  background: var(--accent);
 }
 
 h2 {

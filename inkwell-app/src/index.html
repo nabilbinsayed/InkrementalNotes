@@ -27,6 +27,7 @@
       <input type="color" id="colorPicker" value="#141724" title="Ink colour" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
       <div class="divider"></div>
       <button id="btnSplit" class="tool-btn" title="Toggle Split View">◫</button>
+      <div class="divider"></div>
       <button id="btnToggleSidebar" class="tool-btn active" title="Toggle Sidebar Panel (Ctrl+B)">📑</button>
       <button id="btnCmdPalette" class="tool-btn" title="Command Palette (Ctrl+Shift+P)">🔍</button>
       <div class="divider"></div>
@@ -74,10 +75,17 @@
       <button id="btnAddPage" class="nav-btn" title="Insert Blank Page">+</button>
     </div>
 
+    <!-- Floating zoom control (bottom-right) -->
+    <div id="zoomControl">
+      <button id="btnZoomOut" class="tool-btn" title="Zoom Out (-)">🔍-</button>
+      <span id="zoomLevelDisplay" style="font-size:12px; color:var(--text-muted); min-width:40px; text-align:center; user-select:none;">100%</span>
+      <button id="btnZoomIn" class="tool-btn" title="Zoom In (+)">🔍+</button>
+      <button id="btnZoomFit" class="tool-btn" title="Fit Page (⤢)">⤢</button>
+    </div>
+
     <canvas id="tiles"></canvas>
     <canvas id="dry"></canvas>
     <canvas id="wet"></canvas>
-    <button id="btnExpandSidebar" class="floating-expand-btn hidden" title="Expand Right Panel (Ctrl+B)">📑</button>
   </div>
 
   <aside id="sidebar">

@@ -220,6 +220,10 @@ function drawSplitDivider() {
 
 function drawZoomIndicator() {
   if (!viewport) return;
+  const activeZoom = viewport.splitMode && viewport.activePane === 'right' ? viewport.rightZoom : viewport.zoom;
+  if ($('zoomLevelDisplay')) {
+    $('zoomLevelDisplay').textContent = Math.round(activeZoom * 100) + '%';
+  }
   const panes = visiblePanes();
   tctx.save();
   tctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1008,7 +1012,6 @@ function toggleSidebar() {
   if (!sidebar) return;
   const collapsed = sidebar.classList.toggle('collapsed');
   $('btnToggleSidebar') && $('btnToggleSidebar').classList.toggle('active', !collapsed);
-  $('btnExpandSidebar') && $('btnExpandSidebar').classList.toggle('hidden', !collapsed);
   resize();
 }
 
@@ -1107,9 +1110,29 @@ function bindUI() {
   $('btnRedo').addEventListener('click', redo);
 
   $('btnSplit') && $('btnSplit').addEventListener('click', toggleSplitView);
+
+  $('btnZoomIn') && $('btnZoomIn').addEventListener('click', () => {
+    const pane = viewport.activePane || 'left';
+    const curZoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+    const center = [tilesCanvas.width / (2 * state.dpr), tilesCanvas.height / (2 * state.dpr)];
+    viewport.setZoom(curZoom * 1.25, center, pane);
+  });
+
+  $('btnZoomOut') && $('btnZoomOut').addEventListener('click', () => {
+    const pane = viewport.activePane || 'left';
+    const curZoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+    const center = [tilesCanvas.width / (2 * state.dpr), tilesCanvas.height / (2 * state.dpr)];
+    viewport.setZoom(curZoom / 1.25, center, pane);
+  });
+
+  $('btnZoomFit') && $('btnZoomFit').addEventListener('click', () => {
+    centerPageInPanes();
+    scheduleRedrawTiles();
+    redrawAll();
+  });
+
   $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', toggleSidebar);
   $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
-  $('btnExpandSidebar') && $('btnExpandSidebar').addEventListener('click', toggleSidebar);
   $('btnCmdPalette') && $('btnCmdPalette').addEventListener('click', openCommandPalette);
   $('btnAddPage') && $('btnAddPage').addEventListener('click', insertBlankPage);
   $('btnInsertBlank') && $('btnInsertBlank').addEventListener('click', insertBlankPage);
