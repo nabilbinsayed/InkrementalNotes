@@ -74,6 +74,34 @@ class ViewportManager {
     if (this.onChange) this.onChange();
   }
 
+  centerDocument(pageWidthPt, pageHeightPt, pane = 'left') {
+    if (!pageWidthPt || !pageHeightPt) return;
+    if (!this.stageRect) this.updateStageRect();
+    const isRight = pane === 'right' && this.splitMode;
+    const z = isRight ? this.rightZoom : this.zoom;
+    const stageW = this.splitMode ? (this.stageRect ? this.stageRect.width / 2 : 400) : (this.stageRect ? this.stageRect.width : 800);
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+
+    const targetPanX = Math.round((stageW - pageWidthPt * z) / 2);
+    const targetPanY = Math.max(20, Math.round((stageH - pageHeightPt * z) / 2));
+    this.setPan(targetPanX, targetPanY, pane);
+  }
+
+  fitPage(pageWidthPt, pageHeightPt, pane = 'left') {
+    if (!pageWidthPt || !pageHeightPt) return;
+    if (!this.stageRect) this.updateStageRect();
+    const stageW = this.splitMode ? (this.stageRect ? this.stageRect.width / 2 : 400) : (this.stageRect ? this.stageRect.width : 800);
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+
+    const margin = 40;
+    const availW = Math.max(100, stageW - margin);
+    const availH = Math.max(100, stageH - margin);
+
+    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / pageWidthPt, availH / pageHeightPt)));
+    this.setZoom(fitZoom, null, pane);
+    this.centerDocument(pageWidthPt, pageHeightPt, pane);
+  }
+
   screenToWorld(sx, sy, pane = 'left') {
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;

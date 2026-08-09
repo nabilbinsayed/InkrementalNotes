@@ -79,6 +79,13 @@ canvas {
 #wet.tool-laser {
   cursor: pointer;
 }
+#wet.tool-pan {
+  cursor: grab;
+}
+#wet.tool-pan.panning,
+#wet.space-pan {
+  cursor: grabbing !important;
+}
 
 /* Toolbar overlay */
 #toolbar {
@@ -95,16 +102,20 @@ canvas {
   row-gap: 4px;
   max-width: calc(100% - 24px);
   background: var(--bg-panel);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 20px;
   padding: 5px 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  transition: opacity 0.2s ease;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
 #toolbar.pen-down {
   opacity: 0.25;
+}
+
+#toolbar:hover {
+  opacity: 1 !important;
 }
 
 .tool-btn {
@@ -132,7 +143,8 @@ button:focus-visible, .tool-btn:focus-visible, .nav-btn:focus-visible, .swatch:f
 }
 
 .tool-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
 }
 
 .tool-btn:active {
@@ -141,6 +153,7 @@ button:focus-visible, .tool-btn:focus-visible, .nav-btn:focus-visible, .swatch:f
 
 .tool-btn.active {
   background: var(--accent);
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.4);
 }
 
 .divider {
@@ -161,10 +174,19 @@ button:focus-visible, .tool-btn:focus-visible, .nav-btn:focus-visible, .swatch:f
   gap: 4px;
   padding: 4px;
   background: var(--bg-panel);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  transition: opacity 0.25s ease;
+}
+
+#zoomControl.pen-down {
+  opacity: 0.25;
+}
+
+#zoomControl:hover {
+  opacity: 1 !important;
 }
 
 #zoomControl .tool-btn {

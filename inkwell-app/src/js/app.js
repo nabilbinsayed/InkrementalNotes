@@ -498,7 +498,21 @@ function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
   return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
 }
 
-// ---- Page navigation ----
+// ---- Page navigation & pre-fetching ----
+function prefetchAdjacentPages() {
+  if (!state.pageInfos.length) return;
+  const curr = state.leftSheet;
+  const total = state.pageInfos.length;
+  const adjacentSheets = [curr - 1, curr + 1].filter(s => s >= 0 && s < total);
+
+  for (const sheetIdx of adjacentSheets) {
+    const pi = state.pageInfos[sheetIdx];
+    if (!pi) continue;
+    const tr = [0, 0, pi.width_pt, pi.height_pt];
+    fetchTile(sheetIdx, tr, 512).catch(() => {});
+  }
+}
+
 function goToPage(i, pane = 'left') {
   if (i < 0 || i >= state.pageInfos.length) return;
   if (pane === 'right' && viewport.splitMode) {
@@ -507,29 +521,42 @@ function goToPage(i, pane = 'left') {
     state.leftSheet = i;
   }
   const pi = state.pageInfos[i];
-  centerPageInPanes(pi);
+  recenterPanesOnly(pi);
   updatePageUI();
   scheduleRedrawTiles();
   redrawAll();
+  prefetchAdjacentPages();
 }
 
-function centerPageInPanes(pi = state.pageInfos[state.currentSheet]) {
+function fitPageInPanes(pi = state.pageInfos[state.leftSheet]) {
   if (!pi) return;
   const left = paneBounds('left');
   const piLeft = state.pageInfos[state.leftSheet] || pi;
-  const zoomLeft = Math.min(left.width / piLeft.width_pt, left.height / piLeft.height_pt) * 0.9;
-  viewport.zoom = Math.max(0.2, Math.min(16.0, zoomLeft));
-  viewport.panX = left.x + (left.width - piLeft.width_pt * viewport.zoom) / 2;
-  viewport.panY = left.y + (left.height - piLeft.height_pt * viewport.zoom) / 2;
+  viewport.fitPage(piLeft.width_pt, piLeft.height_pt, 'left');
+
+  if (viewport.splitMode) {
+    const piRight = state.pageInfos[state.rightSheet] || pi;
+    viewport.fitPage(piRight.width_pt, piRight.height_pt, 'right');
+  }
+}
+
+function recenterPanesOnly(pi = state.pageInfos[state.leftSheet]) {
+  if (!pi) return;
+  const left = paneBounds('left');
+  const piLeft = state.pageInfos[state.leftSheet] || pi;
+  viewport.panX = Math.round(left.x + (left.width - piLeft.width_pt * viewport.zoom) / 2);
+  viewport.panY = Math.max(20, Math.round(left.y + (left.height - piLeft.height_pt * viewport.zoom) / 2));
 
   if (viewport.splitMode) {
     const right = paneBounds('right');
     const piRight = state.pageInfos[state.rightSheet] || pi;
-    const zoomRight = Math.min(right.width / piRight.width_pt, right.height / piRight.height_pt) * 0.9;
-    viewport.rightZoom = Math.max(0.2, Math.min(16.0, zoomRight));
-    viewport.rightPanX = right.x + (right.width - piRight.width_pt * viewport.rightZoom) / 2;
-    viewport.rightPanY = right.y + (right.height - piRight.height_pt * viewport.rightZoom) / 2;
+    viewport.rightPanX = Math.round(right.x + (right.width - piRight.width_pt * viewport.rightZoom) / 2);
+    viewport.rightPanY = Math.max(20, Math.round(right.y + (right.height - piRight.height_pt * viewport.rightZoom) / 2));
   }
+}
+
+function centerPageInPanes(pi = state.pageInfos[state.leftSheet]) {
+  fitPageInPanes(pi);
 }
 
 function updatePageUI() {
@@ -812,13 +839,24 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
 }
 
 // ---- Pointer handlers ----
+// ---- Pointer handlers ----
 function onDown(e) {
   if (e.button !== 0 && e.pointerType !== 'pen') return;
   try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
-  $('toolbar').classList.add('pen-down');
+  $('toolbar') && $('toolbar').classList.add('pen-down');
+  $('pageNav') && $('pageNav').classList.add('pen-down');
+  $('zoomControl') && $('zoomControl').classList.add('pen-down');
 
   state.drawingPane = paneForEvent(e);
   viewport.activePane = state.drawingPane;
+
+  if (state.spacePanActive || state.activeTool === 'pan') {
+    viewport.isPanning = true;
+    viewport.lastPanPt = [e.clientX, e.clientY];
+    if (wetCanvas) wetCanvas.classList.add('panning');
+    return;
+  }
+
   const [wx, wy] = localXY(e, state.drawingPane);
 
   if (state.activeTool === 'laser') {
@@ -873,6 +911,19 @@ function onDown(e) {
 }
 
 function onMove(e) {
+  if (viewport.isPanning) {
+    const dx = e.clientX - viewport.lastPanPt[0];
+    const dy = e.clientY - viewport.lastPanPt[1];
+    viewport.lastPanPt = [e.clientX, e.clientY];
+    const pane = state.drawingPane || paneForEvent(e);
+    const curPanX = pane === 'right' ? viewport.rightPanX : viewport.panX;
+    const curPanY = pane === 'right' ? viewport.rightPanY : viewport.panY;
+    viewport.setPan(curPanX + dx, curPanY + dy, pane);
+    scheduleRedrawTiles();
+    redrawAll();
+    return;
+  }
+
   const [wx, wy] = localXY(e, state.drawingPane);
 
   if (state.activeTool === 'laser') {
@@ -899,14 +950,12 @@ function onMove(e) {
        state.activeTool === 'ellipse') && state.shapeStart) {
     let ex = wx, ey = wy;
     if (e.shiftKey && state.activeTool === 'ruler') {
-      // snap to 45° increments
       const dx = wx - state.shapeStart[0], dy = wy - state.shapeStart[1];
       const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       const len = Math.hypot(dx, dy);
       ex = state.shapeStart[0] + Math.cos(angle) * len;
       ey = state.shapeStart[1] + Math.sin(angle) * len;
     } else if (e.shiftKey) {
-      // square / circle constraint
       const dx = Math.abs(wx - state.shapeStart[0]);
       const dy = Math.abs(wy - state.shapeStart[1]);
       const s = Math.max(dx, dy);
@@ -916,7 +965,6 @@ function onMove(e) {
     state.shapeEnd = [ex, ey];
     clearWet();
     if (state.shapeKind === 'line') {
-      // Reuse ruler overlay draw logic inline
       const [sx0, sy0] = viewport.worldToScreen(state.shapeStart[0], state.shapeStart[1], state.drawingPane);
       const [sx1, sy1] = viewport.worldToScreen(ex, ey, state.drawingPane);
       wctx.save();
@@ -946,7 +994,16 @@ function onMove(e) {
 }
 
 async function onUp(e) {
-  $('toolbar').classList.remove('pen-down');
+  $('toolbar') && $('toolbar').classList.remove('pen-down');
+  $('pageNav') && $('pageNav').classList.remove('pen-down');
+  $('zoomControl') && $('zoomControl').classList.remove('pen-down');
+
+  if (viewport.isPanning) {
+    viewport.isPanning = false;
+    if (wetCanvas) wetCanvas.classList.remove('panning');
+    try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    return;
+  }
 
   if (state.activeTool === 'laser') {
     clearLaser();
@@ -1070,11 +1127,8 @@ function updateStats(pointerType) {
     <div>Pointer: ${pointerType || 'pen'}</div>
     <div>Samples: ${state.samplesCount}</div>
     <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
-  `;
-}
-
-// ---- Tool selection ----
-const TOOL_BTNS = ['btnPen', 'btnHighlighter', 'btnEraser', 'btnLasso',
+  `;// ---- Tool selection ----
+const TOOL_BTNS = ['btnPen', 'btnHighlighter', 'btnEraser', 'btnPan', 'btnLasso',
                    'btnRuler', 'btnRect', 'btnEllipse', 'btnLaser'];
 function setTool(tool) {
   if (state.activeTool === 'laser' && tool !== 'laser') {
@@ -1083,7 +1137,7 @@ function setTool(tool) {
   state.activeTool = tool;
   TOOL_BTNS.forEach(id => $(id) && $(id).classList.remove('active'));
   const toolBtnMap = {
-    pen: 'btnPen', highlighter: 'btnHighlighter', eraser: 'btnEraser',
+    pen: 'btnPen', highlighter: 'btnHighlighter', eraser: 'btnEraser', pan: 'btnPan',
     lasso: 'btnLasso', ruler: 'btnRuler', rect: 'btnRect',
     ellipse: 'btnEllipse', laser: 'btnLaser',
   };
@@ -1116,7 +1170,7 @@ function redo() {
     state.undoStack.push(op);
   } else if (op.type === 'erase') {
     for (const s of op.strokes) s.deleted = true;
-    state.undoStack.push(op);
+    state.redoStack.push(op);
   }
   redrawAll();
 }
@@ -1177,7 +1231,62 @@ function toggleSidebar() {
   const collapsed = sidebar.classList.toggle('collapsed');
   $('btnToggleSidebar') && $('btnToggleSidebar').classList.toggle('active', !collapsed);
   resize();
+  viewport.updateStageRect();
+  const pi = state.pageInfos[state.leftSheet];
+  if (pi) recenterPanesOnly(pi);
+  scheduleRedrawTiles();
+  redrawAll();
 }
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+document.addEventListener('fullscreenchange', () => {
+  const isFS = !!document.fullscreenElement;
+  $('btnFullscreen') && $('btnFullscreen').classList.toggle('active', isFS);
+  resize();
+  viewport.updateStageRect();
+  const pi = state.pageInfos[state.leftSheet];
+  if (pi) recenterPanesOnly(pi);
+  scheduleRedrawTiles();
+  redrawAll();
+});
+
+// Spacebar Spring Panning
+let spaceKeyDown = false;
+let previousToolBeforeSpace = null;
+
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !spaceKeyDown) {
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+      return;
+    }
+    e.preventDefault();
+    spaceKeyDown = true;
+    previousToolBeforeSpace = state.activeTool;
+    state.spacePanActive = true;
+    if (wetCanvas) wetCanvas.classList.add('space-pan');
+  }
+});
+
+window.addEventListener('keyup', e => {
+  if (e.code === 'Space' && spaceKeyDown) {
+    e.preventDefault();
+    spaceKeyDown = false;
+    state.spacePanActive = false;
+    if (wetCanvas) wetCanvas.classList.remove('space-pan');
+    if (previousToolBeforeSpace) {
+      setTool(previousToolBeforeSpace);
+      previousToolBeforeSpace = null;
+    }
+  }
+});
 
 // ---- Command Palette ----
 const COMMANDS = [
@@ -1186,9 +1295,11 @@ const COMMANDS = [
   { id: 'insert_blank', title: 'Insert Blank Page', category: 'Document', shortcut: '', action: () => insertBlankPage() },
   { id: 'toggle_split', title: 'Toggle Split View (Dual Pane)', category: 'View', shortcut: '', action: () => toggleSplitView() },
   { id: 'toggle_sidebar', title: 'Toggle Right Sidebar Panel', category: 'View', shortcut: 'Ctrl+B', action: () => toggleSidebar() },
+  { id: 'toggle_fullscreen', title: 'Toggle Fullscreen Mode', category: 'View', shortcut: 'F11', action: () => toggleFullscreen() },
   { id: 'tool_pen', title: 'Switch Tool: Pen', category: 'Tools', shortcut: 'P', action: () => setTool('pen') },
   { id: 'tool_highlighter', title: 'Switch Tool: Highlighter', category: 'Tools', shortcut: 'H', action: () => setTool('highlighter') },
   { id: 'tool_eraser', title: 'Switch Tool: Eraser', category: 'Tools', shortcut: 'E', action: () => setTool('eraser') },
+  { id: 'tool_pan', title: 'Switch Tool: Pan / Hand', category: 'Tools', shortcut: 'Hold Space', action: () => setTool('pan') },
   { id: 'tool_lasso', title: 'Switch Tool: Lasso Erase', category: 'Tools', shortcut: 'V', action: () => setTool('lasso') },
   { id: 'tool_ruler', title: 'Switch Tool: Ruler Line', category: 'Tools', shortcut: 'R', action: () => setTool('ruler') },
   { id: 'tool_rect', title: 'Switch Tool: Rectangle', category: 'Tools', shortcut: 'Q', action: () => setTool('rect') },
@@ -1259,6 +1370,7 @@ function bindUI() {
   $('btnPen').addEventListener('click', () => setTool('pen'));
   $('btnHighlighter').addEventListener('click', () => setTool('highlighter'));
   $('btnEraser').addEventListener('click', () => setTool('eraser'));
+  $('btnPan') && $('btnPan').addEventListener('click', () => setTool('pan'));
   $('btnLasso') && $('btnLasso').addEventListener('click', () => setTool('lasso'));
   $('btnRuler') && $('btnRuler').addEventListener('click', () => setTool('ruler'));
   $('btnRect') && $('btnRect').addEventListener('click', () => setTool('rect'));
@@ -1290,10 +1402,16 @@ function bindUI() {
   });
 
   $('btnZoomFit') && $('btnZoomFit').addEventListener('click', () => {
-    centerPageInPanes();
-    scheduleRedrawTiles();
-    redrawAll();
+    const pi = state.pageInfos[state.leftSheet];
+    if (pi) {
+      fitPageInPanes(pi);
+      scheduleRedrawTiles();
+      redrawAll();
+    }
   });
+
+  $('btnFullscreen') && $('btnFullscreen').addEventListener('click', toggleFullscreen);
+
 
   $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', toggleSidebar);
   $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
