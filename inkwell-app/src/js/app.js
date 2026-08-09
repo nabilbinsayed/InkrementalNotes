@@ -1127,7 +1127,10 @@ function updateStats(pointerType) {
     <div>Pointer: ${pointerType || 'pen'}</div>
     <div>Samples: ${state.samplesCount}</div>
     <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
-  `;// ---- Tool selection ----
+  `;
+}
+
+// ---- Tool selection ----
 const TOOL_BTNS = ['btnPen', 'btnHighlighter', 'btnEraser', 'btnPan', 'btnLasso',
                    'btnRuler', 'btnRect', 'btnEllipse', 'btnLaser'];
 function setTool(tool) {
