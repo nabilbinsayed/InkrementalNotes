@@ -12,27 +12,27 @@
 <div id="app-container">
   <div id="stage">
     <div id="toolbar">
-      <button id="btnPen" class="tool-btn active" title="Pen (P)">🖊️</button>
-      <button id="btnHighlighter" class="tool-btn" title="Highlighter (H)">🖍️</button>
-      <button id="btnEraser" class="tool-btn" title="Eraser — hold E for spring-load (E)">🧹</button>
+      <button id="btnPen" class="tool-btn active" title="Pen (P)" aria-label="Pen tool (P)">🖊️</button>
+      <button id="btnHighlighter" class="tool-btn" title="Highlighter (H)" aria-label="Highlighter tool (H)">🖍️</button>
+      <button id="btnEraser" class="tool-btn" title="Eraser — hold E for spring-load (E)" aria-label="Eraser tool (E)">🧹</button>
       <div class="divider"></div>
-      <button id="btnLasso" class="tool-btn" title="Lasso erase (V)">⬚</button>
-      <button id="btnRuler" class="tool-btn" title="Line — Shift to snap 45° (R)">📐</button>
-      <button id="btnRect" class="tool-btn" title="Rectangle — Shift for square (Q)">▭</button>
-      <button id="btnEllipse" class="tool-btn" title="Ellipse — Shift for circle (O)">◯</button>
+      <button id="btnLasso" class="tool-btn" title="Lasso erase (V)" aria-label="Lasso tool (V)">⬚</button>
+      <button id="btnRuler" class="tool-btn" title="Line — Shift to snap 45° (R)" aria-label="Ruler line tool (R)">📐</button>
+      <button id="btnRect" class="tool-btn" title="Rectangle — Shift for square (Q)" aria-label="Rectangle tool (Q)">▭</button>
+      <button id="btnEllipse" class="tool-btn" title="Ellipse — Shift for circle (O)" aria-label="Ellipse tool (O)">◯</button>
       <div class="divider"></div>
-      <button id="btnLaser" class="tool-btn" title="Laser pointer — hold L (L)">🔴</button>
+      <button id="btnLaser" class="tool-btn" title="Laser pointer — hold L (L)" aria-label="Laser pointer tool (L)">🔴</button>
       <div class="divider"></div>
-      <button id="btnProp" class="tool-btn" title="Tool Properties">⚙️</button>
-      <input type="color" id="colorPicker" value="#141724" title="Ink colour" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
+      <button id="btnProp" class="tool-btn" title="Tool Properties" aria-label="Tool properties">⚙️</button>
+      <input type="color" id="colorPicker" value="#141724" title="Ink colour" aria-label="Ink colour picker" style="border:none; background:none; cursor:pointer; width:24px; height:24px;">
       <div class="divider"></div>
-      <button id="btnSplit" class="tool-btn" title="Toggle Split View">◫</button>
+      <button id="btnSplit" class="tool-btn" title="Toggle Split View" aria-label="Toggle split view">◫</button>
       <div class="divider"></div>
-      <button id="btnToggleSidebar" class="tool-btn active" title="Toggle Sidebar Panel (Ctrl+B)">📑</button>
-      <button id="btnCmdPalette" class="tool-btn" title="Command Palette (Ctrl+Shift+P)">🔍</button>
+      <button id="btnToggleSidebar" class="tool-btn active" title="Toggle Sidebar Panel (Ctrl+B)" aria-label="Toggle sidebar panel (Ctrl+B)">📑</button>
+      <button id="btnCmdPalette" class="tool-btn" title="Command Palette (Ctrl+Shift+P)" aria-label="Command palette (Ctrl+Shift+P)">🔍</button>
       <div class="divider"></div>
-      <button id="btnUndo" class="tool-btn" title="Undo (Ctrl+Z)">↩️</button>
-      <button id="btnRedo" class="tool-btn" title="Redo (Ctrl+Y)">↪️</button>
+      <button id="btnUndo" class="tool-btn" title="Undo (Ctrl+Z)" aria-label="Undo (Ctrl+Z)">↩️</button>
+      <button id="btnRedo" class="tool-btn" title="Redo (Ctrl+Y)" aria-label="Redo (Ctrl+Y)">↪️</button>
     </div>
 
     <!-- Out-of-bounds Ink Warning Banner -->
@@ -42,18 +42,18 @@
     <div id="propPopover" class="popover hidden">
       <div class="popover-title">Tool Properties</div>
       <div class="popover-row">
-        <label>Stroke Width</label>
-        <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6">
+        <label for="widthSlider">Stroke Width</label>
+        <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6" aria-label="Stroke width slider">
         <span id="widthVal">1.6 pt</span>
       </div>
       <div class="popover-row">
         <label>Presets</label>
         <div class="color-swatches">
-          <button class="swatch" data-color="#141724" style="background:#141724"></button>
-          <button class="swatch" data-color="#dc2626" style="background:#dc2626"></button>
-          <button class="swatch" data-color="#2563eb" style="background:#2563eb"></button>
-          <button class="swatch" data-color="#16a34a" style="background:#16a34a"></button>
-          <button class="swatch" data-color="#ca8a04" style="background:#ca8a04"></button>
+          <button class="swatch active" data-color="#141724" style="background:#141724" aria-label="Color black"></button>
+          <button class="swatch" data-color="#dc2626" style="background:#dc2626" aria-label="Color red"></button>
+          <button class="swatch" data-color="#2563eb" style="background:#2563eb" aria-label="Color blue"></button>
+          <button class="swatch" data-color="#16a34a" style="background:#16a34a" aria-label="Color green"></button>
+          <button class="swatch" data-color="#ca8a04" style="background:#ca8a04" aria-label="Color yellow"></button>
         </div>
       </div>
     </div>
@@ -61,26 +61,26 @@
     <!-- Page navigation bar at bottom -->
     <div id="pageNav">
       <span id="leftNavLabel" class="nav-label hidden">L:</span>
-      <button id="btnPrev" class="nav-btn" disabled>‹</button>
+      <button id="btnPrev" class="nav-btn" disabled aria-label="Previous page">‹</button>
       <span id="pageNum">—</span>
-      <button id="btnNext" class="nav-btn" disabled>›</button>
+      <button id="btnNext" class="nav-btn" disabled aria-label="Next page">›</button>
 
       <div id="splitPageNav" class="split-nav hidden">
         <span class="nav-label">R:</span>
-        <button id="btnRightPrev" class="nav-btn">‹</button>
+        <button id="btnRightPrev" class="nav-btn" aria-label="Previous page (right pane)">‹</button>
         <span id="rightPageNum">—</span>
-        <button id="btnRightNext" class="nav-btn">›</button>
+        <button id="btnRightNext" class="nav-btn" aria-label="Next page (right pane)">›</button>
       </div>
 
-      <button id="btnAddPage" class="nav-btn" title="Insert Blank Page">+</button>
+      <button id="btnAddPage" class="nav-btn" title="Insert Blank Page" aria-label="Insert blank page">+</button>
     </div>
 
     <!-- Floating zoom control (bottom-right) -->
     <div id="zoomControl">
-      <button id="btnZoomOut" class="tool-btn" title="Zoom Out (-)">🔍-</button>
+      <button id="btnZoomOut" class="tool-btn" title="Zoom Out (-)" aria-label="Zoom out (-)">🔍-</button>
       <span id="zoomLevelDisplay" style="font-size:12px; color:var(--text-muted); min-width:40px; text-align:center; user-select:none;">100%</span>
-      <button id="btnZoomIn" class="tool-btn" title="Zoom In (+)">🔍+</button>
-      <button id="btnZoomFit" class="tool-btn" title="Fit Page (⤢)">⤢</button>
+      <button id="btnZoomIn" class="tool-btn" title="Zoom In (+)" aria-label="Zoom in (+)">🔍+</button>
+      <button id="btnZoomFit" class="tool-btn" title="Fit Page (⤢)" aria-label="Fit page">⤢</button>
     </div>
 
     <canvas id="tiles"></canvas>
@@ -91,14 +91,14 @@
   <aside id="sidebar">
     <div class="sidebar-header">
       <h2>Inkwell</h2>
-      <button id="btnCollapseSidebar" class="icon-btn" title="Collapse Panel (Ctrl+B)">▶</button>
+      <button id="btnCollapseSidebar" class="icon-btn" title="Collapse Panel (Ctrl+B)" aria-label="Collapse sidebar panel">▶</button>
     </div>
 
     <div class="section">
       <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" style="display:none;">
-      <button id="btnOpen" class="btn">📂 Open PDF</button>
-      <button id="btnSave" class="btn btn-secondary">💾 Save (Ctrl+S)</button>
-      <button id="btnInsertBlank" class="btn btn-secondary">📄 Insert Blank Page</button>
+      <button id="btnOpen" class="btn" aria-label="Open PDF file">📂 Open PDF</button>
+      <button id="btnSave" class="btn btn-secondary" aria-label="Save PDF file">💾 Save (Ctrl+S)</button>
+      <button id="btnInsertBlank" class="btn btn-secondary" aria-label="Insert blank page">📄 Insert Blank Page</button>
     </div>
 
     <div class="section">
@@ -152,6 +152,9 @@
   <div class="radial-item" data-action="undo" style="--angle: 240deg;">↩️<span class="tip">Undo</span></div>
   <div class="radial-item" data-action="palette" style="--angle: 300deg;">🔍<span class="tip">Palette</span></div>
 </div>
+
+<!-- Toast Container -->
+<div id="toastContainer" class="toast-container"></div>
 
 <script src="js/ink.js"></script>
 <script src="js/viewport.js"></script>

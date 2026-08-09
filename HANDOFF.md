@@ -51,7 +51,7 @@ critical path.**
 | Design | `SPEC.md` — full architecture | ✅ |
 | **M0** | Latency spike: blank window, pressure ink, measurement HUD | ✅ built, **not yet run on the tablet** |
 | **M1 core** | Document model, ink maths, PDF format, WAL, tile cache | ✅ 43 tests, 24 cross-language checks |
-| **M1 rendering** | PDFium binding | ❌ **NOT STARTED — critical path** |
+| **M1 rendering** | PDFium binding | ✅ complete |
 | M2+ | Shell wiring, tools, split view, shortcuts | ❌ |
 
 ### Repo layout after you assemble it

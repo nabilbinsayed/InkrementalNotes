@@ -1,8 +1,32 @@
-use crate::state::AppState;
+use crate::state::{AppState, CachedPageBitmap, WalOp};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use std::path::{Path, PathBuf};
+use pdfium_render::prelude::*;
 use inkwell_core::{Document, StrokeBuilder, ToolKind, Brush, PdfFile, wal::{atomic_write, Wal, WalEntry}};
+
+fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
+    let (tx, rx) = std::sync::mpsc::channel::<WalOp>();
+    std::thread::spawn(move || {
+        let mut wal = wal;
+        while let Ok(op) = rx.recv() {
+            match op {
+                WalOp::Append(entry) => {
+                    if let Err(e) = wal.append(&entry) {
+                        eprintln!("[inkwell] Background WAL append error: {e}");
+                    }
+                }
+                WalOp::Truncate => {
+                    if let Err(e) = wal.truncate() {
+                        eprintln!("[inkwell] Background WAL truncate error: {e}");
+                    }
+                }
+                WalOp::Close => break,
+            }
+        }
+    });
+    tx
+}
 
 /// Derive a temp-dir WAL path for `doc_path` that stays out of the synced
 /// folder. Key = hex-encoded FNV-1a of the canonical path bytes.
@@ -119,15 +143,35 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
     let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
     let n_pages = page_infos.len();
 
-    let doc = Document::for_pdf(n_pages);
+    let mut doc = Document::for_pdf(n_pages);
+
+    // Replay WAL entries if journal exists from a previous crash
+    let wp = wal_path_for(&path);
+    if let Ok(entries) = Wal::replay(&wp) {
+        if !entries.is_empty() {
+            eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
+            for entry in entries {
+                match entry {
+                    WalEntry::Added(s) => doc.push_stroke(0, s),
+                    WalEntry::Removed(id) => { doc.remove_stroke(id); }
+                }
+            }
+        }
+    }
+
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
 
     // Open WAL in temp dir (not the synced folder).
-    let wp = wal_path_for(&path);
+    if let Some(old_tx) = state.wal.lock().unwrap().take() {
+        let _ = old_tx.send(WalOp::Close);
+    }
     match Wal::open(&wp) {
-        Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
+        Ok(wal) => {
+            let tx = init_wal_worker(wal);
+            *state.wal.lock().unwrap() = Some(tx);
+        }
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
@@ -145,14 +189,33 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
     let n_pages = page_infos.len();
 
-    let doc = Document::for_pdf(n_pages);
+    let mut doc = Document::for_pdf(n_pages);
+
+    let wp = wal_path_for(&path);
+    if let Ok(entries) = Wal::replay(&wp) {
+        if !entries.is_empty() {
+            eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
+            for entry in entries {
+                match entry {
+                    WalEntry::Added(s) => doc.push_stroke(0, s),
+                    WalEntry::Removed(id) => { doc.remove_stroke(id); }
+                }
+            }
+        }
+    }
+
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
     *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
 
-    let wp = wal_path_for(&path);
+    if let Some(old_tx) = state.wal.lock().unwrap().take() {
+        let _ = old_tx.send(WalOp::Close);
+    }
     match Wal::open(&wp) {
-        Ok(wal) => { *state.wal.lock().unwrap() = Some(wal); }
+        Ok(wal) => {
+            let tx = init_wal_worker(wal);
+            *state.wal.lock().unwrap() = Some(tx);
+        }
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
@@ -177,15 +240,15 @@ pub fn render_tile(
         return Err(format!("Invalid tile rectangle: {rect:?}"));
     }
 
-    // Grab PDF bytes without holding the lock during rendering.
-    let bytes = state.pdf_bytes.lock().unwrap()
+    let rw = (rect[2] - rect[0]).max(1.0);
+    let rh = (rect[3] - rect[1]).max(1.0);
+    let scale = (px as f64) / rw.max(rh);
+
+    let pdf_bytes_guard = state.pdf_bytes.lock().unwrap();
+    let bytes = pdf_bytes_guard
         .as_ref()
-        .cloned()
         .ok_or("No PDF loaded")?;
 
-    // Use the cached PDFium instance — no per-tile DLL loading.
-    // We must hold the MutexGuard alive for the entire render because PdfDocument
-    // borrows from the Pdfium instance behind the guard.
     let pdfium_guard = state.pdfium.lock().unwrap();
     let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
         "PDFium is not available (pdfium.dll was not found at startup). \
@@ -193,26 +256,96 @@ pub fn render_tile(
     })?;
 
     let doc = pdfium
-        .load_pdf_from_byte_slice(&bytes, None)
+        .load_pdf_from_byte_slice(bytes, None)
         .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
-    let rasterizer = inkwell_pdf::PdfiumRasterizer::new(doc);
-    let tile = inkwell_core::tiles::PageRasterizer::rasterize(&rasterizer, page, rect, px)
-        .ok_or_else(|| format!("PDFium did not render page {page} for rect {rect:?} at {px}px"))?;
+    let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+    let page_w = page_obj.width().value as f64;
+    let page_h = page_obj.height().value as f64;
 
-    // Rasterization done — release the PDFium lock before validating output.
-    drop(rasterizer);
-    drop(pdfium_guard);
+    let target_w = (page_w * scale).round().max(1.0) as i32;
+    let target_h = (page_h * scale).round().max(1.0) as i32;
 
-    let expected_len = px as usize * px as usize * 3;
-    if tile.data.len() != expected_len {
+    let mut cache_guard = state.page_bitmap_cache.lock().unwrap();
+
+    let (bgra_bytes, bitmap_w, bitmap_h) = match cache_guard.as_ref() {
+        Some(c) if c.page == page && c.target_w == target_w && c.target_h == target_h => {
+            (c.bgra_bytes.clone(), c.bitmap_w, c.bitmap_h)
+        }
+        _ => {
+            let config = PdfRenderConfig::new()
+                .set_target_width(target_w)
+                .set_maximum_height(target_h)
+                .set_clear_color(PdfColor::WHITE);
+
+            let bitmap = page_obj.render_with_config(&config).map_err(|e| {
+                format!("PDFium failed to render page {page}: {e:?}")
+            })?;
+
+            let bgra = bitmap.as_raw_bytes().to_vec();
+            let bw = bitmap.width() as u32;
+            let bh = bitmap.height() as u32;
+
+            *cache_guard = Some(CachedPageBitmap {
+                page,
+                target_w,
+                target_h,
+                bgra_bytes: bgra.clone(),
+                bitmap_w: bw,
+                bitmap_h: bh,
+            });
+
+            (bgra, bw, bh)
+        }
+    };
+    drop(cache_guard);
+
+
+    // Crop the tile rect from the page bitmap
+    let out_w = (rw * scale).round().max(1.0) as u32;
+    let out_h = (rh * scale).round().max(1.0) as u32;
+
+    let x0 = (rect[0] * scale).round().max(0.0) as u32;
+    let y0 = (rect[1] * scale).round().max(0.0) as u32;
+
+    let mut rgba_data = vec![255u8; (out_w * out_h * 4) as usize];
+    if x0 < bitmap_w && y0 < bitmap_h {
+        let crop_w = out_w.min(bitmap_w.saturating_sub(x0));
+        let crop_h = out_h.min(bitmap_h.saturating_sub(y0));
+
+        for y in 0..crop_h {
+            for x in 0..crop_w {
+                let src_idx = ((y0 + y) * bitmap_w + (x0 + x)) as usize * 4;
+                let dst_idx = (y * out_w + x) as usize * 4;
+
+                if src_idx + 3 < bgra_bytes.len() {
+                    let b = bgra_bytes[src_idx];
+                    let g = bgra_bytes[src_idx + 1];
+                    let r = bgra_bytes[src_idx + 2];
+                    let a = bgra_bytes[src_idx + 3] as u32;
+
+                    let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
+                    let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;
+                    let blended_b = ((b as u32 * a + 255 * (255 - a)) / 255) as u8;
+
+                    rgba_data[dst_idx] = blended_r;
+                    rgba_data[dst_idx + 1] = blended_g;
+                    rgba_data[dst_idx + 2] = blended_b;
+                    rgba_data[dst_idx + 3] = 255;
+                }
+            }
+        }
+    }
+
+    let expected_len = (out_w as usize) * (out_h as usize) * 4;
+    if rgba_data.len() != expected_len {
         return Err(format!(
-            "PDFium returned an invalid tile buffer for page {page}: expected {expected_len} RGB bytes, got {}",
-            tile.data.len()
+            "PDFium returned an invalid tile buffer for page {page}: expected {expected_len} RGBA bytes ({out_w}x{out_h}), got {}",
+            rgba_data.len()
         ));
     }
 
-    Ok(tile.data)
+    Ok(rgba_data)
 }
 
 
@@ -252,9 +385,9 @@ pub fn commit_stroke(
     let stroke = b.finish(0.3);
     doc.push_stroke(sheet, stroke.clone());
 
-    // Append to WAL (fsynced inside wal.append).
-    if let Some(wal) = state.wal.lock().unwrap().as_mut() {
-        let _ = wal.append(&WalEntry::Added(stroke));
+    // Offload WAL append to background worker thread channel.
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::Added(stroke)));
     }
 
     Ok(stroke_id.to_string())
@@ -311,8 +444,8 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
     drop(doc_guard);
     *state.pdf_bytes.lock().unwrap() = Some(norm_bytes);
 
-    if let Some(wal) = state.wal.lock().unwrap().as_mut() {
-        let _ = wal.truncate();
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Truncate);
     }
 
     Ok(target_path.to_string_lossy().to_string())

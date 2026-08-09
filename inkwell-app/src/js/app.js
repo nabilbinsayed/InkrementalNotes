@@ -17,6 +17,31 @@ function getInvoke() {
   return null;
 }
 
+function showToast(message, type = 'info') {
+  let container = $('toastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  requestAnimationFrame(() => {
+    toast.classList.add('show');
+  });
+
+  setTimeout(() => {
+    toast.classList.remove('show');
+    toast.addEventListener('transitionend', () => {
+      toast.remove();
+    });
+  }, 3000);
+}
+
 const state = {
   activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler',
                           // 'rect', 'ellipse', 'laser'
@@ -48,6 +73,7 @@ const state = {
   lassoRect: null,
   laserPos: null,
   laserTimer: null,
+  laserPoints: [],
   streamline: null,
   drawingPane: 'left',
 };
@@ -60,6 +86,19 @@ function paneSheet(pane = 'left') {
 let tilesCanvas, dryCanvas, wetCanvas;
 let tctx, dctx, wctx;
 let viewport;
+let stageRect = null;
+
+function updateStageRect() {
+  if (wetCanvas) {
+    stageRect = wetCanvas.getBoundingClientRect();
+  } else {
+    const host = $('stage');
+    if (host) stageRect = host.getBoundingClientRect();
+  }
+  if (viewport && viewport.updateStageRect) {
+    viewport.updateStageRect();
+  }
+}
 
 const tileCache = new Map();
 const tilesPending = new Map();
@@ -79,7 +118,7 @@ function visiblePanes() {
 }
 
 function paneForEvent(e) {
-  const r = wetCanvas.getBoundingClientRect();
+  const r = stageRect || (wetCanvas ? wetCanvas.getBoundingClientRect() : { left: 0, width: window.innerWidth });
   return viewport.splitMode && e.clientX - r.left > r.width / 2 ? 'right' : 'left';
 }
 
@@ -102,8 +141,13 @@ const TILE_CACHE_MAX = 200;
 function evictTileCache() {
   if (tileCache.size <= TILE_CACHE_MAX) return;
   let count = tileCache.size - TILE_CACHE_MAX;
-  for (const key of tileCache.keys()) {
+  for (const [key, val] of tileCache.entries()) {
     if (count-- <= 0) break;
+    if (val && val._bitmap && val._bitmap.close) {
+      val._bitmap.close();
+    } else if (val && val.close) {
+      val.close();
+    }
     tileCache.delete(key);
   }
 }
@@ -140,24 +184,15 @@ async function fetchTile(page, rect, px) {
       const scale = px / Math.max(rw, rh);
       const tileW = Math.round(rw * scale) || 1;
       const tileH = Math.round(rh * scale) || 1;
-      const expectedBytes = tileW * tileH * 3;
+      const expectedBytes = tileW * tileH * 4;
       if (!raw || raw.length !== expectedBytes) {
-        throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGB bytes (${tileW}x${tileH}), got ${raw ? raw.length : 0}`);
+        throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGBA bytes (${tileW}x${tileH}), got ${raw ? raw.length : 0}`);
       }
-      const imgData = new ImageData(tileW, tileH);
-      for (let i = 0; i < tileW * tileH; i++) {
-        imgData.data[i * 4 + 0] = raw[i * 3 + 0];
-        imgData.data[i * 4 + 1] = raw[i * 3 + 1];
-        imgData.data[i * 4 + 2] = raw[i * 3 + 2];
-        imgData.data[i * 4 + 3] = 255;
-      }
-      const tileCanvas = document.createElement('canvas');
-      tileCanvas.width = tileW;
-      tileCanvas.height = tileH;
-      tileCanvas.getContext('2d').putImageData(imgData, 0, 0);
-      tileCache.set(key, tileCanvas);
+      const rgbaArray = new Uint8ClampedArray(raw.buffer || raw, raw.byteOffset || 0, raw.byteLength || raw.length);
+      const imgData = new ImageData(rgbaArray, tileW, tileH);
+      tileCache.set(key, imgData);
       tileRenderError = null;
-      return { key, data: tileCanvas };
+      return { key, data: imgData };
     } catch (err) {
       const msg = err && err.message ? err.message : String(err);
       console.error('[inkwell] render_tile error:', msg);
@@ -273,6 +308,52 @@ async function redrawTiles() {
 }
 redrawTiles.epoch = 0;
 
+function quantizeTilePx(zoom, dpr) {
+  const targetPx = TILE_PT * zoom * dpr;
+  if (targetPx <= 384) return 256;
+  if (targetPx <= 640) return 512;
+  if (targetPx <= 896) return 768;
+  if (targetPx <= 1280) return 1024;
+  if (targetPx <= 1792) return 1536;
+  return 2048;
+}
+
+function findCachedTileFallback(sheetIdx, tr) {
+  const lodSteps = [512, 768, 256, 1024, 1536, 2048];
+  for (const altPx of lodSteps) {
+    const altKey = `${sheetIdx}:${tr.join(',')}:${altPx}`;
+    if (tileCache.has(altKey)) {
+      return tileCache.get(altKey);
+    }
+  }
+  return null;
+}
+
+async function drawTileData(data, tr, pane, pi) {
+  if (!data) return;
+  const [sx0, sy0] = viewport.worldToScreen(tr[0], tr[1], pane);
+  const [sx1, sy1] = viewport.worldToScreen(tr[2], tr[3], pane);
+  const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
+  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
+
+  tctx.save();
+  tctx.scale(state.dpr, state.dpr);
+  clipToPane(tctx, pane);
+  tctx.beginPath();
+  tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
+  tctx.clip();
+
+  let drawSource = data;
+  if (drawSource instanceof ImageData) {
+    if (!drawSource._bitmap) {
+      drawSource._bitmap = await createImageBitmap(drawSource);
+    }
+    drawSource = drawSource._bitmap;
+  }
+  tctx.drawImage(drawSource, sx0, sy0, sx1 - sx0, sy1 - sy0);
+  tctx.restore();
+}
+
 async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
   const bounds = paneBounds(pane);
 
@@ -284,8 +365,7 @@ async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
 
   const zoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
   const gridTiles = tileGridForRect(rx0, ry0, rx1, ry1);
-  const px = Math.min(1024, Math.round(TILE_PT * zoom * state.dpr));
-  if (px < 4) return;
+  const px = quantizeTilePx(zoom, state.dpr);
 
   const promises = gridTiles.map(async gt => {
     const tr = [
@@ -296,27 +376,27 @@ async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
     ];
     if (tr[2] <= tr[0] || tr[3] <= tr[1]) return;
 
+    const trKey = `${sheetIdx}:${tr.join(',')}:${px}`;
+    if (tileCache.has(trKey)) {
+      await drawTileData(tileCache.get(trKey), tr, pane, pi);
+      return;
+    }
+
+    // Blit fallback cached tile immediately to prevent flicker during LOD fetch
+    const fallback = findCachedTileFallback(sheetIdx, tr);
+    if (fallback) {
+      await drawTileData(fallback, tr, pane, pi);
+    }
+
     const result = await fetchTile(sheetIdx, tr, px);
     if (!result || drawEpoch !== redrawTiles.epoch) return;
 
-    const [sx0, sy0] = viewport.worldToScreen(tr[0], tr[1], pane);
-    const [sx1, sy1] = viewport.worldToScreen(tr[2], tr[3], pane);
-    const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
-    const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
-
-    tctx.save();
-    tctx.scale(state.dpr, state.dpr);
-    clipToPane(tctx, pane);
-    tctx.beginPath();
-    tctx.rect(pageX0, pageY0, pageX1 - pageX0, pageY1 - pageY0);
-    tctx.clip();
-    tctx.drawImage(result.data, sx0, sy0, sx1 - sx0, sy1 - sy0);
-    tctx.restore();
+    await drawTileData(result.data, tr, pane, pi);
   });
 
   await Promise.all(promises);
 
-  if (tileRenderError && drawEpoch === redrawTiles.epoch) {
+  if (tileRenderError && drawEpoch === redrawTiles.epoch && tileCache.size === 0) {
     const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
     const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
     const pw = pageX1 - pageX0, ph = pageY1 - pageY0;
@@ -336,21 +416,19 @@ async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
     const errText = tileRenderError.length > 80
       ? tileRenderError.slice(0, 77) + '…'
       : tileRenderError;
-    tctx.fillText(errText, cx, cy + 10);
-    tctx.fillStyle = '#6b7280';
-    tctx.font = `${Math.min(11, pw * 0.027)}px system-ui, sans-serif`;
-    tctx.fillText('Check console (F12) for full details', cx, cy + 30);
+    tctx.fillText(errText, cx, cy + 12);
     tctx.restore();
   }
 }
+
 
 function makeCtx(canvas) {
   return canvas.getContext('2d', { desynchronized: true, alpha: true });
 }
 
 function resize() {
-  const host = $('stage');
-  const r = host.getBoundingClientRect();
+  updateStageRect();
+  const r = stageRect;
   state.dpr = Math.max(1, window.devicePixelRatio || 1);
 
   for (const c of [tilesCanvas, dryCanvas, wetCanvas]) {
@@ -368,6 +446,16 @@ function resize() {
   for (const pane of visiblePanes()) drawPageBackground(pane);
   scheduleRedrawTiles();
   redrawAll();
+}
+
+let redrawAllPending = false;
+function scheduleRedrawAll() {
+  if (redrawAllPending) return;
+  redrawAllPending = true;
+  requestAnimationFrame(() => {
+    redrawAllPending = false;
+    redrawAll();
+  });
 }
 
 function redrawAll() {
@@ -406,7 +494,7 @@ function clearWet() {
 }
 
 function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
-  const r = wetCanvas.getBoundingClientRect();
+  const r = stageRect || (wetCanvas ? wetCanvas.getBoundingClientRect() : { left: 0, top: 0 });
   return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
 }
 
@@ -498,9 +586,9 @@ function eraseStrokesAt(e) {
     const invoke = getInvoke();
     if (invoke) {
       invoke('erase_strokes_near', {
-        sheet: sheetIdx,
-        px: x,
-        py: y,
+        sheet: targetSheet,
+        px: wx,
+        py: wy,
         radius: radius,
       }).catch(err => console.warn('erase IPC failed:', err));
     }
@@ -509,6 +597,12 @@ function eraseStrokesAt(e) {
 
 // ---- consume (wet layer drawing) ----
 function consume(e) {
+  if (state.activeTool === 'laser') {
+    const [wx, wy] = localXY(e, state.drawingPane);
+    state.laserPos = [wx, wy];
+    addLaserPoint(wx, wy);
+    return;
+  }
   if (!state.cur) return;
   const [x, y] = localXY(e, state.drawingPane);
   const p = e.pressure > 0 ? e.pressure : 0.5;
@@ -613,21 +707,72 @@ function drawLassoOverlay() {
 }
 
 // ---- Laser pointer ----
+let laserAnimId = null;
+
+function addLaserPoint(x, y) {
+  if (!state.laserPoints) state.laserPoints = [];
+  state.laserPoints.push({ x, y, t: Date.now() });
+  startLaserAnimation();
+}
+
+function startLaserAnimation() {
+  if (!laserAnimId) {
+    laserAnimId = requestAnimationFrame(updateLaserAnimation);
+  }
+}
+
+function updateLaserAnimation() {
+  laserAnimId = null;
+  const now = Date.now();
+  if (!state.laserPoints) state.laserPoints = [];
+
+  state.laserPoints = state.laserPoints.filter(p => now - p.t < 1200);
+
+  clearWet();
+  if (state.laserPoints.length > 0) {
+    drawLaser();
+    laserAnimId = requestAnimationFrame(updateLaserAnimation);
+  }
+}
+
 function drawLaser() {
-  if (!state.laserPos) return;
-  const [sx, sy] = viewport.worldToScreen(state.laserPos[0], state.laserPos[1], state.drawingPane);
+  const now = Date.now();
   wctx.save();
   wctx.setTransform(1, 0, 0, 1, 0, 0);
   wctx.scale(state.dpr, state.dpr);
   clipToPane(wctx, state.drawingPane);
-  wctx.beginPath();
-  wctx.arc(sx, sy, 8, 0, Math.PI * 2);
-  wctx.fillStyle = 'rgba(239,68,68,0.15)';
-  wctx.fill();
-  wctx.beginPath();
-  wctx.arc(sx, sy, 4, 0, Math.PI * 2);
-  wctx.fillStyle = 'rgba(239,68,68,0.9)';
-  wctx.fill();
+
+  if (state.laserPoints && state.laserPoints.length > 0) {
+    for (let i = 0; i < state.laserPoints.length; i++) {
+      const pt = state.laserPoints[i];
+      const age = now - pt.t;
+      if (age >= 1200) continue;
+      const alpha = Math.max(0, 1 - age / 1200);
+      const [sx, sy] = viewport.worldToScreen(pt.x, pt.y, state.drawingPane);
+
+      wctx.beginPath();
+      wctx.arc(sx, sy, 8, 0, Math.PI * 2);
+      wctx.fillStyle = `rgba(239,68,68,${(0.15 * alpha).toFixed(3)})`;
+      wctx.fill();
+
+      wctx.beginPath();
+      wctx.arc(sx, sy, 4, 0, Math.PI * 2);
+      wctx.fillStyle = `rgba(239,68,68,${(0.9 * alpha).toFixed(3)})`;
+      wctx.fill();
+    }
+  } else if (state.laserPos) {
+    const [sx, sy] = viewport.worldToScreen(state.laserPos[0], state.laserPos[1], state.drawingPane);
+    wctx.beginPath();
+    wctx.arc(sx, sy, 8, 0, Math.PI * 2);
+    wctx.fillStyle = 'rgba(239,68,68,0.15)';
+    wctx.fill();
+
+    wctx.beginPath();
+    wctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    wctx.fillStyle = 'rgba(239,68,68,0.9)';
+    wctx.fill();
+  }
+
   wctx.restore();
 }
 
@@ -678,7 +823,7 @@ function onDown(e) {
 
   if (state.activeTool === 'laser') {
     state.laserPos = [wx, wy];
-    clearWet(); drawLaser();
+    addLaserPoint(wx, wy);
     return;
   }
 
@@ -732,7 +877,12 @@ function onMove(e) {
 
   if (state.activeTool === 'laser') {
     state.laserPos = [wx, wy];
-    clearWet(); drawLaser();
+    if (e.getCoalescedEvents) {
+      const co = e.getCoalescedEvents();
+      (co.length ? co : [e]).forEach(c => consume(c));
+    } else {
+      addLaserPoint(wx, wy);
+    }
     return;
   }
 
@@ -754,7 +904,7 @@ function onMove(e) {
       const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
       const len = Math.hypot(dx, dy);
       ex = state.shapeStart[0] + Math.cos(angle) * len;
-      ey = state.shapeStart[0] + Math.sin(angle) * len;
+      ey = state.shapeStart[1] + Math.sin(angle) * len;
     } else if (e.shiftKey) {
       // square / circle constraint
       const dx = Math.abs(wx - state.shapeStart[0]);
@@ -870,10 +1020,14 @@ async function onUp(e) {
   if (!state.cur) return;
 
   const finishedStroke = state.cur;
+  if (typeof Ink.getPath2D === 'function') {
+    finishedStroke._cachedPath2D = Ink.getPath2D(finishedStroke);
+  }
   const strokeRec = {
     id: finishedStroke.id, kind: finishedStroke.kind, rgb: finishedStroke.rgb,
     base_width: finishedStroke.base_width, points: finishedStroke.points.slice(),
     sheet: state.currentSheet, deleted: false,
+    _cachedPath2D: finishedStroke._cachedPath2D || null,
   };
   state.strokes.push(strokeRec);
   state.undoStack.push({ type: 'add', stroke: strokeRec });
@@ -903,7 +1057,11 @@ async function onUp(e) {
 
 function clearLaser() {
   state.laserPos = null;
-  clearTimeout(state.laserTimer);
+  state.laserPoints = [];
+  if (laserAnimId) {
+    cancelAnimationFrame(laserAnimId);
+    laserAnimId = null;
+  }
   clearWet();
 }
 
@@ -919,6 +1077,9 @@ function updateStats(pointerType) {
 const TOOL_BTNS = ['btnPen', 'btnHighlighter', 'btnEraser', 'btnLasso',
                    'btnRuler', 'btnRect', 'btnEllipse', 'btnLaser'];
 function setTool(tool) {
+  if (state.activeTool === 'laser' && tool !== 'laser') {
+    clearLaser();
+  }
   state.activeTool = tool;
   TOOL_BTNS.forEach(id => $(id) && $(id).classList.remove('active'));
   const toolBtnMap = {
@@ -928,6 +1089,9 @@ function setTool(tool) {
   };
   const btnId = toolBtnMap[tool];
   if (btnId) $(btnId) && $(btnId).classList.add('active');
+  if (wetCanvas) {
+    wetCanvas.className = `tool-${tool}`;
+  }
 }
 
 // ---- Undo / Redo ----
@@ -1153,6 +1317,8 @@ function bindUI() {
       const hex = e.target.getAttribute('data-color');
       state.color = [1, 3, 5].map(i => parseInt(hex.substr(i, 2), 16) / 255);
       $('colorPicker').value = hex;
+      document.querySelectorAll('.swatch').forEach(sw => sw.classList.remove('active'));
+      e.target.classList.add('active');
     });
   });
 
@@ -1161,6 +1327,19 @@ function bindUI() {
 
   $('btnRightPrev') && $('btnRightPrev').addEventListener('click', () => goToPage(state.rightSheet - 1, 'right'));
   $('btnRightNext') && $('btnRightNext').addEventListener('click', () => goToPage(state.rightSheet + 1, 'right'));
+
+async function checkWalRecovery() {
+  const invoke = getInvoke();
+  if (!invoke) return;
+  try {
+    const docInfo = await invoke('get_document_info');
+    if (docInfo && docInfo.strokes > 0) {
+      showToast("Restored unsaved strokes from crash journal", "info");
+    }
+  } catch (err) {
+    // Ignore WAL info error
+  }
+}
 
   $('btnOpen').addEventListener('click', async () => {
     const invoke = getInvoke();
@@ -1193,6 +1372,7 @@ function bindUI() {
             <div>Loaded: ${selectedPath.split('\\').pop().split('/').pop()}</div>
             <div>Pages: ${infos.length}</div>
           `;
+          await checkWalRecovery();
           return;
         }
       } catch (err) {
@@ -1222,6 +1402,7 @@ function bindUI() {
           <div>Loaded: ${file.name}</div>
           <div>Pages: ${infos.length}</div>
         `;
+        await checkWalRecovery();
         return;
       }
 
@@ -1244,12 +1425,13 @@ function bindUI() {
           <div>Loaded: ${file.name}</div>
           <div>Pages: ${infos.length}</div>
         `;
+        await checkWalRecovery();
         return;
       }
-      alert('Tauri IPC is unavailable in this environment.');
+      showToast('Tauri IPC is unavailable in this environment.', 'warning');
     } catch (err) {
       console.error('[inkwell] pdfFileInput error:', err);
-      alert('Failed to open PDF: ' + (err.message || err));
+      showToast('Failed to open PDF: ' + (err.message || err), 'error');
     }
   });
 
@@ -1258,10 +1440,10 @@ function bindUI() {
     if (invoke) {
       try {
         const savedPath = await invoke('save_pdf', { outPathStr: null });
-        alert('Saved to: ' + savedPath);
-      } catch (err) { alert('Failed to save PDF: ' + err); }
+        showToast('Saved to: ' + savedPath, 'success');
+      } catch (err) { showToast('Failed to save PDF: ' + err, 'error'); }
     } else {
-      alert('Running in browser mode. Save via Tauri host.');
+      showToast('Running in browser mode. Save via Tauri host.', 'info');
     }
   });
 
@@ -1410,14 +1592,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
   viewport = new ViewportManager(() => {
     scheduleRedrawTiles();
-    redrawAll();
+    scheduleRedrawAll();
   });
   viewport.attachListeners($('stage'));
 
   resize();
   attachPointerHandlers();
   bindUI();
+  setTool(state.activeTool);
   updatePageUI();
 
   window.addEventListener('resize', resize);
+  window.addEventListener('scroll', updateStageRect, { passive: true });
 });

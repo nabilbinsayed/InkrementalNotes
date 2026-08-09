@@ -99,8 +99,79 @@ class Stroke {
     return pt;
   }
 
+  getPath2D() {
+    if (!this._cachedPath2D) {
+      this._cachedPath2D = getPath2D(this);
+    }
+    return this._cachedPath2D;
+  }
+
   get points() { return this._pts; }
   get last() { return this._pts[this._pts.length - 1]; }
+}
+
+function addDotToPath(path, p) {
+  path.moveTo(p.x + p.w / 2, p.y);
+  path.arc(p.x, p.y, p.w / 2, 0, Math.PI * 2);
+}
+
+function addSegmentToPath(path, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const L = Math.hypot(dx, dy) || 1e-6;
+  const nx = -dy / L, ny = dx / L;
+  const ha = a.w / 2, hb = b.w / 2;
+  path.moveTo(a.x + nx * ha, a.y + ny * ha);
+  path.lineTo(b.x + nx * hb, b.y + ny * hb);
+  path.lineTo(b.x - nx * hb, b.y - ny * hb);
+  path.lineTo(a.x - nx * ha, a.y - ny * ha);
+  path.closePath();
+  path.moveTo(b.x + hb, b.y);
+  path.arc(b.x, b.y, hb, 0, Math.PI * 2);
+}
+
+function getPath2D(stroke) {
+  if (typeof Path2D === 'undefined') return null;
+  const rawPts = stroke.points || stroke._pts;
+  if (!rawPts || !rawPts.length) return null;
+
+  const path = new Path2D();
+  if (rawPts.length === 1) {
+    addDotToPath(path, rawPts[0]);
+    return path;
+  }
+  if (rawPts.length === 2) {
+    addDotToPath(path, rawPts[0]);
+    addSegmentToPath(path, rawPts[0], rawPts[1]);
+    return path;
+  }
+
+  const points = chaikinSubdivide(rawPts);
+  let pPrev = points[0];
+  addDotToPath(path, pPrev);
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const start = pPrev;
+    const end = {
+      x: (points[i].x + points[i + 1].x) / 2,
+      y: (points[i].y + points[i + 1].y) / 2,
+      w: (points[i].w + points[i + 1].w) / 2,
+    };
+    const steps = 3;
+    for (let s = 1; s <= steps; s++) {
+      const pCurr = quadraticAt(start, points[i], end, s / steps);
+      addSegmentToPath(path, pPrev, pCurr);
+      pPrev = pCurr;
+    }
+  }
+  const last = points[points.length - 1];
+  const start = pPrev;
+  for (let s = 1; s <= 3; s++) {
+    const pCurr = quadraticAt(start, points[points.length - 2], last, s / 3);
+    addSegmentToPath(path, pPrev, pCurr);
+    pPrev = pCurr;
+  }
+
+  return path;
 }
 
 function drawSegment(ctx, a, b) {
@@ -232,9 +303,19 @@ function quadraticAt(p0, control, p1, t) {
 }
 
 function drawStroke(ctx, stroke) {
-  const rawPts = stroke.points;
+  const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return;
   ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+
+  if (!stroke._cachedPath2D && typeof Path2D !== 'undefined') {
+    stroke._cachedPath2D = getPath2D(stroke);
+  }
+
+  if (stroke._cachedPath2D) {
+    ctx.fill(stroke._cachedPath2D);
+    return;
+  }
+
   if (rawPts.length === 1) { drawDot(ctx, rawPts[0]); return; }
   if (rawPts.length === 2) { drawDot(ctx, rawPts[0]); drawSegment(ctx, rawPts[0], rawPts[1]); return; }
 
@@ -267,4 +348,5 @@ function drawStroke(ctx, stroke) {
   }
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D };
+

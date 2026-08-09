@@ -15,6 +15,14 @@ class ViewportManager {
     this.onChange = onChange;
     this.isPanning = false;
     this.lastPanPt = [0, 0];
+    this.stageRect = null;
+    this.element = null;
+  }
+
+  updateStageRect() {
+    if (this.element) {
+      this.stageRect = this.element.getBoundingClientRect();
+    }
   }
 
   toggleSplitMode() {
@@ -89,8 +97,14 @@ class ViewportManager {
   }
 
   attachListeners(element) {
+    this.element = element;
+    this.updateStageRect();
+    window.addEventListener('resize', () => this.updateStageRect());
+    window.addEventListener('scroll', () => this.updateStageRect(), { passive: true });
+
     element.addEventListener('wheel', e => {
-      const stageRect = element.getBoundingClientRect();
+      if (!this.stageRect) this.updateStageRect();
+      const stageRect = this.stageRect;
       const relX = e.clientX - stageRect.left;
       const relY = e.clientY - stageRect.top;
       const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
@@ -112,7 +126,8 @@ class ViewportManager {
     element.addEventListener('pointerdown', e => {
       if (e.button !== 1) return; // middle button only
       e.preventDefault();
-      const stageRect = element.getBoundingClientRect();
+      if (!this.stageRect) this.updateStageRect();
+      const stageRect = this.stageRect;
       const relX = e.clientX - stageRect.left;
       this.isPanning = true;
       this.lastPanPt = [e.clientX, e.clientY];
