@@ -16,8 +16,8 @@ Thumbs.db
 *.tmp
 *.log
 
-# Large generated fixtures/corpus downloads (keep fixtures/lecture.pdf and MANIFEST.md)
-fixtures/corpus/*.pdf
+# PDF test files and generated corpus (keep fixtures/lecture.pdf and MANIFEST.md)
+*.pdf
 !fixtures/lecture.pdf
 
 # Python / Venv
