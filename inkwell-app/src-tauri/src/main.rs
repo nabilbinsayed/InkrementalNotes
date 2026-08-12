@@ -40,6 +40,7 @@ fn main() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::open_pdf,
+            commands::open_pdf_dialog,
             commands::open_pdf_bytes,
             commands::render_tile,
             commands::commit_stroke,

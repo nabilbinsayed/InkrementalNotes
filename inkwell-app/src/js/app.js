@@ -1240,7 +1240,6 @@ async function insertBlankPage() {
     } catch (err) {
       console.warn('insert_blank_page failed in backend:', err);
       state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
-    }
   } else {
     state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
   }
@@ -1267,18 +1266,7 @@ function toggleSplitView() {
 }
 
 function toggleSidebar() {
-  const sidebar = $('sidebar');
-  if (!sidebar) return;
-  const collapsed = sidebar.classList.toggle('collapsed');
-  $('btnToggleSidebar') && $('btnToggleSidebar').classList.toggle('active', !collapsed);
-  requestAnimationFrame(() => {
-    resize();
-    viewport.updateStageRect();
-    const pi = state.pageInfos[state.leftSheet];
-    if (pi) centerPageInPanes(pi);
-    scheduleRedrawTiles();
-    redrawAll();
-  });
+  toggleDrawer('docInfo');
 }
 
 function toggleFullscreen() {
@@ -1333,11 +1321,11 @@ window.addEventListener('keyup', e => {
 
 // ---- Command Palette ----
 const COMMANDS = [
-  { id: 'open_pdf', title: 'Open PDF Document', category: 'File', shortcut: 'Ctrl+O', action: () => $('btnOpen').click() },
-  { id: 'save_pdf', title: 'Save PDF Document', category: 'File', shortcut: 'Ctrl+S', action: () => $('btnSave').click() },
+  { id: 'open_pdf', title: 'Open PDF Document', category: 'File', shortcut: 'Ctrl+O', action: () => $('btnOpen') && $('btnOpen').click() },
+  { id: 'save_pdf', title: 'Save PDF Document', category: 'File', shortcut: 'Ctrl+S', action: () => $('btnSave') && $('btnSave').click() },
   { id: 'insert_blank', title: 'Insert Blank Page', category: 'Document', shortcut: '', action: () => insertBlankPage() },
   { id: 'toggle_split', title: 'Toggle Split View (Dual Pane)', category: 'View', shortcut: '', action: () => toggleSplitView() },
-  { id: 'toggle_sidebar', title: 'Toggle Right Sidebar Panel', category: 'View', shortcut: 'Ctrl+B', action: () => toggleSidebar() },
+  { id: 'toggle_sidebar', title: 'Toggle Sidebar Panel', category: 'View', shortcut: 'Ctrl+B', action: () => toggleSidebar() },
   { id: 'toggle_fullscreen', title: 'Toggle Fullscreen Mode', category: 'View', shortcut: 'F11', action: () => toggleFullscreen() },
   { id: 'tool_pen', title: 'Switch Tool: Pen', category: 'Tools', shortcut: 'P', action: () => setTool('pen') },
   { id: 'tool_highlighter', title: 'Switch Tool: Highlighter', category: 'Tools', shortcut: 'H', action: () => setTool('highlighter') },
@@ -1360,6 +1348,7 @@ let currentMatches = [];
 function openCommandPalette() {
   const modal = $('cmdPaletteModal');
   const input = $('cmdPaletteInput');
+  if (!modal || !input) return;
   modal.classList.remove('hidden');
   input.value = '';
   input.focus();
@@ -1367,11 +1356,12 @@ function openCommandPalette() {
 }
 
 function closeCommandPalette() {
-  $('cmdPaletteModal').classList.add('hidden');
+  $('cmdPaletteModal') && $('cmdPaletteModal').classList.add('hidden');
 }
 
 function renderCommandResults(query) {
   const container = $('cmdPaletteResults');
+  if (!container) return;
   const q = query.toLowerCase().trim();
   currentMatches = COMMANDS.filter(c => c.title.toLowerCase().includes(q) || c.category.toLowerCase().includes(q));
   selectedCmdIndex = 0;
@@ -1399,20 +1389,127 @@ function updatePaletteSelection() {
 // ---- Radial Menu ----
 function showRadialMenu(x, y) {
   const menu = $('radialMenu');
+  if (!menu) return;
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   menu.classList.remove('hidden');
 }
 
 function hideRadialMenu() {
-  $('radialMenu').classList.add('hidden');
+  $('radialMenu') && $('radialMenu').classList.add('hidden');
+}
+
+// ---- Multi-Document Tab Manager ----
+state.tabs = [];
+state.activeTabId = null;
+
+function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
+  const tabId = 'tab_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  const newTab = {
+    id: tabId,
+    title: title,
+    pathStr: pathStr,
+    pageInfos: pageInfos || [],
+    strokes: [],
+    selectedStrokes: [],
+    undoStack: [],
+    redoStack: [],
+    leftSheet: 0,
+    rightSheet: 0,
+    zoom: 1.0,
+    panX: 0,
+    panY: 0
+  };
+  state.tabs.push(newTab);
+  renderTabsDOM();
+  switchTab(tabId);
+  return newTab;
+}
+
+function switchTab(tabId) {
+  if (state.activeTabId) {
+    const curTab = state.tabs.find(t => t.id === state.activeTabId);
+    if (curTab) {
+      curTab.pageInfos = state.pageInfos;
+      curTab.strokes = state.strokes;
+      curTab.selectedStrokes = state.selectedStrokes;
+      curTab.undoStack = state.undoStack;
+      curTab.redoStack = state.redoStack;
+      curTab.leftSheet = state.leftSheet;
+      curTab.rightSheet = state.rightSheet;
+    }
+  }
+
+  const targetTab = state.tabs.find(t => t.id === tabId);
+  if (!targetTab) return;
+
+  state.activeTabId = tabId;
+  state.pageInfos = targetTab.pageInfos;
+  state.strokes = targetTab.strokes;
+  state.selectedStrokes = targetTab.selectedStrokes;
+  state.undoStack = targetTab.undoStack;
+  state.redoStack = targetTab.redoStack;
+  state.leftSheet = targetTab.leftSheet;
+  state.rightSheet = targetTab.rightSheet;
+
+  if ($('activeTabTitle')) $('activeTabTitle').textContent = targetTab.title;
+  renderTabsDOM();
+  updatePageUI();
+  tileCache.clear();
+  scheduleRedrawTiles();
+  redrawAll();
+}
+
+function closeTab(tabId, e) {
+  if (e) e.stopPropagation();
+  if (state.tabs.length <= 1) {
+    showToast('Cannot close the last document tab.', 'info');
+    return;
+  }
+  const idx = state.tabs.findIndex(t => t.id === tabId);
+  if (idx === -1) return;
+  state.tabs.splice(idx, 1);
+  if (state.activeTabId === tabId) {
+    const nextTab = state.tabs[Math.max(0, idx - 1)];
+    switchTab(nextTab.id);
+  } else {
+    renderTabsDOM();
+  }
+}
+
+function renderTabsDOM() {
+  const container = $('tabList');
+  if (!container) return;
+  container.innerHTML = state.tabs.map(t => `
+    <div class="doc-tab ${t.id === state.activeTabId ? 'active' : ''}" data-tab-id="${t.id}">
+      <svg class="tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="tab-title">${t.title}</span>
+      <button class="tab-close" data-close-id="${t.id}" title="Close document">✕</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.doc-tab').forEach(el => {
+    el.addEventListener('click', e => {
+      if (e.target.classList.contains('tab-close')) return;
+      const tid = el.getAttribute('data-tab-id');
+      if (tid) switchTab(tid);
+    });
+  });
+
+  container.querySelectorAll('.tab-close').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const cid = btn.getAttribute('data-close-id');
+      if (cid) closeTab(cid, e);
+    });
+  });
 }
 
 // ---- UI binding ----
 function bindUI() {
-  $('btnPen').addEventListener('click', () => setTool('pen'));
-  $('btnHighlighter').addEventListener('click', () => setTool('highlighter'));
-  $('btnEraser').addEventListener('click', () => setTool('eraser'));
+  // Legacy toolbar buttons
+  $('btnPen') && $('btnPen').addEventListener('click', () => setTool('pen'));
+  $('btnHighlighter') && $('btnHighlighter').addEventListener('click', () => setTool('highlighter'));
+  $('btnEraser') && $('btnEraser').addEventListener('click', () => setTool('eraser'));
   $('btnPan') && $('btnPan').addEventListener('click', () => setTool('pan'));
   $('btnLasso') && $('btnLasso').addEventListener('click', () => setTool('lasso'));
   $('btnRuler') && $('btnRuler').addEventListener('click', () => setTool('ruler'));
@@ -1420,13 +1517,62 @@ function bindUI() {
   $('btnEllipse') && $('btnEllipse').addEventListener('click', () => setTool('ellipse'));
   $('btnLaser') && $('btnLaser').addEventListener('click', () => setTool('laser'));
 
-  $('colorPicker').addEventListener('input', e => {
+  // Floating Dock tool buttons
+  $('btnDockPan') && $('btnDockPan').addEventListener('click', () => setTool('pan'));
+  $('btnDockLasso') && $('btnDockLasso').addEventListener('click', () => setTool('lasso'));
+  $('btnDockPen') && $('btnDockPen').addEventListener('click', () => setTool('pen'));
+  $('btnDockHighlighter') && $('btnDockHighlighter').addEventListener('click', () => setTool('highlighter'));
+  $('btnDockEraser') && $('btnDockEraser').addEventListener('click', () => setTool('eraser'));
+  $('btnDockText') && $('btnDockText').addEventListener('click', () => setTool('pen'));
+  $('btnDockTextHighlight') && $('btnDockTextHighlight').addEventListener('click', () => setTool('highlighter'));
+  $('btnDockShapes') && $('btnDockShapes').addEventListener('click', () => setTool('rect'));
+  $('btnDockComment') && $('btnDockComment').addEventListener('click', () => showToast('Click on document to add a note', 'info'));
+  $('btnDockStickers') && $('btnDockStickers').addEventListener('click', () => showToast('Stickers drawer ready', 'info'));
+  $('btnDockAddPreset') && $('btnDockAddPreset').addEventListener('click', () => $('propPopover') && $('propPopover').classList.toggle('hidden'));
+  $('btnDockStylusOptions') && $('btnDockStylusOptions').addEventListener('click', () => toggleDrawer('settings'));
+
+  // Left Navigation Rail buttons
+  $('btnRailThumbnails') && $('btnRailThumbnails').addEventListener('click', () => toggleDrawer('thumbnails'));
+  $('btnRailOutline') && $('btnRailOutline').addEventListener('click', () => toggleDrawer('outline'));
+  $('btnRailSearch') && $('btnRailSearch').addEventListener('click', () => toggleDrawer('search'));
+  $('btnRailBookmarks') && $('btnRailBookmarks').addEventListener('click', () => toggleDrawer('bookmarks'));
+  $('btnRailLayers') && $('btnRailLayers').addEventListener('click', () => toggleDrawer('layers'));
+  $('btnRailDocInfo') && $('btnRailDocInfo').addEventListener('click', () => toggleDrawer('docInfo'));
+  $('btnRailSettings') && $('btnRailSettings').addEventListener('click', () => toggleDrawer('settings'));
+  $('btnCloseDrawer') && $('btnCloseDrawer').addEventListener('click', () => {
+    const drawer = $('navDrawer');
+    if (drawer) drawer.classList.add('hidden');
+    state.activeDrawer = null;
+    updateRailButtonsUI();
+  });
+
+  // Top Header controls
+  $('btnNewTab') && $('btnNewTab').addEventListener('click', () => $('btnOpen') && $('btnOpen').click());
+  $('btnPageDropdown') && $('btnPageDropdown').addEventListener('click', () => toggleDrawer('thumbnails'));
+  $('btnHeaderAddPage') && $('btnHeaderAddPage').addEventListener('click', insertBlankPage);
+
+  // Export / Share Modal
+  $('btnExportShare') && $('btnExportShare').addEventListener('click', () => $('exportModal') && $('exportModal').classList.remove('hidden'));
+  $('btnCloseExportModal') && $('btnCloseExportModal').addEventListener('click', () => $('exportModal') && $('exportModal').classList.add('hidden'));
+  $('btnExportIncremental') && $('btnExportIncremental').addEventListener('click', () => {
+    $('exportModal') && $('exportModal').classList.add('hidden');
+    $('btnSave') && $('btnSave').click();
+  });
+  $('btnExportFlattened') && $('btnExportFlattened').addEventListener('click', () => {
+    $('exportModal') && $('exportModal').classList.add('hidden');
+    $('btnSave') && $('btnSave').click();
+  });
+
+  // Scroll to Top
+  $('btnScrollTop') && $('btnScrollTop').addEventListener('click', () => goToPage(0));
+
+  $('colorPicker') && $('colorPicker').addEventListener('input', e => {
     const h = e.target.value;
     state.color = [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16) / 255);
   });
 
-  $('btnUndo').addEventListener('click', undo);
-  $('btnRedo').addEventListener('click', redo);
+  $('btnUndo') && $('btnUndo').addEventListener('click', undo);
+  $('btnRedo') && $('btnRedo').addEventListener('click', redo);
 
   $('btnSplit') && $('btnSplit').addEventListener('click', toggleSplitView);
 
@@ -1455,7 +1601,6 @@ function bindUI() {
 
   $('btnFullscreen') && $('btnFullscreen').addEventListener('click', toggleFullscreen);
 
-
   $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', toggleSidebar);
   $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
   $('btnCmdPalette') && $('btnCmdPalette').addEventListener('click', openCommandPalette);
@@ -1465,19 +1610,26 @@ function bindUI() {
   // Property popover binding
   $('btnProp') && $('btnProp').addEventListener('click', () => {
     const pop = $('propPopover');
-    pop.classList.toggle('hidden');
+    pop && pop.classList.toggle('hidden');
   });
 
   $('widthSlider') && $('widthSlider').addEventListener('input', e => {
     state.baseWidth = parseFloat(e.target.value);
-    $('widthVal').textContent = state.baseWidth + ' pt';
+    if ($('widthVal')) $('widthVal').textContent = state.baseWidth + ' pt';
+    updateToolBadges();
+  });
+
+  $('popoverWidthSlider') && $('popoverWidthSlider').addEventListener('input', e => {
+    state.baseWidth = parseFloat(e.target.value);
+    if ($('popoverWidthVal')) $('popoverWidthVal').textContent = state.baseWidth + ' pt';
+    updateToolBadges();
   });
 
   document.querySelectorAll('.swatch').forEach(s => {
     s.addEventListener('click', e => {
       const hex = e.target.getAttribute('data-color');
       state.color = [1, 3, 5].map(i => parseInt(hex.substr(i, 2), 16) / 255);
-      $('colorPicker').value = hex;
+      if ($('colorPicker')) $('colorPicker').value = hex;
       document.querySelectorAll('.swatch').forEach(sw => sw.classList.remove('active'));
       e.target.classList.add('active');
     });
@@ -1488,60 +1640,71 @@ function bindUI() {
 
   $('btnRightPrev') && $('btnRightPrev').addEventListener('click', () => goToPage(state.rightSheet - 1, 'right'));
   $('btnRightNext') && $('btnRightNext').addEventListener('click', () => goToPage(state.rightSheet + 1, 'right'));
-
-async function checkWalRecovery() {
-  const invoke = getInvoke();
-  if (!invoke) return;
-  try {
-    const docInfo = await invoke('get_document_info');
-    if (docInfo && docInfo.strokes > 0) {
-      showToast("Restored unsaved strokes from crash journal", "info");
-    }
-  } catch (err) {
-    // Ignore WAL info error
-  }
 }
 
-  $('btnOpen').addEventListener('click', async () => {
+function handlePdfLoadSuccess(title, selectedPath, infos) {
+  if (!state.tabs.length) {
+    createTab(title, selectedPath, infos);
+  } else {
+    const cur = state.tabs.find(t => t.id === state.activeTabId);
+    if (cur) {
+      cur.title = title;
+      cur.pathStr = selectedPath;
+      cur.pageInfos = infos;
+      cur.strokes = [];
+      cur.selectedStrokes = [];
+      cur.undoStack = [];
+      cur.redoStack = [];
+      cur.leftSheet = 0;
+      cur.rightSheet = 0;
+      switchTab(cur.id);
+    } else {
+      createTab(title, selectedPath, infos);
+    }
+  }
+  if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
+  if ($('docInfo')) {
+    $('docInfo').innerHTML = `
+      <div>Loaded: ${title}</div>
+      <div>Pages: ${infos.length}</div>
+    `;
+  }
+  checkWalRecovery();
+}
+
+function attachOpenListeners() {
+  const triggerOpen = async () => {
     const invoke = getInvoke();
     if (invoke) {
       try {
-        let selectedPath = null;
-        if (window.__TAURI_PLUGIN_DIALOG__ && window.__TAURI_PLUGIN_DIALOG__.open) {
-          const res = await window.__TAURI_PLUGIN_DIALOG__.open({ filters: [{ name: 'PDF', extensions: ['pdf'] }] });
-          selectedPath = typeof res === 'string' ? res : (res && res.path);
-        } else {
-          const res = await invoke('plugin:dialog|open', {
-            multiple: false,
-            directory: false,
-            filters: [{ name: 'PDF', extensions: ['pdf'] }],
-          });
-          selectedPath = typeof res === 'string' ? res : (res && res.path);
+        const res = await invoke('open_pdf_dialog');
+        if (res && res[0]) {
+          const selectedPath = res[0];
+          const infos = res[1];
+          const title = selectedPath.split('\\').pop().split('/').pop();
+          handlePdfLoadSuccess(title, selectedPath, infos);
         }
-
-        if (selectedPath) {
-          const infos = await invoke('open_pdf', { pathStr: selectedPath });
-          state.pageInfos = infos;
-          state.strokes = [];
-          state.selectedStrokes = [];
-          state.undoStack = [];
-          state.redoStack = [];
-          tileCache.clear();
-          tileRenderError = null;
-          goToPage(0);
-          $('docInfo').innerHTML = `
-            <div>Loaded: ${selectedPath.split('\\').pop().split('/').pop()}</div>
-            <div>Pages: ${infos.length}</div>
-          `;
-          await checkWalRecovery();
-          return;
-        }
+        return;
       } catch (err) {
-        console.warn('[inkwell] Native dialog open failed, falling back to file picker:', err);
+        if (err === 'CANCELLED' || err === 'No file selected') return;
+        console.warn('[inkwell] Native open_pdf_dialog failed, trying file input:', err);
       }
     }
     $('pdfFileInput') && $('pdfFileInput').click();
-  });
+  };
+
+  const onOpenBtnClick = () => {
+    const invoke = getInvoke();
+    if (!invoke) {
+      $('pdfFileInput') && $('pdfFileInput').click();
+    } else {
+      triggerOpen();
+    }
+  };
+
+  $('btnHeaderOpen') && $('btnHeaderOpen').addEventListener('click', onOpenBtnClick);
+  $('btnWelcomeOpen') && $('btnWelcomeOpen').addEventListener('click', onOpenBtnClick);
+  $('btnOpen') && $('btnOpen').addEventListener('click', onOpenBtnClick);
 
   $('pdfFileInput') && $('pdfFileInput').addEventListener('change', async e => {
     const file = e.target.files && e.target.files[0];
@@ -1551,42 +1714,18 @@ async function checkWalRecovery() {
       const filePath = file.path || file.webkitRelativePath;
       if (filePath && invoke) {
         const infos = await invoke('open_pdf', { pathStr: filePath });
-        state.pageInfos = infos;
-        state.strokes = [];
-        state.selectedStrokes = [];
-        state.undoStack = [];
-        state.redoStack = [];
-        tileCache.clear();
-        tileRenderError = null;
-        goToPage(0);
-        $('docInfo').innerHTML = `
-          <div>Loaded: ${file.name}</div>
-          <div>Pages: ${infos.length}</div>
-        `;
-        await checkWalRecovery();
+        handlePdfLoadSuccess(file.name, filePath, infos);
         return;
       }
 
       const arrayBuf = await file.arrayBuffer();
       const bytes = Array.from(new Uint8Array(arrayBuf));
       if (bytes.length > 5 * 1024 * 1024) {
-        console.warn('[inkwell] Large PDF (>5 MB) sent via IPC bytes path — this may be slow or fail. Consider using file.path if available.');
+        console.warn('[inkwell] Large PDF (>5 MB) sent via IPC bytes path — this may be slow or fail.');
       }
       if (invoke) {
         const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
-        state.pageInfos = infos;
-        state.strokes = [];
-        state.selectedStrokes = [];
-        state.undoStack = [];
-        state.redoStack = [];
-        tileCache.clear();
-        tileRenderError = null;
-        goToPage(0);
-        $('docInfo').innerHTML = `
-          <div>Loaded: ${file.name}</div>
-          <div>Pages: ${infos.length}</div>
-        `;
-        await checkWalRecovery();
+        handlePdfLoadSuccess(file.name, null, infos);
         return;
       }
       showToast('Tauri IPC is unavailable in this environment.', 'warning');
@@ -1596,7 +1735,7 @@ async function checkWalRecovery() {
     }
   });
 
-  $('btnSave').addEventListener('click', async () => {
+  $('btnSave') && $('btnSave').addEventListener('click', async () => {
     const invoke = getInvoke();
     if (invoke) {
       try {
@@ -1608,121 +1747,168 @@ async function checkWalRecovery() {
     }
   });
 
-  // Command palette events
-  $('cmdPaletteInput') && $('cmdPaletteInput').addEventListener('input', e => {
-    renderCommandResults(e.target.value);
+  // Drag and Drop File Handlers
+  window.addEventListener('dragover', e => {
+    e.preventDefault();
+    if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
+    const card = document.querySelector('.welcome-card');
+    if (card) card.classList.add('drag-over');
   });
 
-  $('cmdPaletteModal') && $('cmdPaletteModal').addEventListener('click', e => {
-    if (e.target === $('cmdPaletteModal')) closeCommandPalette();
-  });
-
-  // Radial menu item events
-  document.querySelectorAll('.radial-item').forEach(item => {
-    item.addEventListener('click', e => {
-      e.stopPropagation();
-      const tool = item.getAttribute('data-tool');
-      const action = item.getAttribute('data-action');
-      if (tool) setTool(tool);
-      else if (action === 'undo') undo();
-      else if (action === 'palette') openCommandPalette();
-      hideRadialMenu();
-    });
-  });
-
-  window.addEventListener('click', e => {
-    if (!e.target.closest('#radialMenu')) hideRadialMenu();
-    if (!e.target.closest('#propPopover') && !e.target.closest('#btnProp')) {
-      $('propPopover') && $('propPopover').classList.add('hidden');
+  window.addEventListener('dragleave', e => {
+    if (e.clientX <= 0 || e.clientY <= 0 || e.relatedTarget === null) {
+      const card = document.querySelector('.welcome-card');
+      if (card) card.classList.remove('drag-over');
+      if (state.pageInfos && state.pageInfos.length > 0) {
+        if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
+      }
     }
   });
 
-  // Keyboard shortcuts
-  const SPRING_MAP = { e: 'eraser', l: 'laser' };
-  const TOOL_MAP = { p: 'pen', h: 'highlighter', r: 'ruler', q: 'rect', o: 'ellipse', v: 'lasso' };
-
-  window.addEventListener('keydown', e => {
-    if (!$('cmdPaletteModal').classList.contains('hidden')) {
-      if (e.key === 'Escape') { closeCommandPalette(); return; }
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        if (currentMatches.length) selectedCmdIndex = (selectedCmdIndex + 1) % currentMatches.length;
-        updatePaletteSelection();
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (currentMatches.length) selectedCmdIndex = (selectedCmdIndex - 1 + currentMatches.length) % currentMatches.length;
-        updatePaletteSelection();
-        return;
-      }
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        if (currentMatches[selectedCmdIndex]) {
-          currentMatches[selectedCmdIndex].action();
-          closeCommandPalette();
+  window.addEventListener('drop', async e => {
+    e.preventDefault();
+    const card = document.querySelector('.welcome-card');
+    if (card) card.classList.remove('drag-over');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    const file = files && files[0];
+    if (file && (file.type === 'application/pdf' || file.name.endsWith('.pdf'))) {
+      try {
+        const invoke = getInvoke();
+        const filePath = file.path || file.webkitRelativePath;
+        if (filePath && invoke) {
+          const infos = await invoke('open_pdf', { pathStr: filePath });
+          handlePdfLoadSuccess(file.name, filePath, infos);
+          return;
         }
-        return;
-      }
-      return;
-    }
-
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      if (state.selectedStrokes && state.selectedStrokes.length) {
-        e.preventDefault();
-        const deleted = [];
-        for (const s of state.selectedStrokes) {
-          if (!s.deleted) {
-            s.deleted = true;
-            deleted.push(s);
-          }
+        const arrayBuf = await file.arrayBuffer();
+        const bytes = Array.from(new Uint8Array(arrayBuf));
+        if (invoke) {
+          const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
+          handlePdfLoadSuccess(file.name, null, infos);
         }
-        state.selectedStrokes = [];
-        if (deleted.length) {
-          state.undoStack.push({ type: 'erase', strokes: deleted });
-          state.redoStack = [];
-          redrawAll();
-          clearWet();
-        }
-        return;
+      } catch (err) {
+        console.error('[inkwell] Drop error:', err);
+        showToast('Failed to load dropped PDF: ' + (err.message || err), 'error');
       }
-    }
-
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
-      e.preventDefault();
-      openCommandPalette();
-      return;
-    }
-
-    if (e.ctrlKey || e.metaKey) {
-      if (e.key === 'z') { e.preventDefault(); undo(); return; }
-      if (e.key === 'y' || (e.shiftKey && e.key === 'Z')) { e.preventDefault(); redo(); return; }
-      if (e.key === 's') { e.preventDefault(); $('btnSave').click(); return; }
-      if (e.key === 'o') { e.preventDefault(); $('btnOpen').click(); return; }
-      if (e.key === 'b') { e.preventDefault(); toggleSidebar(); return; }
-      return;
-    }
-
-    if (e.altKey) return;
-    if (e.repeat) return;
-    const k = e.key.toLowerCase();
-    if (SPRING_MAP[k] && !state.springKey) {
-      state.springKey = k;
-      state.prevTool = state.activeTool;
-      setTool(SPRING_MAP[k]);
-    } else if (TOOL_MAP[k]) {
-      setTool(TOOL_MAP[k]);
-    }
-  });
-
-  window.addEventListener('keyup', e => {
-    const k = e.key.toLowerCase();
-    if (state.springKey === k) {
-      state.springKey = null;
-      setTool(state.prevTool);
     }
   });
 }
+
+// Command palette events
+$('cmdPaletteInput') && $('cmdPaletteInput').addEventListener('input', e => {
+  renderCommandResults(e.target.value);
+});
+
+$('cmdPaletteModal') && $('cmdPaletteModal').addEventListener('click', e => {
+  if (e.target === $('cmdPaletteModal')) closeCommandPalette();
+});
+
+// Radial menu item events
+document.querySelectorAll('.radial-item').forEach(item => {
+  item.addEventListener('click', e => {
+    e.stopPropagation();
+    const tool = item.getAttribute('data-tool');
+    const action = item.getAttribute('data-action');
+    if (tool) setTool(tool);
+    else if (action === 'undo') undo();
+    else if (action === 'palette') openCommandPalette();
+    hideRadialMenu();
+  });
+});
+
+window.addEventListener('click', e => {
+  if (!e.target.closest('#radialMenu')) hideRadialMenu();
+  if (!e.target.closest('#propPopover') && !e.target.closest('#btnProp') && !e.target.closest('#btnDockAddPreset')) {
+    $('propPopover') && $('propPopover').classList.add('hidden');
+  }
+});
+
+// Keyboard shortcuts
+const SPRING_MAP = { e: 'eraser', l: 'laser' };
+const TOOL_MAP = { p: 'pen', h: 'highlighter', r: 'ruler', q: 'rect', o: 'ellipse', v: 'lasso' };
+
+window.addEventListener('keydown', e => {
+  const modal = $('cmdPaletteModal');
+  if (modal && !modal.classList.contains('hidden')) {
+    if (e.key === 'Escape') { closeCommandPalette(); return; }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (currentMatches.length) selectedCmdIndex = (selectedCmdIndex + 1) % currentMatches.length;
+      updatePaletteSelection();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (currentMatches.length) selectedCmdIndex = (selectedCmdIndex - 1 + currentMatches.length) % currentMatches.length;
+      updatePaletteSelection();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (currentMatches[selectedCmdIndex]) {
+        currentMatches[selectedCmdIndex].action();
+        closeCommandPalette();
+      }
+      return;
+    }
+    return;
+  }
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state.selectedStrokes && state.selectedStrokes.length) {
+      e.preventDefault();
+      const deleted = [];
+      for (const s of state.selectedStrokes) {
+        if (!s.deleted) {
+          s.deleted = true;
+          deleted.push(s);
+        }
+      }
+      state.selectedStrokes = [];
+      if (deleted.length) {
+        state.undoStack.push({ type: 'erase', strokes: deleted });
+        state.redoStack = [];
+        redrawAll();
+        clearWet();
+      }
+      return;
+    }
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+    e.preventDefault();
+    openCommandPalette();
+    return;
+  }
+
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'z') { e.preventDefault(); undo(); return; }
+    if (e.key === 'y' || (e.shiftKey && e.key === 'Z')) { e.preventDefault(); redo(); return; }
+    if (e.key === 's') { e.preventDefault(); $('btnSave') && $('btnSave').click(); return; }
+    if (e.key === 'o') { e.preventDefault(); $('btnHeaderOpen') && $('btnHeaderOpen').click(); return; }
+    if (e.key === 'b') { e.preventDefault(); toggleSidebar(); return; }
+    return;
+  }
+
+  if (e.altKey) return;
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (SPRING_MAP[k] && !state.springKey) {
+    state.springKey = k;
+    state.prevTool = state.activeTool;
+    setTool(SPRING_MAP[k]);
+  } else if (TOOL_MAP[k]) {
+    setTool(TOOL_MAP[k]);
+  }
+});
+
+window.addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if (state.springKey === k) {
+    state.springKey = null;
+    setTool(state.prevTool);
+  }
+});
 
 function attachPointerHandlers() {
   wetCanvas.addEventListener('pointerdown', onDown);
@@ -1738,7 +1924,8 @@ function attachPointerHandlers() {
     state.cur = null;
     state.streamline = null;
     clearWet();
-    $('toolbar').classList.remove('pen-down');
+    $('toolbar') && $('toolbar').classList.remove('pen-down');
+    $('floatingDock') && $('floatingDock').classList.remove('pen-down');
   });
   wetCanvas.addEventListener('contextmenu', e => {
     e.preventDefault();
@@ -1757,9 +1944,16 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   viewport.attachListeners($('stage'));
 
+  // Initialize startup state
+  createTab('Untitled.pdf', null, []);
+  if (!state.pageInfos || state.pageInfos.length === 0) {
+    if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
+  }
+
   resize();
   attachPointerHandlers();
   bindUI();
+  attachOpenListeners();
   setTool(state.activeTool);
   updatePageUI();
 

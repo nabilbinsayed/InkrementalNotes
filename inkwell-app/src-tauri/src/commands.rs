@@ -133,6 +133,29 @@ fn normalise_if_needed(bytes: Vec<u8>, state: &AppState) -> Result<(Vec<u8>, Opt
     }
 }
 
+use tauri_plugin_dialog::DialogExt;
+
+#[tauri::command]
+pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) -> Result<(String, Vec<PageInfo>), String> {
+    let file_option = tauri::async_runtime::spawn_blocking(move || {
+        window.dialog()
+            .file()
+            .add_filter("PDF Document", &["pdf"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(path) = file_option {
+        let path_buf = path.into_path().map_err(|e| e.to_string())?;
+        let path_str = path_buf.to_string_lossy().to_string();
+        let infos = open_pdf(path_str.clone(), state)?;
+        Ok((path_str, infos))
+    } else {
+        Err("CANCELLED".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<PageInfo>, String> {
     let path = PathBuf::from(&path_str);

@@ -22,7 +22,10 @@
 - **WAL Crash Safety**: Write-Ahead Logging (WAL) records every stroke instantly, recovering state seamlessly after ungraceful shutdowns.
 
 ### 🎨 Modern Workspace & UI
-- **Glassmorphism Floating Toolbar**: Context-aware floating bar with auto-hiding during pen strokes.
+- **3-Column Professional Layout**: Pinned left navigation rail (`#navRail`), collapsible secondary drawer (`#navDrawer`), and main viewport stage (`#stage`).
+- **Top Header Bar & PDF Toolbar**: Multi-tab document bar (`#tabBar`), primary "Open PDF" header button (`#btnHeaderOpen`), zoom controls, page selector pill, and export/share trigger.
+- **Canvas Welcome Dropzone**: Glassmorphic empty-state CTA overlay (`#welcomeDropzone`) with file drop support.
+- **Glassmorphic Inking Dock**: Context-aware floating bar (`#floatingDock`) with pen, highlighter, eraser, shapes, and lasso tools.
 - **Radial Menu**: 6-slot quick action radial menu accessible via right-click or stylus barrel button.
 - **Lasso Select & Editing**: Vector stroke selection bounding box with control handles, hotkey deletion (`Delete`/`Backspace`), and full `Ctrl+Z` Undo/Redo.
 - **Command Palette & Dual Pane**: Quick command execution modal (`Ctrl+Shift+P`), dual-pane split view, and blank page insertion.
