@@ -302,6 +302,7 @@ function scheduleRedrawTiles() {
 }
 
 async function redrawTiles() {
+  if (!tctx || !tilesCanvas) return;
   const drawEpoch = ++redrawTiles.epoch;
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.clearRect(0, 0, tilesCanvas.width, tilesCanvas.height);
@@ -475,6 +476,7 @@ function scheduleRedrawAll() {
 }
 
 function redrawAll() {
+  if (!dctx || !dryCanvas) return;
   dctx.setTransform(1, 0, 0, 1, 0, 0);
   dctx.clearRect(0, 0, dryCanvas.width, dryCanvas.height);
   dctx.scale(state.dpr, state.dpr);
@@ -491,6 +493,7 @@ function redrawAll() {
 }
 
 function drawCommittedStroke(stroke) {
+  if (!dctx) return;
   for (const pane of visiblePanes()) {
     if (stroke.sheet !== paneSheet(pane)) continue;
     dctx.save();
@@ -504,6 +507,7 @@ function drawCommittedStroke(stroke) {
 }
 
 function clearWet() {
+  if (!wctx || !wetCanvas) return;
   wctx.setTransform(1, 0, 0, 1, 0, 0);
   wctx.clearRect(0, 0, wetCanvas.width, wetCanvas.height);
   wctx.scale(state.dpr, state.dpr);
@@ -676,6 +680,7 @@ function eraseStrokesAt(e) {
 
 // ---- consume (wet layer drawing) ----
 function consume(e) {
+  if (!wctx) return;
   if (state.activeTool === 'laser') {
     const [wx, wy] = localXY(e, state.drawingPane);
     state.laserPos = [wx, wy];
@@ -1447,7 +1452,11 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
 }
 
 function switchTab(tabId) {
-  if (state.activeTabId) {
+  // Only save the outgoing tab's view state when actually switching to a
+  // DIFFERENT tab. When a tab is refreshed/reused in place (e.g. loading a
+  // PDF into the existing tab), saving here would clobber the new data — e.g.
+  // overwriting the just-loaded pageInfos with the stale global state.
+  if (state.activeTabId && tabId !== state.activeTabId) {
     const curTab = state.tabs.find(t => t.id === state.activeTabId);
     if (curTab) {
       curTab.pageInfos = state.pageInfos;
@@ -2098,13 +2107,18 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   viewport.attachListeners($('stage'));
 
+  // Create the canvas backing stores + 2D contexts FIRST. Without this,
+  // createTab() -> switchTab() -> redrawAll() would call dctx.setTransform on
+  // an undefined context and throw, aborting the rest of startup so no event
+  // handlers were ever bound (buttons dead, PDFs never load).
+  resize();
+
   // Initialize startup state
   createTab('Untitled.pdf', null, []);
   if (!state.pageInfos || state.pageInfos.length === 0) {
     if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
   }
 
-  resize();
   attachPointerHandlers();
   bindUI();
   attachOpenListeners();
