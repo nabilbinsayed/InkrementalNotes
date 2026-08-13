@@ -490,7 +490,7 @@ fn one_sided(
     let (h1, h2) = (t1 - t0, t2 - t0);
     let den = h1 * h2 * (h2 - h1);
     if den.abs() < 1e-12 {
-        let d = (t1 - t0).max(1e-9);
+        let d = if (t1 - t0).abs() < 1e-9 { 1e-9 } else { t1 - t0 };
         return ((p1.0 - p0.0) / d, (p1.1 - p0.1) / d);
     }
     let f = |a: f64, b: f64, c: f64| {

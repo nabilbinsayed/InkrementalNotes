@@ -110,11 +110,12 @@ impl Document {
     }
 
     pub fn insert_sheet(&mut self, index: usize) {
-        let sh = Sheet::blank();
-        if index <= self.sheets.len() {
-            self.sheets.insert(index, sh);
-        } else {
-            self.sheets.push(sh);
+        let insert_at = index.min(self.sheets.len());
+        self.sheets.insert(insert_at, Sheet::bounded(insert_at));
+        for (i, sheet) in self.sheets.iter_mut().enumerate() {
+            if let SheetKind::BoundedPage { ref mut source_pdf_page } = sheet.kind {
+                *source_pdf_page = i;
+            }
         }
     }
 

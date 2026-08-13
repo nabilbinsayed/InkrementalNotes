@@ -44,8 +44,37 @@
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
       </button>
 
-      <button id="btnRailMore" class="rail-btn" title="More Options" aria-label="More options menu">
+      <button id="btnRailMore" class="rail-btn" title="More Options (Quick Tools)" aria-label="More options menu">
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+      </button>
+    </div>
+
+    <!-- More Options Floating Quick Menu -->
+    <div id="moreOptionsMenu" class="more-options-menu hidden" role="menu">
+      <div class="more-menu-header">Quick Actions</div>
+      <button id="btnMoreNewNote" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New Whiteboard</span>
+        <span class="more-shortcut">Ctrl+N</span>
+      </button>
+      <button id="btnMoreAddPage" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        <span>Insert Blank Page</span>
+      </button>
+      <button id="btnMoreClearInk" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        <span>Clear Page Ink</span>
+      </button>
+      <div class="more-menu-divider"></div>
+      <button id="btnMorePalette" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span>Command Palette</span>
+        <span class="more-shortcut">Ctrl+K</span>
+      </button>
+      <button id="btnMoreFullscreen" class="more-menu-item">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        <span>Fullscreen Mode</span>
+        <span class="more-shortcut">F11</span>
       </button>
     </div>
 
@@ -123,20 +152,71 @@
 
     <!-- Document Info Drawer View -->
     <div id="drawerDocInfo" class="drawer-content hidden">
-      <div class="drawer-section-heading">Document Metadata</div>
-      <div id="docInfo" class="info-box">
-        <div>No document loaded</div>
+      <div class="doc-info-card">
+        <div class="doc-card-header">
+          <div class="doc-file-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <div class="doc-header-meta">
+            <h4 id="docInfoTitle" class="doc-title-text">Untitled.pdf</h4>
+            <span class="doc-format-pill">PDF 1.7 • Vector Native</span>
+          </div>
+        </div>
+
+        <div class="doc-stats-grid">
+          <div class="doc-stat-item">
+            <span class="stat-label">Total Pages</span>
+            <span id="docStatPages" class="stat-value">1</span>
+          </div>
+          <div class="doc-stat-item">
+            <span class="stat-label">Vector Strokes</span>
+            <span id="docStatStrokes" class="stat-value">0</span>
+          </div>
+          <div class="doc-stat-item">
+            <span class="stat-label">Current Page</span>
+            <span id="docStatCurrentPage" class="stat-value">Page 1</span>
+          </div>
+          <div class="doc-stat-item">
+            <span class="stat-label">Format</span>
+            <span id="docStatDimensions" class="stat-value">A4 Portrait</span>
+          </div>
+        </div>
       </div>
-      <div class="drawer-actions-grid" style="margin-top:16px;">
-        <button id="btnOpen" class="btn btn-secondary" aria-label="Open PDF file">📂 Open PDF</button>
-        <button id="btnSave" class="btn btn-secondary" aria-label="Save PDF file">💾 Save PDF</button>
-        <button id="btnInsertBlank" class="btn btn-secondary" aria-label="Insert blank page">📄 Insert Page</button>
+
+      <div class="drawer-section-heading">Document Quick Actions</div>
+      <div class="doc-actions-stack">
+        <button id="btnDocInfoExport" class="btn-doc-action primary">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <span>Save & Export PDF</span>
+        </button>
+        <button id="btnDocInfoInsertPage" class="btn-doc-action">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+          <span>Insert Blank Page</span>
+        </button>
+        <button id="btnDocInfoNewWhiteboard" class="btn-doc-action">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Start Blank Whiteboard</span>
+        </button>
+        <button id="btnDocInfoClearInk" class="btn-doc-action danger">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <span>Clear Page Ink</span>
+        </button>
       </div>
-      <div class="drawer-section-heading" style="margin-top:18px;">Input Pipeline Stats</div>
-      <div id="inputStats" class="info-box">
-        <div>Pointer: --</div>
-        <div>Samples: 0</div>
-        <div>Strokes: 0</div>
+
+      <div class="drawer-section-heading">Hardware & Diagnostics</div>
+      <div class="diagnostics-card">
+        <div class="diag-row">
+          <span class="diag-key">Active Pointer</span>
+          <span id="diagPointerType" class="diag-badge">Stylus (Pen)</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Crash WAL Engine</span>
+          <span class="diag-badge green">Healthy (Fsynced)</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Sidecar Stream</span>
+          <span class="diag-badge">/Inkw_Doc Stream</span>
+        </div>
       </div>
     </div>
 
@@ -209,8 +289,12 @@
         <button id="btnNavForward" class="header-icon-btn" title="Forward in navigation history" aria-label="Forward">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
         </button>
-        <button id="btnHeaderOpen" class="btn-primary-accent" title="Open PDF File (Ctrl+O)" aria-label="Open PDF File">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
+        <button id="btnHeaderNewNote" class="btn-primary-accent" title="Start New Blank Whiteboard (Ctrl+N)" aria-label="New Whiteboard">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          <span>New Note</span>
+        </button>
+        <button id="btnHeaderOpen" class="btn-secondary-pill" title="Open PDF File (Ctrl+O)" aria-label="Open PDF File">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
           <span>Open PDF</span>
         </button>
       </div>
@@ -273,9 +357,10 @@
 
       <!-- Right Header Actions (Upload/Share & Document Status) -->
       <div class="header-right">
-        <button id="btnExportShare" class="btn-share-pill" title="Export / Save PDF">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
-          <span>Export</span>
+        <button id="btnExportShare" class="btn-share-pill" title="Save Document (Ctrl+S)" aria-label="Save PDF">
+          <svg class="export-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          <div class="btn-spinner hidden"></div>
+          <span class="export-text">Save PDF</span>
         </button>
 
         <div id="docStatusBadge" class="doc-status-badge" title="Vector Engine & WAL Journal Active">
@@ -290,21 +375,30 @@
       <!-- Welcome / Dropzone CTA Overlay -->
       <div id="welcomeDropzone" class="welcome-dropzone">
         <div class="welcome-card">
-          <div class="welcome-icon">📂</div>
-          <h2>No PDF Document Open</h2>
-          <p>Drag and drop a PDF file anywhere on this window,<br>or click the button below to browse your files.</p>
-          <button id="btnWelcomeOpen" class="btn-primary-accent btn-hero" aria-label="Open PDF Document">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
-            <span>Browse PDF Files</span>
-          </button>
+          <div class="welcome-icon">🖋️</div>
+          <h2>Welcome to Inkwell</h2>
+          <p>Create a fresh blank whiteboard or open an existing PDF to annotate with ultra-low latency vector ink.</p>
+          <div class="welcome-buttons-row">
+            <button id="btnWelcomeNewNote" class="btn-primary-accent btn-hero" aria-label="Start Blank Whiteboard">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+              <span>New Whiteboard</span>
+            </button>
+            <button id="btnWelcomeOpen" class="btn-secondary-pill btn-hero" aria-label="Open PDF Document">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
+              <span>Browse PDF Files</span>
+            </button>
+          </div>
         </div>
       </div>
 
       <span id="evtName" style="display:none">pointerrawupdate</span>
       <div id="hint" style="display:none"></div>
 
-      <!-- Out-of-bounds Ink Warning Banner -->
-      <div id="oobBanner" class="oob-banner hidden">⚠️ Ink drawn outside page boundary</div>
+      <!-- Interactive Text Notes Overlay Container -->
+      <div id="textNotesContainer" class="text-notes-container"></div>
+
+      <!-- Split View Divider Overlay -->
+      <div id="splitDivider" class="split-divider hidden"></div>
 
       <!-- Tool Property Popover -->
       <div id="propPopover" class="popover hidden">
@@ -403,61 +497,58 @@
 
       <!-- 4. Bottom Floating Inking & Annotation Dock -->
       <div id="floatingDock" class="floating-dock" aria-label="Annotation Dock">
-        <button id="btnDockPan" class="dock-btn active" title="Pan / Hand tool (H)">
+        <button id="btnDockPan" class="dock-btn" title="Pan / Hand Tool (H / Hold Space)" aria-label="Pan tool">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/><path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 0 1 2 2v4a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+          <span class="dock-shortcut">H</span>
         </button>
 
-        <button id="btnDockLasso" class="dock-btn" title="Lasso Select (V)">
+        <button id="btnDockLasso" class="dock-btn" title="Lasso Select & Erase (V)" aria-label="Lasso tool">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="3 3" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+          <span class="dock-shortcut">V</span>
         </button>
 
         <div class="dock-divider"></div>
 
-        <button id="btnDockPen" class="dock-btn red-tip" title="Gel / Fountain Pen (P)">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><circle cx="11" cy="11" r="2" fill="#dc2626"/></svg>
-          <span class="tool-badge">1</span>
+        <button id="btnDockPen" class="dock-btn red-tip active" title="Fountain / Gel Pen (P)" aria-label="Pen tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><circle cx="11" cy="11" r="2" fill="#ef4444"/></svg>
+          <span class="dock-shortcut">P</span>
         </button>
 
-        <button id="btnDockHighlighter" class="dock-btn yellow-tip" title="Highlighter (H)">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#ca8a04" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 7-3-3a2.5 2.5 0 0 0-3.5 0L7 12l5 5 8.5-8.5a2.5 2.5 0 0 0 0-3.5z"/></svg>
-          <span class="tool-badge">18</span>
+        <button id="btnDockHighlighter" class="dock-btn yellow-tip" title="Translucent Highlighter (M)" aria-label="Highlighter tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 7-3-3a2.5 2.5 0 0 0-3.5 0L7 12l5 5 8.5-8.5a2.5 2.5 0 0 0 0-3.5z"/></svg>
+          <span class="dock-shortcut">M</span>
         </button>
 
-        <button id="btnDockEraser" class="dock-btn" title="Eraser (E)">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l12.4-12.4a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L9.7 22.3a1 1 0 0 1-1.4 0L7 21z"/><path d="M22 21H7"/></svg>
-          <span class="tool-badge">10</span>
+        <button id="btnDockEraser" class="dock-btn" title="Vector Eraser (E)" aria-label="Eraser tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l12.4-12.4a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L9.7 22.3a1 1 0 0 1-1.4 0L7 21z"/><path d="M22 21H7"/></svg>
+          <span class="dock-shortcut">E</span>
         </button>
 
-        <button id="btnDockText" class="dock-btn brown-bg" title="Text Box">
-          <span class="text-icon-label">T</span>
-          <span class="tool-badge brown">12</span>
+        <button id="btnDockLaser" class="dock-btn laser-tool" title="Laser Pointer (L)" aria-label="Laser pointer tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="#ec4899" stroke-width="2"><circle cx="12" cy="12" r="3" fill="#ec4899"/><circle cx="12" cy="12" r="8" stroke-dasharray="2 4"/></svg>
+          <span class="dock-shortcut">L</span>
         </button>
 
-        <button id="btnDockTextHighlight" class="dock-btn yellow-bg" title="Text Highlight">
-          <span class="text-icon-label yellow">T</span>
-        </button>
-
-        <button id="btnDockShapes" class="dock-btn" title="Shapes (Q/O/R)">
+        <button id="btnDockShapes" class="dock-btn" title="Shapes: Rect / Ellipse / Line (U)" aria-label="Shapes tool">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+          <span class="dock-shortcut">U</span>
         </button>
 
-        <button id="btnDockComment" class="dock-btn" title="Add Note / Comment">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        </button>
-
-        <button id="btnDockStickers" class="dock-btn" title="Stickers & Attachments">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-          <span class="tool-badge">3</span>
+        <button id="btnDockText" class="dock-btn" title="Text Note (T)" aria-label="Text note tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>
+          <span class="dock-shortcut">T</span>
         </button>
 
         <div class="dock-divider"></div>
 
-        <button id="btnDockAddPreset" class="dock-btn" title="Add Preset Slot">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        <button id="btnDockAddPreset" class="dock-btn" title="Ink Color & Width Palette (C)" aria-label="Ink properties palette">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
+          <span class="dock-shortcut">C</span>
         </button>
 
-        <button id="btnDockStylusOptions" class="dock-btn" title="Stylus & Pointer Settings">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 7 7-9 9-7 1 1-7 8-8z"/><path d="m15 5 4 4"/></svg>
+        <button id="btnDockStylusOptions" class="dock-btn" title="Settings & Calibration Drawer (S)" aria-label="Settings drawer">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span class="dock-shortcut">S</span>
         </button>
       </div>
     </div>
@@ -520,16 +611,57 @@
 </div>
 
 <!-- Radial Quick Menu -->
-<div id="radialMenu" class="radial-menu hidden">
+<div id="radialMenu" class="radial-menu hidden" role="menu" aria-label="Quick Action Radial Menu">
+  <div class="radial-backdrop-disc"></div>
   <div class="radial-center">
+    <div class="radial-center-icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/></svg>
+    </div>
+  </div>
+  <div id="radialLabelBadge" class="radial-label-badge">
     <span id="radialLabel">Inkwell</span>
   </div>
-  <div class="radial-item" data-tool="pen" style="--angle: 0deg;">🖊️<span class="tip">Pen</span></div>
-  <div class="radial-item" data-tool="highlighter" style="--angle: 60deg;">🖍️<span class="tip">Highlighter</span></div>
-  <div class="radial-item" data-tool="eraser" style="--angle: 120deg;">🧹<span class="tip">Eraser</span></div>
-  <div class="radial-item" data-tool="lasso" style="--angle: 180deg;">⬚<span class="tip">Lasso</span></div>
-  <div class="radial-item" data-action="undo" style="--angle: 240deg;">↩️<span class="tip">Undo</span></div>
-  <div class="radial-item" data-action="palette" style="--angle: 300deg;">🔍<span class="tip">Palette</span></div>
+  <button class="radial-item" data-tool="pen" style="--angle: 0deg;" title="Pen (P)" aria-label="Pen tool">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/><circle cx="11" cy="11" r="2" fill="#ef4444"/></svg>
+    <span class="radial-shortcut">P</span>
+    <span class="tip">Pen</span>
+  </button>
+  <button class="radial-item" data-tool="highlighter" style="--angle: 60deg;" title="Highlighter (M)" aria-label="Highlighter tool">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 7-3-3a2.5 2.5 0 0 0-3.5 0L7 12l5 5 8.5-8.5a2.5 2.5 0 0 0 0-3.5z"/></svg>
+    <span class="radial-shortcut">M</span>
+    <span class="tip">Highlighter</span>
+  </button>
+  <button class="radial-item" data-tool="eraser" style="--angle: 120deg;" title="Eraser (E)" aria-label="Eraser tool">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f43f5e" stroke-width="2"><path d="m7 21-4.3-4.3a1 1 0 0 1 0-1.4l12.4-12.4a1 1 0 0 1 1.4 0l5.6 5.6a1 1 0 0 1 0 1.4L9.7 22.3a1 1 0 0 1-1.4 0L7 21z"/><path d="M22 21H7"/></svg>
+    <span class="radial-shortcut">E</span>
+    <span class="tip">Eraser</span>
+  </button>
+  <button class="radial-item" data-tool="lasso" style="--angle: 180deg;" title="Lasso (V)" aria-label="Lasso tool">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" stroke-dasharray="3 3" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+    <span class="radial-shortcut">V</span>
+    <span class="tip">Lasso</span>
+  </button>
+  <button class="radial-item" data-action="undo" style="--angle: 240deg;" title="Undo (Ctrl+Z)" aria-label="Undo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a855f7" stroke-width="2"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>
+    <span class="radial-shortcut">Z</span>
+    <span class="tip">Undo</span>
+  </button>
+  <button class="radial-item" data-action="palette" style="--angle: 300deg;" title="Command Palette (Ctrl+Shift+P)" aria-label="Command Palette">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    <span class="radial-shortcut">⌘K</span>
+    <span class="tip">Palette</span>
+  </button>
+</div>
+
+<!-- Save Progress Overlay -->
+<div id="saveProgressOverlay" class="save-progress-overlay hidden" aria-live="polite" role="status">
+  <div class="save-progress-card">
+    <div class="save-spinner"></div>
+    <div class="save-progress-info">
+      <span class="save-progress-title">Saving PDF</span>
+      <span id="saveProgressMsg" class="save-progress-msg">Writing vector ink layers...</span>
+    </div>
+  </div>
 </div>
 
 <!-- Toast Container -->

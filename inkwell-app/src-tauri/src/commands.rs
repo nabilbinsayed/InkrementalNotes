@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use std::path::{Path, PathBuf};
 use pdfium_render::prelude::*;
-use inkwell_core::{Document, StrokeBuilder, ToolKind, Brush, PdfFile, wal::{atomic_write, Wal, WalEntry}};
+use inkwell_core::{Document, Sample, Stroke, ToolKind, Brush, PdfFile, SidecarStatus, wal::{atomic_write, Wal, WalEntry}};
 
 fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
     let (tx, rx) = std::sync::mpsc::channel::<WalOp>();
@@ -47,12 +47,32 @@ pub struct PageInfo {
     pub height_pt: f64,
 }
 
-/// Result of opening a PDF: page dimensions plus how many strokes were
-/// recovered from the crash-recovery Write-Ahead Log (if any).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontendSample {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub p: f64,
+    pub t: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontendStroke {
+    pub id: String,
+    pub kind: String,
+    pub rgb: [f64; 3],
+    pub base_width: f64,
+    pub points: Vec<FrontendSample>,
+    pub sheet: usize,
+    pub deleted: bool,
+}
+
+/// Result of opening a PDF: page dimensions plus recovered/loaded strokes.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenPdfResult {
     pub page_infos: Vec<PageInfo>,
     pub recovered_strokes: usize,
+    pub loaded_strokes: Vec<FrontendStroke>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +81,35 @@ pub struct RawSampleInput {
     pub y: f64,
     pub pressure: f64,
     pub t_ms: f64,
+}
+
+fn extract_frontend_strokes(doc: &Document) -> Vec<FrontendStroke> {
+    let mut out = Vec::new();
+    for (sheet_idx, sheet) in doc.sheets.iter().enumerate() {
+        for stroke in sheet.strokes() {
+            let kind_str = match stroke.kind {
+                ToolKind::Highlighter => "highlighter",
+                ToolKind::Pen => "pen",
+            };
+            let points = stroke.samples.iter().map(|s| FrontendSample {
+                x: s.x,
+                y: s.y,
+                w: stroke.brush.width_for(s.p),
+                p: s.p,
+                t: s.t,
+            }).collect();
+            out.push(FrontendStroke {
+                id: stroke.id_hex(),
+                kind: kind_str.to_string(),
+                rgb: stroke.rgb,
+                base_width: stroke.brush.base_width,
+                points,
+                sheet: sheet_idx,
+                deleted: false,
+            });
+        }
+    }
+    out
 }
 
 /// Extract page count and dimensions from PDF bytes using the cached PDFium instance.
@@ -174,7 +223,17 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
     let n_pages = page_infos.len();
 
-    let mut doc = Document::for_pdf(n_pages);
+    let mut doc = match inkwell_core::pdf::read_sidecar(&valid_bytes) {
+        Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
+            eprintln!("[inkwell] Loaded sidecar with {} strokes from {:?}", d.stroke_count(), path);
+            let mut d = d;
+            while d.sheets.len() < n_pages {
+                d.sheets.push(inkwell_core::doc::Sheet::bounded(d.sheets.len()));
+            }
+            d
+        }
+        _ => Document::for_pdf(n_pages),
+    };
 
     // Replay WAL entries if journal exists from a previous crash
     let wp = wal_path_for(&path);
@@ -190,6 +249,8 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
             }
         }
     }
+
+    let loaded_strokes = extract_frontend_strokes(&doc);
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
@@ -207,8 +268,39 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF: {:?} — {} pages", path, n_pages);
-    Ok(OpenPdfResult { page_infos, recovered_strokes })
+    eprintln!("[inkwell] Opened PDF: {:?} — {} pages, {} loaded strokes", path, n_pages, loaded_strokes.len());
+    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes })
+}
+
+#[tauri::command]
+pub async fn create_blank_document(
+    title: Option<String>,
+    width_pt: Option<f64>,
+    height_pt: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<OpenPdfResult, String> {
+    let doc_title = title.unwrap_or_else(|| "Untitled Whiteboard.pdf".to_string());
+    let w = width_pt.unwrap_or(841.89);
+    let h = height_pt.unwrap_or(595.28);
+
+    let pdf_bytes = {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            use pdfium_render::prelude::*;
+            let mut doc = pdfium.create_new_pdf().map_err(|e| e.to_string())?;
+            doc.pages_mut().create_page_at_index(
+                PdfPagePaperSize::Custom(PdfPoints::new(w as f32), PdfPoints::new(h as f32)),
+                0,
+            ).map_err(|e| e.to_string())?;
+            doc.save_to_bytes().map_err(|e| e.to_string())?
+        } else {
+            format!(
+"%PDF-1.7\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources <<>> >>\nendobj\nxref\n0 4\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n215\n%%EOF\n", w, h
+            ).into_bytes()
+        }
+    };
+
+    open_pdf_bytes(doc_title, pdf_bytes, state).await
 }
 
 #[tauri::command]
@@ -232,7 +324,17 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
     let n_pages = page_infos.len();
 
-    let mut doc = Document::for_pdf(n_pages);
+    let mut doc = match inkwell_core::pdf::read_sidecar(&valid_bytes) {
+        Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
+            eprintln!("[inkwell] Loaded sidecar with {} strokes from bytes ({})", d.stroke_count(), name);
+            let mut d = d;
+            while d.sheets.len() < n_pages {
+                d.sheets.push(inkwell_core::doc::Sheet::bounded(d.sheets.len()));
+            }
+            d
+        }
+        _ => Document::for_pdf(n_pages),
+    };
 
     let wp = wal_path_for(&path);
     let mut recovered_strokes = 0usize;
@@ -247,6 +349,8 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
             }
         }
     }
+
+    let loaded_strokes = extract_frontend_strokes(&doc);
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
@@ -263,8 +367,8 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages", name, n_pages);
-    Ok(OpenPdfResult { page_infos, recovered_strokes })
+    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages, {} loaded strokes", name, n_pages, loaded_strokes.len());
+    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes })
 }
 
 #[tauri::command]
@@ -424,12 +528,19 @@ pub async fn commit_stroke(
         gamma: 1.0,
     };
 
-    let mut b = StrokeBuilder::new(stroke_id, tool_kind, [rgb[0], rgb[1], rgb[2]], brush, true);
-    for s in samples {
-        b.push(s.x, s.y, s.pressure, s.t_ms);
-    }
+    let pts: Vec<Sample> = samples
+        .into_iter()
+        .map(|s| Sample::new(s.x, s.y, s.pressure.clamp(0.0, 1.0), s.t_ms))
+        .collect();
 
-    let stroke = b.finish(0.3);
+    let stroke = Stroke {
+        id: stroke_id,
+        kind: tool_kind,
+        rgb: [rgb[0], rgb[1], rgb[2]],
+        brush,
+        samples: pts,
+    };
+
     doc.push_stroke(sheet, stroke.clone());
 
     // Offload WAL append to background worker thread channel.
@@ -469,7 +580,7 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
         state.pdf_path.lock().unwrap().clone().ok_or("No target file path")?
     };
 
-    let (norm_bytes, mut pdf_file) = match PdfFile::open(input_bytes.clone()) {
+    let (_norm_bytes, mut pdf_file) = match PdfFile::open(input_bytes.clone()) {
         Ok(f) => (input_bytes.clone(), f),
         Err(e) => {
             eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
@@ -492,10 +603,11 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
     atomic_write(&target_path, &final_bytes)
         .map_err(|e| format!("Failed atomic save to {:?}: {e}", target_path))?;
 
-    // Update in-memory state with normalised base bytes
+    // Update in-memory state with the written PDF bytes
     drop(bytes_guard);
     drop(doc_guard);
-    *state.pdf_bytes.lock().unwrap() = Some(norm_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(final_bytes);
+    *state.pdf_path.lock().unwrap() = Some(target_path.clone());
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Truncate);
@@ -513,6 +625,7 @@ pub async fn save_pdf_dialog(
         window.dialog()
             .file()
             .add_filter("PDF Document", &["pdf"])
+            .set_file_name("Untitled.pdf")
             .blocking_save_file()
     })
     .await
@@ -593,6 +706,27 @@ pub async fn insert_blank_page(
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
     doc.insert_sheet(index);
+
+    // If we have base PDF bytes, insert a blank page into the PDF bytes as well
+    let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    if let Some(bytes) = orig_bytes_opt {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            if let Ok(mut pdf_doc) = pdfium.load_pdf_from_byte_slice(&bytes, None) {
+                use pdfium_render::prelude::*;
+                let w = PdfPoints::new(width_pt as f32);
+                let h = PdfPoints::new(height_pt as f32);
+                let target_idx = (index as i32).min(pdf_doc.pages().len());
+                let _ = pdf_doc.pages_mut().create_page_at_index(
+                    PdfPagePaperSize::Custom(w, h),
+                    target_idx,
+                );
+                if let Ok(new_bytes) = pdf_doc.save_to_bytes() {
+                    *state.pdf_bytes.lock().unwrap() = Some(new_bytes);
+                }
+            }
+        }
+    }
 
     Ok(PageInfo {
         page_index: index,

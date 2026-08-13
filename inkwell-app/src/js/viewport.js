@@ -135,6 +135,9 @@ class ViewportManager {
     this.updateStageRect();
     window.addEventListener('resize', () => this.updateStageRect());
     window.addEventListener('scroll', () => this.updateStageRect(), { passive: true });
+    if (typeof ResizeObserver !== 'undefined' && element) {
+      new ResizeObserver(() => this.updateStageRect()).observe(element);
+    }
 
     element.addEventListener('wheel', e => {
       if (!this.stageRect) this.updateStageRect();

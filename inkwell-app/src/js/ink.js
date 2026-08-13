@@ -129,10 +129,54 @@ function addSegmentToPath(path, a, b) {
   path.arc(b.x, b.y, hb, 0, Math.PI * 2);
 }
 
+function getChiselPath2D(rawPts, baseH = 16.0) {
+  if (typeof Path2D === 'undefined' || !rawPts || !rawPts.length) return null;
+  const path = new Path2D();
+  const halfH = (baseH || 16.0) / 2;
+
+  if (rawPts.length === 1) {
+    const p = rawPts[0];
+    path.rect(p.x - 3, p.y - halfH, 6, halfH * 2);
+    return path;
+  }
+
+  const pts = chaikinSubdivide(rawPts, 1);
+  if (pts.length < 2) return null;
+
+  // Top flat/smooth edge
+  path.moveTo(pts[0].x, pts[0].y - halfH);
+  for (let i = 1; i < pts.length; i++) {
+    const mx = (pts[i - 1].x + pts[i].x) / 2;
+    const my = (pts[i - 1].y + pts[i].y) / 2 - halfH;
+    path.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y - halfH, mx, my);
+  }
+  const last = pts[pts.length - 1];
+  path.lineTo(last.x, last.y - halfH);
+
+  // Vertical flat end cap
+  path.lineTo(last.x, last.y + halfH);
+
+  // Bottom flat/smooth edge
+  for (let i = pts.length - 1; i > 0; i--) {
+    const mx = (pts[i].x + pts[i - 1].x) / 2;
+    const my = (pts[i].y + pts[i - 1].y) / 2 + halfH;
+    path.quadraticCurveTo(pts[i].x, pts[i].y + halfH, mx, my);
+  }
+  path.lineTo(pts[0].x, pts[0].y + halfH);
+
+  // Vertical flat start cap
+  path.closePath();
+  return path;
+}
+
 function getPath2D(stroke) {
   if (typeof Path2D === 'undefined') return null;
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return null;
+
+  if (stroke.kind === 'highlighter') {
+    return getChiselPath2D(rawPts, stroke.base_width || stroke.baseWidth || 16.0);
+  }
 
   const path = new Path2D();
   if (rawPts.length === 1) {
@@ -305,6 +349,14 @@ function quadraticAt(p0, control, p1, t) {
 function drawStroke(ctx, stroke) {
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return;
+
+  const isHighlighter = stroke.kind === 'highlighter';
+  if (isHighlighter) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.globalAlpha = 0.42;
+  }
+
   ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
 
   if (!stroke._cachedPath2D && typeof Path2D !== 'undefined') {
@@ -313,11 +365,28 @@ function drawStroke(ctx, stroke) {
 
   if (stroke._cachedPath2D) {
     ctx.fill(stroke._cachedPath2D);
+    if (isHighlighter) ctx.restore();
     return;
   }
 
-  if (rawPts.length === 1) { drawDot(ctx, rawPts[0]); return; }
-  if (rawPts.length === 2) { drawDot(ctx, rawPts[0]); drawSegment(ctx, rawPts[0], rawPts[1]); return; }
+  if (isHighlighter) {
+    const p2d = getChiselPath2D(rawPts, stroke.base_width || stroke.baseWidth || 16.0);
+    if (p2d) ctx.fill(p2d);
+    ctx.restore();
+    return;
+  }
+
+  if (rawPts.length === 1) {
+    drawDot(ctx, rawPts[0]);
+    if (isHighlighter) ctx.restore();
+    return;
+  }
+  if (rawPts.length === 2) {
+    drawDot(ctx, rawPts[0]);
+    drawSegment(ctx, rawPts[0], rawPts[1]);
+    if (isHighlighter) ctx.restore();
+    return;
+  }
 
   const points = chaikinSubdivide(rawPts);
   let pPrev = points[0];
@@ -346,6 +415,8 @@ function drawStroke(ctx, stroke) {
     drawSegment(ctx, pPrev, pCurr);
     pPrev = pCurr;
   }
+
+  if (isHighlighter) ctx.restore();
 }
 
 window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D };

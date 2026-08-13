@@ -42,6 +42,7 @@ fn main() {
             commands::open_pdf,
             commands::open_pdf_dialog,
             commands::open_pdf_bytes,
+            commands::create_blank_document,
             commands::render_tile,
             commands::commit_stroke,
             commands::delete_stroke,
