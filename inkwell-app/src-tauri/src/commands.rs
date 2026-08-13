@@ -47,6 +47,14 @@ pub struct PageInfo {
     pub height_pt: f64,
 }
 
+/// Result of opening a PDF: page dimensions plus how many strokes were
+/// recovered from the crash-recovery Write-Ahead Log (if any).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OpenPdfResult {
+    pub page_infos: Vec<PageInfo>,
+    pub recovered_strokes: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RawSampleInput {
     pub x: f64,
@@ -136,7 +144,7 @@ fn normalise_if_needed(bytes: Vec<u8>, state: &AppState) -> Result<(Vec<u8>, Opt
 use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
-pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) -> Result<(String, Vec<PageInfo>), String> {
+pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) -> Result<(String, OpenPdfResult), String> {
     let file_option = tauri::async_runtime::spawn_blocking(move || {
         window.dialog()
             .file()
@@ -149,15 +157,15 @@ pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) 
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        let infos = open_pdf(path_str.clone(), state)?;
-        Ok((path_str, infos))
+        let result = open_pdf(path_str.clone(), state).await?;
+        Ok((path_str, result))
     } else {
         Err("CANCELLED".to_string())
     }
 }
 
 #[tauri::command]
-pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<PageInfo>, String> {
+pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<OpenPdfResult, String> {
     let path = PathBuf::from(&path_str);
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
@@ -170,12 +178,13 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
 
     // Replay WAL entries if journal exists from a previous crash
     let wp = wal_path_for(&path);
+    let mut recovered_strokes = 0usize;
     if let Ok(entries) = Wal::replay(&wp) {
         if !entries.is_empty() {
             eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
             for entry in entries {
                 match entry {
-                    WalEntry::Added(s) => doc.push_stroke(0, s),
+                    WalEntry::Added(s) => { doc.push_stroke(0, s); recovered_strokes += 1; }
                     WalEntry::Removed(id) => { doc.remove_stroke(id); }
                 }
             }
@@ -199,12 +208,17 @@ pub fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Vec<Page
     }
 
     eprintln!("[inkwell] Opened PDF: {:?} — {} pages", path, n_pages);
-    Ok(page_infos)
+    Ok(OpenPdfResult { page_infos, recovered_strokes })
 }
 
 #[tauri::command]
-pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) -> Result<Vec<PageInfo>, String> {
-    let path = std::env::temp_dir().join(&name);
+pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) -> Result<OpenPdfResult, String> {
+    // Derive a stable temp-file name from the content so different PDFs that
+    // happen to share a file name get distinct WAL journals (and re-opening the
+    // same dropped file still recovers its crash journal).
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes.iter().take(8192) { h ^= *b as u64; h = h.wrapping_mul(0x0000_0100_0000_01b3); }
+    let path = std::env::temp_dir().join(format!("inkwell-{:016x}-{}", h, name));
     let _ = std::fs::write(&path, &bytes);
 
     let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
@@ -215,12 +229,13 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     let mut doc = Document::for_pdf(n_pages);
 
     let wp = wal_path_for(&path);
+    let mut recovered_strokes = 0usize;
     if let Ok(entries) = Wal::replay(&wp) {
         if !entries.is_empty() {
             eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
             for entry in entries {
                 match entry {
-                    WalEntry::Added(s) => doc.push_stroke(0, s),
+                    WalEntry::Added(s) => { doc.push_stroke(0, s); recovered_strokes += 1; }
                     WalEntry::Removed(id) => { doc.remove_stroke(id); }
                 }
             }
@@ -243,16 +258,18 @@ pub fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppState>) 
     }
 
     eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages", name, n_pages);
-    Ok(page_infos)
+    Ok(OpenPdfResult { page_infos, recovered_strokes })
 }
 
 #[tauri::command]
-pub fn render_tile(
+pub async fn render_tile(
     page: u32,
     rect: [f64; 4],
     px: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, String> {
+    // Cap tile resolution to bound the IPC payload size (RGBA = w*h*4 bytes).
+    let px = px.min(1024);
     if px == 0 {
         return Err("Tile size must be greater than zero".into());
     }
@@ -267,9 +284,13 @@ pub fn render_tile(
     let rh = (rect[3] - rect[1]).max(1.0);
     let scale = (px as f64) / rw.max(rh);
 
-    let pdf_bytes_guard = state.pdf_bytes.lock().unwrap();
-    let bytes = pdf_bytes_guard
-        .as_ref()
+    // Copy the PDF bytes under a short-lived lock so the (potentially slow)
+    // PDFium rasterisation below does not hold the pdf_bytes mutex open.
+    let bytes = state
+        .pdf_bytes
+        .lock()
+        .unwrap()
+        .clone()
         .ok_or("No PDF loaded")?;
 
     let pdfium_guard = state.pdfium.lock().unwrap();
@@ -279,7 +300,7 @@ pub fn render_tile(
     })?;
 
     let doc = pdfium
-        .load_pdf_from_byte_slice(bytes, None)
+        .load_pdf_from_byte_slice(&bytes, None)
         .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
     let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
@@ -373,7 +394,7 @@ pub fn render_tile(
 
 
 #[tauri::command]
-pub fn commit_stroke(
+pub async fn commit_stroke(
     sheet: usize,
     tool: String,
     rgb: [f64; 3],
@@ -417,7 +438,7 @@ pub fn commit_stroke(
 }
 
 #[tauri::command]
-pub fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) -> Result<bool, String> {
+pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) -> Result<bool, String> {
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
@@ -426,7 +447,7 @@ pub fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) -> Resul
 }
 
 #[tauri::command]
-pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
@@ -475,7 +496,7 @@ pub fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-pub fn erase_strokes_near(
+pub async fn erase_strokes_near(
     sheet: usize,
     px: f64,
     py: f64,
@@ -489,7 +510,7 @@ pub fn erase_strokes_near(
 }
 
 #[tauri::command]
-pub fn erase_strokes_in_rect(
+pub async fn erase_strokes_in_rect(
     sheet: usize,
     x0: f64,
     y0: f64,
@@ -504,7 +525,7 @@ pub fn erase_strokes_in_rect(
 }
 
 #[tauri::command]
-pub fn get_document_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+pub async fn get_document_info(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
@@ -516,7 +537,7 @@ pub fn get_document_info(state: State<'_, AppState>) -> Result<serde_json::Value
 }
 
 #[tauri::command]
-pub fn insert_blank_page(
+pub async fn insert_blank_page(
     index: usize,
     width_pt: f64,
     height_pt: f64,

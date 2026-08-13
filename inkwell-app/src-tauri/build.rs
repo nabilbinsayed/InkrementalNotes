@@ -45,5 +45,4 @@ fn main() {
     println!("cargo:rerun-if-changed=../src/js/app.js");
     println!("cargo:rerun-if-changed=../src/js/viewport.js");
     println!("cargo:rerun-if-changed=../src/js/ink.js");
-    println!("cargo:rerun-if-changed=../src/js/hud.js");
 }

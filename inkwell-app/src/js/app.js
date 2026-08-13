@@ -76,6 +76,9 @@ const state = {
   laserPoints: [],
   streamline: null,
   drawingPane: 'left',
+  navHistory: [],   // page navigation history (header Back/Forward)
+  navIndex: -1,
+  activeDrawer: null, // which drawer view is open: 'thumbnails' | 'outline' | ...
 };
 
 function paneSheet(pane = 'left') {
@@ -185,11 +188,22 @@ async function fetchTile(page, rect, px) {
       const tileW = Math.round(rw * scale) || 1;
       const tileH = Math.round(rh * scale) || 1;
       const expectedBytes = tileW * tileH * 4;
-      if (!raw || raw.length !== expectedBytes) {
-        throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGBA bytes (${tileW}x${tileH}), got ${raw ? raw.length : 0}`);
+      // The backend may deliver the RGBA buffer as a JS number array (default
+      // JSON IPC) or as an ArrayBuffer / typed array (raw IPC). Normalise all
+      // three forms before validating the exact byte count.
+      let rgbaData = raw;
+      if (rgbaData instanceof ArrayBuffer) {
+        rgbaData = new Uint8ClampedArray(rgbaData);
+      } else if (Array.isArray(rgbaData)) {
+        rgbaData = Uint8ClampedArray.from(rgbaData);
+      } else if (rgbaData && typeof rgbaData === 'object' && rgbaData.buffer) {
+        rgbaData = new Uint8ClampedArray(rgbaData.buffer, rgbaData.byteOffset || 0, rgbaData.byteLength);
       }
-      const rgbaArray = new Uint8ClampedArray(raw.buffer || raw, raw.byteOffset || 0, raw.byteLength || raw.length);
-      const imgData = new ImageData(rgbaArray, tileW, tileH);
+      const byteLen = rgbaData ? rgbaData.byteLength : 0;
+      if (!rgbaData || byteLen !== expectedBytes) {
+        throw new Error(`Invalid tile buffer: expected ${expectedBytes} RGBA bytes (${tileW}x${tileH}), got ${byteLen}`);
+      }
+      const imgData = new ImageData(rgbaData, tileW, tileH);
       tileCache.set(key, imgData);
       tileRenderError = null;
       return { key, data: imgData };
@@ -517,6 +531,8 @@ function prefetchAdjacentPages() {
 
 function goToPage(i, pane = 'left') {
   if (i < 0 || i >= state.pageInfos.length) return;
+  // Record primary-pane navigation in the header Back/Forward history.
+  if (pane !== 'right' || !viewport.splitMode) pushNav(i);
   if (pane === 'right' && viewport.splitMode) {
     state.rightSheet = i;
   } else {
@@ -596,6 +612,7 @@ function updatePageUI() {
   const total = state.pageInfos.length;
   if (!total) {
     $('pageNum').textContent = '—';
+    if ($('pageNumDisplay')) $('pageNumDisplay').textContent = '—';
     $('btnPrev').disabled = true;
     $('btnNext').disabled = true;
     $('splitPageNav') && $('splitPageNav').classList.add('hidden');
@@ -609,6 +626,7 @@ function updatePageUI() {
 
   const leftCur = state.leftSheet + 1;
   $('pageNum').textContent = isSplit ? `${leftCur}` : `${leftCur} / ${total}`;
+  if ($('pageNumDisplay')) $('pageNumDisplay').textContent = `${leftCur}`;
   $('btnPrev').disabled = state.leftSheet <= 0;
   $('btnNext').disabled = state.leftSheet >= total - 1;
 
@@ -625,7 +643,8 @@ function eraseStrokesAt(e) {
   const pane = state.drawingPane || paneForEvent(e);
   const targetSheet = paneSheet(pane);
   const [wx, wy] = localXY(e, pane);
-  const radius = 10 / viewport.zoom;
+  const eraserZoom = (pane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
+  const radius = 10 / (eraserZoom || 1);
   let erased = [];
 
   for (const s of state.strokes) {
@@ -1240,6 +1259,7 @@ async function insertBlankPage() {
     } catch (err) {
       console.warn('insert_blank_page failed in backend:', err);
       state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
+    }
   } else {
     state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
   }
@@ -1504,6 +1524,139 @@ function renderTabsDOM() {
   });
 }
 
+// ---- Navigation Drawer (secondary panel) ----
+const DRAWER_VIEWS = {
+  thumbnails: { viewId: 'drawerThumbnails', title: 'Thumbnails' },
+  outline:    { viewId: 'drawerOutline',    title: 'Document Outline' },
+  search:     { viewId: 'drawerSearch',     title: 'Search' },
+  bookmarks:  { viewId: 'drawerBookmarks',  title: 'Bookmarks' },
+  layers:     { viewId: 'drawerLayers',     title: 'Ink Layers' },
+  docInfo:    { viewId: 'drawerDocInfo',    title: 'Document Info' },
+  settings:   { viewId: 'drawerSettings',   title: 'Settings' },
+};
+
+const RAIL_BTN_MAP = {
+  thumbnails: 'btnRailThumbnails',
+  outline:    'btnRailOutline',
+  search:     'btnRailSearch',
+  bookmarks:  'btnRailBookmarks',
+  layers:     'btnRailLayers',
+  docInfo:    'btnRailDocInfo',
+  settings:   'btnRailSettings',
+};
+
+function toggleDrawer(name) {
+  const drawer = $('navDrawer');
+  const view = DRAWER_VIEWS[name];
+  if (!drawer || !view) return;
+
+  const isOpen = state.activeDrawer === name && !drawer.classList.contains('hidden');
+  if (isOpen) {
+    drawer.classList.add('hidden');
+    state.activeDrawer = null;
+  } else {
+    drawer.classList.remove('hidden');
+    state.activeDrawer = name;
+    document.querySelectorAll('.drawer-content').forEach(el => el.classList.add('hidden'));
+    $(view.viewId) && $(view.viewId).classList.remove('hidden');
+    if ($('drawerTitle')) $('drawerTitle').textContent = view.title;
+    if (name === 'thumbnails') renderThumbnails();
+    if (name === 'docInfo') updateDocInfo();
+  }
+  updateRailButtonsUI();
+}
+
+function updateRailButtonsUI() {
+  Object.keys(RAIL_BTN_MAP).forEach(viewName => {
+    const btn = $(RAIL_BTN_MAP[viewName]);
+    if (btn) btn.classList.toggle('active', state.activeDrawer === viewName);
+  });
+}
+
+function renderThumbnails() {
+  const grid = $('thumbnailGrid');
+  if (!grid) return;
+  if (!state.pageInfos || !state.pageInfos.length) {
+    grid.innerHTML = '<div class="thumb-empty">No pages available</div>';
+    return;
+  }
+  grid.innerHTML = state.pageInfos.map((pi, i) => {
+    const active = (i === state.leftSheet) ? ' active' : '';
+    return `<div class="thumb-card${active}" data-page="${i}">
+              <div class="thumb-preview">${i + 1}</div>
+              <div>Page ${i + 1}</div>
+            </div>`;
+  }).join('');
+  grid.querySelectorAll('.thumb-card').forEach(el => {
+    el.addEventListener('click', () => {
+      const i = parseInt(el.getAttribute('data-page'), 10);
+      if (!isNaN(i)) goToPage(i, 'left');
+    });
+  });
+}
+
+function updateDocInfo() {
+  const box = $('docInfo');
+  if (!box) return;
+  if (!state.pageInfos || !state.pageInfos.length) {
+    box.innerHTML = '<div>No document loaded</div>';
+    return;
+  }
+  const tab = state.tabs && state.tabs.find(t => t.id === state.activeTabId);
+  box.innerHTML = `
+    <div>Loaded: ${tab ? tab.title : 'Untitled.pdf'}</div>
+    <div>Pages: ${state.pageInfos.length}</div>
+    <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
+  `;
+}
+
+function updateToolBadges() {
+  const nPages = state.pageInfos ? state.pageInfos.length : 0;
+  const badge = $('badgeThumbnails');
+  if (badge) badge.textContent = nPages || '';
+}
+
+function checkWalRecovery(recovered) {
+  if (recovered && recovered > 0) {
+    showToast(`Restored ${recovered} unsaved stroke${recovered > 1 ? 's' : ''} from crash journal`, 'info');
+  }
+}
+
+// ---- Page navigation history (header Back / Forward) ----
+function pushNav(i) {
+  if (!Array.isArray(state.navHistory)) state.navHistory = [];
+  if (state.navIndex == null) state.navIndex = -1;
+  if (state.navHistory[state.navIndex] === i) return;
+  state.navHistory.splice(state.navIndex + 1);
+  state.navHistory.push(i);
+  state.navIndex = state.navHistory.length - 1;
+  if (state.navHistory.length > 200) { state.navHistory.shift(); state.navIndex--; }
+}
+
+function jumpToPage(i) {
+  if (i < 0 || i >= state.pageInfos.length) return;
+  state.leftSheet = i;
+  const pi = state.pageInfos[i];
+  recenterPanesOnly(pi);
+  updatePageUI();
+  scheduleRedrawTiles();
+  redrawAll();
+  prefetchAdjacentPages();
+}
+
+function goBack() {
+  if (!Array.isArray(state.navHistory) || state.navIndex <= 0) return;
+  state.navIndex--;
+  jumpToPage(state.navHistory[state.navIndex]);
+}
+
+function goForward() {
+  if (!Array.isArray(state.navHistory) || state.navIndex >= state.navHistory.length - 1) return;
+  state.navIndex++;
+  jumpToPage(state.navHistory[state.navIndex]);
+}
+
+
 // ---- UI binding ----
 function bindUI() {
   // Legacy toolbar buttons
@@ -1548,6 +1701,8 @@ function bindUI() {
 
   // Top Header controls
   $('btnNewTab') && $('btnNewTab').addEventListener('click', () => $('btnOpen') && $('btnOpen').click());
+  $('btnNavBack') && $('btnNavBack').addEventListener('click', goBack);
+  $('btnNavForward') && $('btnNavForward').addEventListener('click', goForward);
   $('btnPageDropdown') && $('btnPageDropdown').addEventListener('click', () => toggleDrawer('thumbnails'));
   $('btnHeaderAddPage') && $('btnHeaderAddPage').addEventListener('click', insertBlankPage);
 
@@ -1642,34 +1797,33 @@ function bindUI() {
   $('btnRightNext') && $('btnRightNext').addEventListener('click', () => goToPage(state.rightSheet + 1, 'right'));
 }
 
-function handlePdfLoadSuccess(title, selectedPath, infos) {
-  if (!state.tabs.length) {
-    createTab(title, selectedPath, infos);
-  } else {
-    const cur = state.tabs.find(t => t.id === state.activeTabId);
-    if (cur) {
-      cur.title = title;
-      cur.pathStr = selectedPath;
-      cur.pageInfos = infos;
-      cur.strokes = [];
-      cur.selectedStrokes = [];
-      cur.undoStack = [];
-      cur.redoStack = [];
-      cur.leftSheet = 0;
-      cur.rightSheet = 0;
-      switchTab(cur.id);
-    } else {
+function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0) {
+  try {
+    if (!state.tabs.length) {
       createTab(title, selectedPath, infos);
+    } else {
+      const cur = state.tabs.find(t => t.id === state.activeTabId);
+      if (cur) {
+        cur.title = title;
+        cur.pathStr = selectedPath;
+        cur.pageInfos = infos;
+        cur.strokes = [];
+        cur.selectedStrokes = [];
+        cur.undoStack = [];
+        cur.redoStack = [];
+        cur.leftSheet = 0;
+        cur.rightSheet = 0;
+        switchTab(cur.id);
+      } else {
+        createTab(title, selectedPath, infos);
+      }
     }
+    if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
+  } catch (err) {
+    console.error('[inkwell] handlePdfLoadSuccess setup error:', err);
   }
-  if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
-  if ($('docInfo')) {
-    $('docInfo').innerHTML = `
-      <div>Loaded: ${title}</div>
-      <div>Pages: ${infos.length}</div>
-    `;
-  }
-  checkWalRecovery();
+  updateToolBadges();
+  checkWalRecovery(recovered);
 }
 
 function attachOpenListeners() {
@@ -1680,9 +1834,9 @@ function attachOpenListeners() {
         const res = await invoke('open_pdf_dialog');
         if (res && res[0]) {
           const selectedPath = res[0];
-          const infos = res[1];
+          const r = res[1] || {};
           const title = selectedPath.split('\\').pop().split('/').pop();
-          handlePdfLoadSuccess(title, selectedPath, infos);
+          handlePdfLoadSuccess(title, selectedPath, r.page_infos || [], r.recovered_strokes || 0);
         }
         return;
       } catch (err) {
@@ -1713,8 +1867,8 @@ function attachOpenListeners() {
       const invoke = getInvoke();
       const filePath = file.path || file.webkitRelativePath;
       if (filePath && invoke) {
-        const infos = await invoke('open_pdf', { pathStr: filePath });
-        handlePdfLoadSuccess(file.name, filePath, infos);
+        const r = await invoke('open_pdf', { pathStr: filePath });
+        handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0);
         return;
       }
 
@@ -1724,8 +1878,8 @@ function attachOpenListeners() {
         console.warn('[inkwell] Large PDF (>5 MB) sent via IPC bytes path — this may be slow or fail.');
       }
       if (invoke) {
-        const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
-        handlePdfLoadSuccess(file.name, null, infos);
+        const r2 = await invoke('open_pdf_bytes', { name: file.name, bytes });
+        handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0);
         return;
       }
       showToast('Tauri IPC is unavailable in this environment.', 'warning');
@@ -1776,15 +1930,15 @@ function attachOpenListeners() {
         const invoke = getInvoke();
         const filePath = file.path || file.webkitRelativePath;
         if (filePath && invoke) {
-          const infos = await invoke('open_pdf', { pathStr: filePath });
-          handlePdfLoadSuccess(file.name, filePath, infos);
+          const r = await invoke('open_pdf', { pathStr: filePath });
+          handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0);
           return;
         }
         const arrayBuf = await file.arrayBuffer();
         const bytes = Array.from(new Uint8Array(arrayBuf));
         if (invoke) {
-          const infos = await invoke('open_pdf_bytes', { name: file.name, bytes });
-          handlePdfLoadSuccess(file.name, null, infos);
+          const r2 = await invoke('open_pdf_bytes', { name: file.name, bytes });
+          handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0);
         }
       } catch (err) {
         console.error('[inkwell] Drop error:', err);

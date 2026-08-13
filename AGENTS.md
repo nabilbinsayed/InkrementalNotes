@@ -9,7 +9,7 @@ Read this before making changes to the InkWell codebase.
   - `crates/inkwell-pdf/`: Low-level PDF parser (`pdf.rs`), object structure (`pdfobj.rs`), PDFium bindings and normalisation engine (`pdfium.rs`).
 - `inkwell-app/`: Desktop application host (Tauri v2 + frontend UI)
   - `src-tauri/`: Tauri backend IPC commands (`commands.rs`), application state (`state.rs`), and entry point (`main.rs`).
-  - `src/`: Web frontend UI (`index.html`, `styles.css`, `js/app.js`, `js/ink.js`, `js/viewport.js`, `js/hud.js`).
+  - `src/`: Web frontend UI (`index.html`, `styles.css`, `js/app.js`, `js/ink.js`, `js/viewport.js`).
 - `inkwell-m0/`: M0 latency spike prototype and Playwright smoke tests (`test_smoke.py`).
 - `plans/`: Implementation plans and execution tracking (`README.md`).
 
