@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Inkwell Banner](inkwell-m0/screenshot.png)
+![Inkwell Banner](inkwell-m0/screenshot2.png)
 
 [![Rust](https://img.shields.io/badge/Rust-1.75%2B-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8?style=flat-square&logo=tauri)](https://tauri.app/)
