@@ -28,9 +28,12 @@ class ViewportManager {
   toggleSplitMode() {
     this.splitMode = !this.splitMode;
     if (this.splitMode) {
-      this.rightPanX = this.panX;
-      this.rightPanY = this.panY;
+      if (!this.stageRect) this.updateStageRect();
+      const totalW = this.stageRect ? this.stageRect.width : 800;
+      const halfW = totalW / 2;
       this.rightZoom = this.zoom;
+      this.rightPanX = this.panX + halfW;
+      this.rightPanY = this.panY;
     }
     if (this.onChange) this.onChange();
     return this.splitMode;
@@ -79,10 +82,12 @@ class ViewportManager {
     if (!this.stageRect) this.updateStageRect();
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
-    const stageW = this.splitMode ? (this.stageRect ? this.stageRect.width / 2 : 400) : (this.stageRect ? this.stageRect.width : 800);
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    const stageW = this.splitMode ? totalW / 2 : totalW;
     const stageH = this.stageRect ? this.stageRect.height : 600;
 
-    const targetPanX = Math.round((stageW - pageWidthPt * z) / 2);
+    const offsetLeft = isRight ? stageW : 0;
+    const targetPanX = Math.round(offsetLeft + (stageW - pageWidthPt * z) / 2);
     const targetPanY = Math.max(20, Math.round((stageH - pageHeightPt * z) / 2));
     this.setPan(targetPanX, targetPanY, pane);
   }
@@ -90,7 +95,8 @@ class ViewportManager {
   fitPage(pageWidthPt, pageHeightPt, pane = 'left') {
     if (!pageWidthPt || !pageHeightPt) return;
     if (!this.stageRect) this.updateStageRect();
-    const stageW = this.splitMode ? (this.stageRect ? this.stageRect.width / 2 : 400) : (this.stageRect ? this.stageRect.width : 800);
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    const stageW = this.splitMode ? totalW / 2 : totalW;
     const stageH = this.stageRect ? this.stageRect.height : 600;
 
     const margin = 40;

@@ -3,32 +3,38 @@
 ![Inkwell Banner](inkwell-m0/screenshot.png)
 
 > [!CAUTION]
-> **WORK IN PROGRESS**: Inkwell is currently an early-stage experimental prototype under active development. Many core functionalities—including full PDF background page rasterization and real-time stroke curve smoothing algorithms—are still actively being worked on and are not yet fully implemented or finalized. Features, UI behaviors, and internal APIs remain subject to rapid change.
+> **WORK IN PROGRESS**: Inkwell is an experimental digital handwriting and PDF annotation desktop workstation under active development. Core functionalities—including real-time vector outline ribbons, LOD tile caching, PDFium vector rasterization, and append-only incremental PDF saving—are continuously being enhanced.
 
-**Inkwell** is a high-performance, low-latency digital handwriting and PDF annotation desktop application engineered for tablet digitizers (e.g. Wacom, Huion, Microsoft Surface, iPad Pencil). Built with **Rust**, **PDFium**, and **Tauri v2**, Inkwell combines zero-latency stroke response with full vector PDF standard `/Ink` interop.
+**Inkwell** is a high-performance, low-latency digital handwriting and PDF annotation desktop application engineered for tablet digitizers (e.g. Wacom, Huion, Microsoft Surface, iPad via Apple Pencil, and high-refresh touchscreens). Built with **Rust**, **PDFium**, and **Tauri v2**, Inkwell combines zero-latency stroke response with standard vector PDF `/Ink` interoperability.
 
 ---
 
 ## Key Features
 
 ### 🖋️ Hardware-Accelerated Vector Ink Engine
-- **Low-Latency Dual-Canvas Architecture**: Separate wet (active stroke) and dry (committed vector ink) layers running at native digitizer polling rates (up to 233Hz).
+- **Low-Latency Dual-Canvas Architecture**: Separate wet (active stroke) and dry (committed vector ink) layers running at native digitizer polling rates (up to 240Hz+).
 - **Sub-Pixel Pressure Sensing**: 10-bit analogue pressure resolution with customizable stroke width taper, gamma curves, and One-Euro noise filtering.
-- **Vector Ribbon Outlines**: Renders smooth stroke outlines with true $C^1$ continuity, avoiding faceting at high zoom levels.
+- **Vector Ribbon Outlines**: Generates smooth cubic Bézier outline ribbons with true $C^1$ continuity, avoiding faceting or degradation at high zoom levels.
 
-### 📄 Native PDF Integration
-- **PDFium High-Resolution Rasterizer**: High-fidelity vector tile rendering for complex PDFs, textbooks, and multi-page documents.
-- **Standards-Compliant `/Ink` Annotations**: Native Adobe Acrobat & PDF-spec `/Ink` object structure with embedded sidecars (`/Inkw_Doc`) and `/InkList` centrelines.
-- **WAL Crash Safety**: Write-Ahead Logging (WAL) records every stroke instantly, recovering state seamlessly after ungraceful shutdowns.
+### 📄 Native PDF Integration & Durability
+- **PDFium High-Resolution Rasterizer**: High-fidelity vector tile rendering on-demand per LOD level for complex PDFs, textbooks, and multi-page documents.
+- **Append-Only Incremental Save**: Original PDF bytes are never overwritten or corrupted in-place. Annotations are appended as standard ISO 32000 vector streams.
+- **WAL Journal Crash Durability**: Write-Ahead Logging (`inkwell-wal`) records every stroke and erasure immediately with fsync, seamlessly restoring unsaved state upon recovery.
+- **Backend Security Hardening**: Input path sanitization, bounds-clamped tile dimensions, and memory safety guarantees across all Tauri IPC commands.
 
-### 🎨 Modern Workspace & UI
-- **3-Column Professional Layout**: Pinned left navigation rail (`#navRail`), collapsible secondary drawer (`#navDrawer`), and main viewport stage (`#stage`).
-- **Top Header Bar & PDF Toolbar**: Multi-tab document bar (`#tabBar`), primary "Open PDF" header button (`#btnHeaderOpen`), zoom controls, page selector pill, and export/share trigger.
-- **Canvas Welcome Dropzone**: Glassmorphic empty-state CTA overlay (`#welcomeDropzone`) with file drop support.
-- **Glassmorphic Inking Dock**: Context-aware floating bar (`#floatingDock`) with pen, highlighter, eraser, shapes, and lasso tools.
-- **Radial Menu**: 6-slot quick action radial menu accessible via right-click or stylus barrel button.
-- **Lasso Select & Editing**: Vector stroke selection bounding box with control handles, hotkey deletion (`Delete`/`Backspace`), and full `Ctrl+Z` Undo/Redo.
-- **Command Palette & Dual Pane**: Quick command execution modal (`Ctrl+Shift+P`), dual-pane split view, and blank page insertion.
+### 🎨 Modern Workspace & Navigation
+- **3-Column Glassmorphic Layout**: Pinned left navigation rail (`#navRail`), slide-out secondary drawer (`#navDrawer`), and main viewport stage (`#stage`).
+- **Page Navigation Suite**: Top header navigation cluster with 1-click previous/next buttons (`◀` / `▶`), page count (`Page X / Y`), insert page button (`+`), and dual-pane split controls.
+- **On-Canvas Floating Edge Flippers**: Subtle translucent edge chevrons for rapid 1-click page flipping while reading and annotating.
+- **Redesigned Secondary Drawers**:
+  - **Outline / TOC**: Document chapter hierarchy with custom bookmark fallback.
+  - **Full-Text Search**: In-document keyword search with highlighted snippets and match counts.
+  - **Bookmarks**: Timestamped custom page bookmarks with 1-click navigation and deletion.
+  - **Layers**: Real-time vector stroke counter and independent ink layer visibility toggles.
+  - **Settings & Calibration**: Hardware pointer coalescing toggle, stroke width slider with value badges, and preset color swatches.
+- **Floating Zoom & Inking Docks**: Frosted acrylic glass docks with SVG vector icons (Zoom In/Out, Fit to Window, Dual Pane, Fullscreen, and Tools).
+- **Multi-Document Tabs**: Tab strip supporting simultaneous document switching and independent viewport states.
+- **Command Palette & Radial Menu**: Quick command execution (`Ctrl+Shift+P`), 6-slot stylus radial menu, and lasso selection with stroke deletion.
 
 ---
 
@@ -37,8 +43,8 @@
 - **Core Engine**: Rust (`inkwell-core`, `inkwell-pdf`, `inkwell-wal`)
 - **Desktop Shell**: Tauri 2.0 (Windows / macOS / Linux)
 - **PDF Rendering**: PDFium (`pdfium-render` bindings)
-- **Frontend Layer**: HTML5 Canvas, Vanilla CSS, JavaScript ESNext
-- **Testing & QA**: PyMuPDF, Poppler, PyPDF, Playwright CDP CDP Synthetic Pen testing
+- **Frontend Layer**: HTML5 Canvas, Vanilla CSS (Glassmorphism design system), JavaScript ESNext
+- **Testing & QA**: PyMuPDF, Poppler, PyPDF, Playwright CDP Synthetic Pen testing
 
 ---
 
@@ -46,12 +52,12 @@
 
 ```
 InkWell/
-├── inkwell/                      # Core Rust crates
-│   ├── crates/inkwell-core/      # Document model, vector stroke geometry, RDP simplification
+├── inkwell/                      # Core Rust workspace
+│   ├── crates/inkwell-core/      # Document model, vector geometry, RDP simplification
 │   ├── crates/inkwell-pdf/       # PDFium tile rasterization & PDF structure manipulation
 │   └── crates/inkwell-wal/       # Binary Write-Ahead Log engine
 ├── inkwell-app/                  # Tauri 2.0 Desktop Application
-│   ├── src-tauri/                # Tauri backend IPC commands & Rust main app
+│   ├── src-tauri/                # Tauri backend IPC commands & Rust main entry point
 │   └── src/                      # Canvas frontend, UI styling, and ink rendering
 ├── inkwell-m0/                   # Playwright smoke test harness & synthetic pen capture
 ├── tools/                        # Validation scripts (validate.py, PDF spec checks)
@@ -65,17 +71,17 @@ InkWell/
 ### Prerequisites
 1. **Rust Toolchain**: `rustc` and `cargo` (1.75+)
 2. **Node.js**: `node` (v18+) and `npm`
-3. **PDFium**: `pdfium.dll` (bundled or placed in executable directory)
+3. **PDFium**: `pdfium.dll` (placed in `bin/` or system PATH)
 
 ### Running Locally
-To launch the application directly:
 ```bash
 # Using the Windows batch launcher:
 .\Launch Inkwell.bat
 
-# Or building via Cargo/Tauri CLI:
+# Or building via Cargo:
 cd inkwell-app/src-tauri
 cargo build
+.\target\debug\inkwell-app.exe
 ```
 
 ---
@@ -95,7 +101,7 @@ cargo test --package inkwell-pdf
 # 3. Run cross-language PDF standards validator (PyPDF, Poppler, MuPDF)
 py -3 tools/validate.py
 
-# 4. Run synthetic pen CDP input smoke test
+# 4. Run synthetic pen CDP input smoke test (18/18 checks)
 cd ../inkwell-m0
 py -3 test_smoke.py
 ```
@@ -106,16 +112,23 @@ py -3 test_smoke.py
 
 | Action | Shortcut |
 |---|---|
+| **Previous Page** | `Left Arrow` / `PageUp` / `[` |
+| **Next Page** | `Right Arrow` / `PageDown` / `]` |
+| **First / Last Page** | `Home` / `End` |
+| **Thumbnails / Page Jump** | `Ctrl` + `G` |
+| **Search Document** | `Ctrl` + `F` |
+| **Open PDF** | `Ctrl` + `O` |
+| **Save Document** | `Ctrl` + `S` |
+| **Toggle Sidebar Drawer** | `Ctrl` + `B` |
+| **Command Palette** | `Ctrl` + `Shift` + `P` |
+| **Undo / Redo** | `Ctrl` + `Z` / `Ctrl` + `Y` |
 | **Pen Tool** | `P` |
 | **Highlighter** | `H` |
 | **Eraser (Spring-Loaded)** | Hold `E` |
 | **Laser Pointer (Spring-Loaded)** | Hold `L` |
 | **Lasso Select** | `V` |
 | **Ruler / Rectangle / Ellipse** | `R` / `Q` / `O` |
-| **Command Palette** | `Ctrl` + `Shift` + `P` |
 | **Radial Quick Menu** | Stylus Barrel Button / Right Click |
-| **Undo / Redo** | `Ctrl` + `Z` / `Ctrl` + `Y` |
-| **Save Document** | `Ctrl` + `S` |
 
 ---
 

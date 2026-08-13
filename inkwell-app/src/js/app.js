@@ -42,6 +42,16 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 const state = {
   activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler',
                           // 'rect', 'ellipse', 'laser'
@@ -66,6 +76,8 @@ const state = {
     else state.leftSheet = v;
   },
   pageInfos: [],         // [{page_index, width_pt, height_pt}, ...]
+  bookmarks: [],         // [{ id, page, label, createdAt }]
+  inkVisible: true,
   shapeStart: null,
   shapeEnd: null,
   shapeKind: null,       // 'rect' | 'ellipse' | 'line'
@@ -146,13 +158,24 @@ function evictTileCache() {
   let count = tileCache.size - TILE_CACHE_MAX;
   for (const [key, val] of tileCache.entries()) {
     if (count-- <= 0) break;
-    if (val && val._bitmap && val._bitmap.close) {
+    if (val && val._bitmap && typeof val._bitmap.close === 'function') {
       val._bitmap.close();
-    } else if (val && val.close) {
+    } else if (val && typeof val.close === 'function') {
       val.close();
     }
     tileCache.delete(key);
   }
+}
+
+function clearTileCache() {
+  for (const val of tileCache.values()) {
+    if (val && val._bitmap && typeof val._bitmap.close === 'function') {
+      val._bitmap.close();
+    } else if (val && typeof val.close === 'function') {
+      val.close();
+    }
+  }
+  tileCache.clear();
 }
 
 function tileGridForRect(rx0, ry0, rx1, ry1) {
@@ -559,25 +582,22 @@ function fitPageInPanes(piLeft = state.pageInfos[state.leftSheet], piRight = sta
   const margin = 40;
 
   if (viewport.splitMode && piRight) {
-    const gutter = 16;
-    const availW = Math.max(100, stageW - margin * 2 - gutter);
+    const halfW = stageW / 2;
+    const availW = Math.max(100, halfW - margin);
     const availH = Math.max(100, stageH - margin);
-    const combinedPtW = piLeft.width_pt + piRight.width_pt;
-    const maxPtH = Math.max(piLeft.height_pt, piRight.height_pt);
 
-    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / combinedPtW, availH / maxPtH)));
+    const fitZoomLeft = Math.max(0.2, Math.min(4.0, Math.min(availW / piLeft.width_pt, availH / piLeft.height_pt)));
+    const fitZoomRight = Math.max(0.2, Math.min(4.0, Math.min(availW / piRight.width_pt, availH / piRight.height_pt)));
+    const fitZoom = Math.min(fitZoomLeft, fitZoomRight);
+
     viewport.zoom = fitZoom;
     viewport.rightZoom = fitZoom;
 
-    const spreadPxW = piLeft.width_pt * fitZoom + piRight.width_pt * fitZoom + gutter;
-    const startX = Math.round((stageW - spreadPxW) / 2);
-    const startYLeft = Math.max(20, Math.round((stageH - piLeft.height_pt * fitZoom) / 2));
-    const startYRight = Math.max(20, Math.round((stageH - piRight.height_pt * fitZoom) / 2));
+    viewport.panX = Math.round((halfW - piLeft.width_pt * fitZoom) / 2);
+    viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * fitZoom) / 2));
 
-    viewport.panX = startX;
-    viewport.panY = startYLeft;
-    viewport.rightPanX = Math.round(startX + piLeft.width_pt * fitZoom + gutter);
-    viewport.rightPanY = startYRight;
+    viewport.rightPanX = Math.round(halfW + (halfW - piRight.width_pt * fitZoom) / 2);
+    viewport.rightPanY = Math.max(20, Math.round((stageH - piRight.height_pt * fitZoom) / 2));
   } else {
     const availW = Math.max(100, stageW - margin);
     const availH = Math.max(100, stageH - margin);
@@ -595,12 +615,10 @@ function recenterPanesOnly(piLeft = state.pageInfos[state.leftSheet], piRight = 
   const stageH = r ? r.height : (tilesCanvas.height / state.dpr);
 
   if (viewport.splitMode && piRight) {
-    const gutter = 16;
-    const spreadPxW = piLeft.width_pt * viewport.zoom + piRight.width_pt * viewport.rightZoom + gutter;
-    const startX = Math.round((stageW - spreadPxW) / 2);
-    viewport.panX = startX;
+    const halfW = stageW / 2;
+    viewport.panX = Math.round((halfW - piLeft.width_pt * viewport.zoom) / 2);
     viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * viewport.zoom) / 2));
-    viewport.rightPanX = Math.round(startX + piLeft.width_pt * viewport.zoom + gutter);
+    viewport.rightPanX = Math.round(halfW + (halfW - piRight.width_pt * viewport.rightZoom) / 2);
     viewport.rightPanY = Math.max(20, Math.round((stageH - piRight.height_pt * viewport.rightZoom) / 2));
   } else {
     viewport.panX = Math.round((stageW - piLeft.width_pt * viewport.zoom) / 2);
@@ -613,33 +631,68 @@ function centerPageInPanes(piLeft = state.pageInfos[state.leftSheet], piRight = 
 }
 
 function updatePageUI() {
-  const total = state.pageInfos.length;
+  const total = state.pageInfos ? state.pageInfos.length : 0;
+  const isSplit = !!(viewport && viewport.splitMode);
+
   if (!total) {
-    $('pageNum').textContent = '—';
+    $('pageNum') && ($('pageNum').textContent = '—');
     if ($('pageNumDisplay')) $('pageNumDisplay').textContent = '—';
-    $('btnPrev').disabled = true;
-    $('btnNext').disabled = true;
+    if ($('pageTotalDisplay')) $('pageTotalDisplay').textContent = '—';
+    $('btnPrev') && ($('btnPrev').disabled = true);
+    $('btnNext') && ($('btnNext').disabled = true);
+    $('btnHeaderPrevPage') && ($('btnHeaderPrevPage').disabled = true);
+    $('btnHeaderNextPage') && ($('btnHeaderNextPage').disabled = true);
+    if ($('btnCanvasPrevPage')) $('btnCanvasPrevPage').classList.add('hidden');
+    if ($('btnCanvasNextPage')) $('btnCanvasNextPage').classList.add('hidden');
     $('splitPageNav') && $('splitPageNav').classList.add('hidden');
-    $('leftNavLabel') && $('leftNavLabel').classList.add('hidden');
+    $('splitPageNavCluster') && $('splitPageNavCluster').classList.add('hidden');
+    $('pageNavCluster') && $('pageNavCluster').classList.remove('hidden');
     return;
   }
 
-  const isSplit = viewport.splitMode;
-  $('leftNavLabel') && $('leftNavLabel').classList.toggle('hidden', !isSplit);
-  $('splitPageNav') && $('splitPageNav').classList.toggle('hidden', !isSplit);
-
   const leftCur = state.leftSheet + 1;
-  $('pageNum').textContent = isSplit ? `${leftCur}` : `${leftCur} / ${total}`;
+  const rightCur = state.rightSheet + 1;
+
+  $('pageNum') && ($('pageNum').textContent = isSplit ? `${leftCur}` : `${leftCur} / ${total}`);
   if ($('pageNumDisplay')) $('pageNumDisplay').textContent = `${leftCur}`;
-  $('btnPrev').disabled = state.leftSheet <= 0;
-  $('btnNext').disabled = state.leftSheet >= total - 1;
+  if ($('pageTotalDisplay')) $('pageTotalDisplay').textContent = `${total}`;
+
+  // Header and canvas edge flippers
+  const prevDisabled = state.leftSheet <= 0;
+  const nextDisabled = state.leftSheet >= total - 1;
+
+  $('btnPrev') && ($('btnPrev').disabled = prevDisabled);
+  $('btnNext') && ($('btnNext').disabled = nextDisabled);
+  $('btnHeaderPrevPage') && ($('btnHeaderPrevPage').disabled = prevDisabled);
+  $('btnHeaderNextPage') && ($('btnHeaderNextPage').disabled = nextDisabled);
+
+  if ($('btnCanvasPrevPage')) {
+    $('btnCanvasPrevPage').disabled = prevDisabled;
+    $('btnCanvasPrevPage').classList.toggle('hidden', prevDisabled);
+  }
+  if ($('btnCanvasNextPage')) {
+    $('btnCanvasNextPage').disabled = nextDisabled;
+    $('btnCanvasNextPage').classList.toggle('hidden', nextDisabled);
+  }
+
+  // Split view controls
+  $('splitPageNav') && $('splitPageNav').classList.toggle('hidden', !isSplit);
+  $('splitPageNavCluster') && $('splitPageNavCluster').classList.toggle('hidden', !isSplit);
 
   if (isSplit) {
-    const rightCur = state.rightSheet + 1;
+    $('leftPanePageNum') && ($('leftPanePageNum').textContent = `${leftCur}`);
+    $('rightPanePageNum') && ($('rightPanePageNum').textContent = `${rightCur}`);
+    $('btnLeftPanePrev') && ($('btnLeftPanePrev').disabled = state.leftSheet <= 0);
+    $('btnLeftPaneNext') && ($('btnLeftPaneNext').disabled = state.leftSheet >= total - 1);
+    $('btnRightPanePrev') && ($('btnRightPanePrev').disabled = state.rightSheet <= 0);
+    $('btnRightPaneNext') && ($('btnRightPaneNext').disabled = state.rightSheet >= total - 1);
     $('rightPageNum') && ($('rightPageNum').textContent = `${rightCur}`);
     $('btnRightPrev') && ($('btnRightPrev').disabled = state.rightSheet <= 0);
     $('btnRightNext') && ($('btnRightNext').disabled = state.rightSheet >= total - 1);
   }
+
+  // Update thumbnail badge in nav rail
+  updateToolBadges();
 }
 
 // ---- Eraser (stroke-erase by proximity) ----
@@ -1392,8 +1445,8 @@ function renderCommandResults(query) {
   selectedCmdIndex = 0;
   container.innerHTML = currentMatches.map((c, i) => `
     <div class="cmd-item ${i === 0 ? 'selected' : ''}" data-index="${i}">
-      <span>[${c.category}] ${c.title}</span>
-      <span class="cmd-shortcut">${c.shortcut}</span>
+      <span>[${escapeHtml(c.category)}] ${escapeHtml(c.title)}</span>
+      <span class="cmd-shortcut">${escapeHtml(c.shortcut)}</span>
     </div>
   `).join('');
   container.querySelectorAll('.cmd-item').forEach((el, i) => {
@@ -1439,6 +1492,7 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
     selectedStrokes: [],
     undoStack: [],
     redoStack: [],
+    bookmarks: [],
     leftSheet: 0,
     rightSheet: 0,
     zoom: 1.0,
@@ -1451,7 +1505,7 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
   return newTab;
 }
 
-function switchTab(tabId) {
+async function switchTab(tabId) {
   // Only save the outgoing tab's view state when actually switching to a
   // DIFFERENT tab. When a tab is refreshed/reused in place (e.g. loading a
   // PDF into the existing tab), saving here would clobber the new data — e.g.
@@ -1464,6 +1518,7 @@ function switchTab(tabId) {
       curTab.selectedStrokes = state.selectedStrokes;
       curTab.undoStack = state.undoStack;
       curTab.redoStack = state.redoStack;
+      curTab.bookmarks = state.bookmarks || [];
       curTab.leftSheet = state.leftSheet;
       curTab.rightSheet = state.rightSheet;
     }
@@ -1478,15 +1533,28 @@ function switchTab(tabId) {
   state.selectedStrokes = targetTab.selectedStrokes;
   state.undoStack = targetTab.undoStack;
   state.redoStack = targetTab.redoStack;
+  state.bookmarks = targetTab.bookmarks || [];
   state.leftSheet = targetTab.leftSheet;
   state.rightSheet = targetTab.rightSheet;
 
   if ($('activeTabTitle')) $('activeTabTitle').textContent = targetTab.title;
   renderTabsDOM();
   updatePageUI();
-  tileCache.clear();
+  clearTileCache();
   scheduleRedrawTiles();
   redrawAll();
+  renderBookmarks();
+  renderLayersDrawer();
+
+  // If the target tab has a backing file path, sync Rust backend AppState
+  const invoke = getInvoke();
+  if (invoke && targetTab.pathStr) {
+    try {
+      await invoke('open_pdf', { pathStr: targetTab.pathStr });
+    } catch (err) {
+      console.warn('[inkwell] switchTab backend sync failed:', err);
+    }
+  }
 }
 
 function closeTab(tabId, e) {
@@ -1512,7 +1580,7 @@ function renderTabsDOM() {
   container.innerHTML = state.tabs.map(t => `
     <div class="doc-tab ${t.id === state.activeTabId ? 'active' : ''}" data-tab-id="${t.id}">
       <svg class="tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-      <span class="tab-title">${t.title}</span>
+      <span class="tab-title">${escapeHtml(t.title)}</span>
       <button class="tab-close" data-close-id="${t.id}" title="Close document">✕</button>
     </div>
   `).join('');
@@ -1531,6 +1599,149 @@ function renderTabsDOM() {
       if (cid) closeTab(cid, e);
     });
   });
+}
+
+// ---- Search in Document ----
+async function executeSearch(query) {
+  const container = $('drawerSearchResults');
+  if (!container) return;
+  const q = (query || ($('drawerSearchInput') ? $('drawerSearchInput').value : '')).trim();
+  if (!q) {
+    container.innerHTML = '<div class="info-item">Enter a term to search this document.</div>';
+    return;
+  }
+  container.innerHTML = '<div class="info-item">Searching document...</div>';
+  const invoke = getInvoke();
+  if (!invoke) {
+    container.innerHTML = '<div class="info-item">Search is available in the desktop app.</div>';
+    return;
+  }
+  try {
+    const results = await invoke('search_pdf', { query: q });
+    if (!results || !results.length) {
+      container.innerHTML = `<div class="info-item">No matches found for "${escapeHtml(q)}".</div>`;
+      return;
+    }
+    container.innerHTML = results.map(r => `
+      <div class="search-result-card" data-page="${r.page_index}">
+        <div class="search-result-header">
+          <span class="search-page-badge">Page ${r.page_index + 1}</span>
+          <span class="search-match-count">${r.match_count} match${r.match_count > 1 ? 'es' : ''}</span>
+        </div>
+        <div class="search-snippet">${escapeHtml(r.snippet)}</div>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.search-result-card').forEach(el => {
+      el.addEventListener('click', () => {
+        const p = parseInt(el.getAttribute('data-page'), 10);
+        if (!isNaN(p)) goToPage(p, 'left');
+      });
+    });
+  } catch (err) {
+    console.error('[inkwell] search error:', err);
+    container.innerHTML = `<div class="info-item error">Search failed: ${escapeHtml(err.message || String(err))}</div>`;
+  }
+}
+
+// ---- Bookmarks in Document ----
+function addBookmarkForCurrentPage() {
+  const curPage = state.leftSheet;
+  if (!Array.isArray(state.bookmarks)) state.bookmarks = [];
+  if (state.bookmarks.some(b => b.page === curPage)) {
+    showToast(`Page ${curPage + 1} is already bookmarked`, 'info');
+    return;
+  }
+  state.bookmarks.push({
+    id: 'bm_' + Date.now(),
+    page: curPage,
+    label: `Page ${curPage + 1}`,
+    createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+  });
+  renderBookmarks();
+  showToast(`Bookmarked Page ${curPage + 1}`, 'success');
+}
+
+function removeBookmark(id) {
+  state.bookmarks = state.bookmarks.filter(b => b.id !== id);
+  renderBookmarks();
+}
+
+function renderBookmarks() {
+  const container = $('bookmarksList');
+  if (!container) return;
+  if (!state.bookmarks || !state.bookmarks.length) {
+    container.innerHTML = `
+      <div class="drawer-empty-state">
+        <div class="empty-state-icon">📌</div>
+        <div class="empty-state-title">No Bookmarks Added</div>
+        <div class="empty-state-desc">Click "Bookmark Current Page" above to quickly save key sections of this document.</div>
+      </div>
+    `;
+    return;
+  }
+  container.innerHTML = state.bookmarks.map(b => `
+    <div class="bookmark-card" data-page="${b.page}">
+      <div class="bookmark-info">
+        <span class="bookmark-title">📌 ${escapeHtml(b.label)}</span>
+        <span class="bookmark-meta">Page ${b.page + 1} • ${escapeHtml(b.createdAt)}</span>
+      </div>
+      <button class="bookmark-delete-btn" data-bm-id="${b.id}" title="Remove bookmark" aria-label="Remove bookmark">✕</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.bookmark-card').forEach(el => {
+    el.addEventListener('click', e => {
+      if (e.target.classList.contains('bookmark-delete-btn')) return;
+      const p = parseInt(el.getAttribute('data-page'), 10);
+      if (!isNaN(p)) goToPage(p, 'left');
+    });
+  });
+
+  container.querySelectorAll('.bookmark-delete-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const bid = btn.getAttribute('data-bm-id');
+      if (bid) removeBookmark(bid);
+    });
+  });
+}
+
+// ---- Layers Drawer & Ink Visibility ----
+function toggleInkVisibility() {
+  state.inkVisible = !state.inkVisible;
+  if (dryCanvas) dryCanvas.style.display = state.inkVisible ? 'block' : 'none';
+  if (wetCanvas) wetCanvas.style.opacity = state.inkVisible ? '1' : '0';
+  renderLayersDrawer();
+  showToast(state.inkVisible ? 'Ink Layer visible' : 'Ink Layer hidden', 'info');
+}
+
+function renderLayersDrawer() {
+  const container = $('layersList');
+  if (!container) return;
+  const strokeCount = state.strokes ? state.strokes.filter(s => !s.deleted).length : 0;
+  container.innerHTML = `
+    <div class="layer-control-row ${state.inkVisible ? 'active' : ''}">
+      <div class="layer-info">
+        <span class="layer-name">🖊️ Vector Ink Layer</span>
+        <span class="layer-count">${strokeCount} vector stroke${strokeCount !== 1 ? 's' : ''} • Real-time</span>
+      </div>
+      <button id="btnToggleInkLayer" class="layer-visibility-btn" title="${state.inkVisible ? 'Hide ink layer' : 'Show ink layer'}" aria-label="Toggle ink visibility">
+        ${state.inkVisible ? '👁️' : '👁️‍🗨️'}
+      </button>
+    </div>
+    <div class="layer-control-row active" style="margin-top:8px;">
+      <div class="layer-info">
+        <span class="layer-name">📄 PDF Vector Underlay</span>
+        <span class="layer-count">On-demand LOD tile renderer</span>
+      </div>
+      <span style="font-size:11px; color:#10b981; font-weight:600; padding:4px 8px; background:rgba(16,185,129,0.1); border-radius:6px;">Base</span>
+    </div>
+  `;
+  const toggleBtn = $('btnToggleInkLayer');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', toggleInkVisibility);
+  }
 }
 
 // ---- Navigation Drawer (secondary panel) ----
@@ -1571,6 +1782,8 @@ function toggleDrawer(name) {
     if ($('drawerTitle')) $('drawerTitle').textContent = view.title;
     if (name === 'thumbnails') renderThumbnails();
     if (name === 'docInfo') updateDocInfo();
+    if (name === 'bookmarks') renderBookmarks();
+    if (name === 'layers') renderLayersDrawer();
   }
   updateRailButtonsUI();
 }
@@ -1580,6 +1793,10 @@ function updateRailButtonsUI() {
     const btn = $(RAIL_BTN_MAP[viewName]);
     if (btn) btn.classList.toggle('active', state.activeDrawer === viewName);
   });
+  const splitBtn = $('btnRailSplit');
+  if (splitBtn) splitBtn.classList.toggle('active', !!(viewport && viewport.splitMode));
+  const zoomSplitBtn = $('btnZoomSplit');
+  if (zoomSplitBtn) zoomSplitBtn.classList.toggle('active', !!(viewport && viewport.splitMode));
 }
 
 function renderThumbnails() {
@@ -1613,7 +1830,7 @@ function updateDocInfo() {
   }
   const tab = state.tabs && state.tabs.find(t => t.id === state.activeTabId);
   box.innerHTML = `
-    <div>Loaded: ${tab ? tab.title : 'Untitled.pdf'}</div>
+    <div>Loaded: ${escapeHtml(tab ? tab.title : 'Untitled.pdf')}</div>
     <div>Pages: ${state.pageInfos.length}</div>
     <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
   `;
@@ -1665,7 +1882,6 @@ function goForward() {
   jumpToPage(state.navHistory[state.navIndex]);
 }
 
-
 // ---- UI binding ----
 function bindUI() {
   // Legacy toolbar buttons
@@ -1699,6 +1915,7 @@ function bindUI() {
   $('btnRailSearch') && $('btnRailSearch').addEventListener('click', () => toggleDrawer('search'));
   $('btnRailBookmarks') && $('btnRailBookmarks').addEventListener('click', () => toggleDrawer('bookmarks'));
   $('btnRailLayers') && $('btnRailLayers').addEventListener('click', () => toggleDrawer('layers'));
+  $('btnRailSplit') && $('btnRailSplit').addEventListener('click', toggleSplitView);
   $('btnRailDocInfo') && $('btnRailDocInfo').addEventListener('click', () => toggleDrawer('docInfo'));
   $('btnRailSettings') && $('btnRailSettings').addEventListener('click', () => toggleDrawer('settings'));
   $('btnCloseDrawer') && $('btnCloseDrawer').addEventListener('click', () => {
@@ -1707,6 +1924,16 @@ function bindUI() {
     state.activeDrawer = null;
     updateRailButtonsUI();
   });
+
+  // Search & Bookmarks actions
+  $('btnExecuteSearch') && $('btnExecuteSearch').addEventListener('click', () => executeSearch());
+  $('drawerSearchInput') && $('drawerSearchInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      executeSearch();
+    }
+  });
+  $('btnAddBookmark') && $('btnAddBookmark').addEventListener('click', addBookmarkForCurrentPage);
 
   // Top Header controls
   $('btnNewTab') && $('btnNewTab').addEventListener('click', () => $('btnOpen') && $('btnOpen').click());
@@ -1718,6 +1945,9 @@ function bindUI() {
   // Export / Share Modal
   $('btnExportShare') && $('btnExportShare').addEventListener('click', () => $('exportModal') && $('exportModal').classList.remove('hidden'));
   $('btnCloseExportModal') && $('btnCloseExportModal').addEventListener('click', () => $('exportModal') && $('exportModal').classList.add('hidden'));
+  $('exportModal') && $('exportModal').addEventListener('click', e => {
+    if (e.target === $('exportModal')) $('exportModal').classList.add('hidden');
+  });
   $('btnExportIncremental') && $('btnExportIncremental').addEventListener('click', () => {
     $('exportModal') && $('exportModal').classList.add('hidden');
     $('btnSave') && $('btnSave').click();
@@ -1739,6 +1969,7 @@ function bindUI() {
   $('btnRedo') && $('btnRedo').addEventListener('click', redo);
 
   $('btnSplit') && $('btnSplit').addEventListener('click', toggleSplitView);
+  $('btnZoomSplit') && $('btnZoomSplit').addEventListener('click', toggleSplitView);
 
   $('btnZoomIn') && $('btnZoomIn').addEventListener('click', () => {
     const pane = viewport.activePane || 'left';
@@ -1789,15 +2020,29 @@ function bindUI() {
     updateToolBadges();
   });
 
-  document.querySelectorAll('.swatch').forEach(s => {
+  document.querySelectorAll('.swatch, .settings-color-swatch').forEach(s => {
     s.addEventListener('click', e => {
       const hex = e.target.getAttribute('data-color');
+      if (!hex) return;
       state.color = [1, 3, 5].map(i => parseInt(hex.substr(i, 2), 16) / 255);
       if ($('colorPicker')) $('colorPicker').value = hex;
-      document.querySelectorAll('.swatch').forEach(sw => sw.classList.remove('active'));
+      document.querySelectorAll('.swatch, .settings-color-swatch').forEach(sw => sw.classList.remove('active'));
       e.target.classList.add('active');
     });
   });
+
+  // Page Navigation Buttons (Header & Canvas Edge Flippers & Split Controls)
+  $('btnHeaderPrevPage') && $('btnHeaderPrevPage').addEventListener('click', () => goToPage(state.leftSheet - 1, 'left'));
+  $('btnHeaderNextPage') && $('btnHeaderNextPage').addEventListener('click', () => goToPage(state.leftSheet + 1, 'left'));
+  $('btnCanvasPrevPage') && $('btnCanvasPrevPage').addEventListener('click', () => goToPage(state.leftSheet - 1, 'left'));
+  $('btnCanvasNextPage') && $('btnCanvasNextPage').addEventListener('click', () => goToPage(state.leftSheet + 1, 'left'));
+
+  $('btnLeftPanePrev') && $('btnLeftPanePrev').addEventListener('click', () => goToPage(state.leftSheet - 1, 'left'));
+  $('btnLeftPaneNext') && $('btnLeftPaneNext').addEventListener('click', () => goToPage(state.leftSheet + 1, 'left'));
+  $('btnRightPanePrev') && $('btnRightPanePrev').addEventListener('click', () => goToPage(state.rightSheet - 1, 'right'));
+  $('btnRightPaneNext') && $('btnRightPaneNext').addEventListener('click', () => goToPage(state.rightSheet + 1, 'right'));
+
+  $('btnOutlineAddBookmark') && $('btnOutlineAddBookmark').addEventListener('click', addBookmarkForCurrentPage);
 
   $('btnPrev') && $('btnPrev').addEventListener('click', () => goToPage(state.leftSheet - 1, 'left'));
   $('btnNext') && $('btnNext').addEventListener('click', () => goToPage(state.leftSheet + 1, 'left'));
@@ -1902,9 +2147,23 @@ function attachOpenListeners() {
     const invoke = getInvoke();
     if (invoke) {
       try {
-        const savedPath = await invoke('save_pdf', { outPathStr: null });
+        let savedPath;
+        const curTab = state.tabs && state.tabs.find(t => t.id === state.activeTabId);
+        if (curTab && curTab.pathStr) {
+          savedPath = await invoke('save_pdf', { outPathStr: curTab.pathStr });
+        } else {
+          savedPath = await invoke('save_pdf_dialog');
+          if (curTab && savedPath) {
+            curTab.pathStr = savedPath;
+            curTab.title = savedPath.split('\\').pop().split('/').pop();
+            renderTabsDOM();
+          }
+        }
         showToast('Saved to: ' + savedPath, 'success');
-      } catch (err) { showToast('Failed to save PDF: ' + err, 'error'); }
+      } catch (err) {
+        if (err === 'CANCELLED') return;
+        showToast('Failed to save PDF: ' + (err.message || err), 'error');
+      }
     } else {
       showToast('Running in browser mode. Save via Tauri host.', 'info');
     }
@@ -1956,6 +2215,24 @@ function attachOpenListeners() {
     }
   });
 }
+
+// Window blur safety cleanup to prevent stuck drawing / panning states
+window.addEventListener('blur', () => {
+  if (viewport) {
+    viewport.isPanning = false;
+  }
+  state.isErasing = false;
+  state.spacePanActive = false;
+  state.cur = null;
+  state.streamline = null;
+  clearLaser();
+  clearWet();
+  if (wetCanvas) {
+    wetCanvas.classList.remove('panning', 'space-pan');
+  }
+  $('toolbar') && $('toolbar').classList.remove('pen-down');
+  $('floatingDock') && $('floatingDock').classList.remove('pen-down');
+});
 
 // Command palette events
 $('cmdPaletteInput') && $('cmdPaletteInput').addEventListener('input', e => {
@@ -2017,8 +2294,35 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  // If user is currently typing in an input or textarea, don't hijack editing keys
+  const activeEl = document.activeElement;
+  const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+  if (!isTyping) {
+    if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === '[') {
+      e.preventDefault();
+      goToPage(state.leftSheet - 1, 'left');
+      return;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ']') {
+      e.preventDefault();
+      goToPage(state.leftSheet + 1, 'left');
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      goToPage(0, 'left');
+      return;
+    }
+    if (e.key === 'End' && state.pageInfos && state.pageInfos.length) {
+      e.preventDefault();
+      goToPage(state.pageInfos.length - 1, 'left');
+      return;
+    }
+  }
+
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (state.selectedStrokes && state.selectedStrokes.length) {
+    if (!isTyping && state.selectedStrokes && state.selectedStrokes.length) {
       e.preventDefault();
       const deleted = [];
       for (const s of state.selectedStrokes) {
@@ -2050,11 +2354,15 @@ window.addEventListener('keydown', e => {
     if (e.key === 's') { e.preventDefault(); $('btnSave') && $('btnSave').click(); return; }
     if (e.key === 'o') { e.preventDefault(); $('btnHeaderOpen') && $('btnHeaderOpen').click(); return; }
     if (e.key === 'b') { e.preventDefault(); toggleSidebar(); return; }
+    if (e.key === 'g') { e.preventDefault(); toggleDrawer('thumbnails'); return; }
+    if (e.key === 'f') { e.preventDefault(); toggleDrawer('search'); return; }
     return;
   }
 
   if (e.altKey) return;
   if (e.repeat) return;
+  if (isTyping) return;
+
   const k = e.key.toLowerCase();
   if (SPRING_MAP[k] && !state.springKey) {
     state.springKey = k;

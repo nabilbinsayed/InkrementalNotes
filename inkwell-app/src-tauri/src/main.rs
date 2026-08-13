@@ -48,8 +48,10 @@ fn main() {
             commands::erase_strokes_near,
             commands::erase_strokes_in_rect,
             commands::save_pdf,
+            commands::save_pdf_dialog,
             commands::get_document_info,
             commands::insert_blank_page,
+            commands::search_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

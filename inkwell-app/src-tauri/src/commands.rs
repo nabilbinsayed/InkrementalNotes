@@ -218,7 +218,13 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     // same dropped file still recovers its crash journal).
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes.iter().take(8192) { h ^= *b as u64; h = h.wrapping_mul(0x0000_0100_0000_01b3); }
-    let path = std::env::temp_dir().join(format!("inkwell-{:016x}-{}", h, name));
+    let clean_name = Path::new(&name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.chars().filter(|c| c.is_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect::<String>())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "document.pdf".to_string());
+    let path = std::env::temp_dir().join(format!("inkwell-{:016x}-{}", h, clean_name));
     let _ = std::fs::write(&path, &bytes);
 
     let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
@@ -269,10 +275,7 @@ pub async fn render_tile(
     state: State<'_, AppState>,
 ) -> Result<Vec<u8>, String> {
     // Cap tile resolution to bound the IPC payload size (RGBA = w*h*4 bytes).
-    let px = px.min(1024);
-    if px == 0 {
-        return Err("Tile size must be greater than zero".into());
-    }
+    let px = px.clamp(16, 2048);
     if !(rect[0].is_finite() && rect[1].is_finite() && rect[2].is_finite() && rect[3].is_finite())
         || rect[2] <= rect[0]
         || rect[3] <= rect[1]
@@ -282,7 +285,7 @@ pub async fn render_tile(
 
     let rw = (rect[2] - rect[0]).max(1.0);
     let rh = (rect[3] - rect[1]).max(1.0);
-    let scale = (px as f64) / rw.max(rh);
+    let scale = ((px as f64) / rw.max(rh)).min(16.0);
 
     // Copy the PDF bytes under a short-lived lock so the (potentially slow)
     // PDFium rasterisation below does not hold the pdf_bytes mutex open.
@@ -307,8 +310,8 @@ pub async fn render_tile(
     let page_w = page_obj.width().value as f64;
     let page_h = page_obj.height().value as f64;
 
-    let target_w = (page_w * scale).round().max(1.0) as i32;
-    let target_h = (page_h * scale).round().max(1.0) as i32;
+    let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
+    let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
 
     let mut cache_guard = state.page_bitmap_cache.lock().unwrap();
 
@@ -443,7 +446,13 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
     let id = stroke_id_str.parse::<u128>().map_err(|e| e.to_string())?;
-    Ok(doc.remove_stroke(id))
+    let removed = doc.remove_stroke(id);
+    if removed {
+        if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+            let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+        }
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -496,6 +505,29 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
 }
 
 #[tauri::command]
+pub async fn save_pdf_dialog(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let file_option = tauri::async_runtime::spawn_blocking(move || {
+        window.dialog()
+            .file()
+            .add_filter("PDF Document", &["pdf"])
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if let Some(path) = file_option {
+        let path_buf = path.into_path().map_err(|e| e.to_string())?;
+        let path_str = path_buf.to_string_lossy().to_string();
+        save_pdf(Some(path_str), state).await
+    } else {
+        Err("CANCELLED".to_string())
+    }
+}
+
+#[tauri::command]
 pub async fn erase_strokes_near(
     sheet: usize,
     px: f64,
@@ -506,6 +538,13 @@ pub async fn erase_strokes_near(
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
     let removed = doc.erase_strokes_near(sheet, px, py, radius);
+    if !removed.is_empty() {
+        if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+            for &id in &removed {
+                let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+            }
+        }
+    }
     Ok(removed.into_iter().map(|id| id.to_string()).collect())
 }
 
@@ -521,6 +560,13 @@ pub async fn erase_strokes_in_rect(
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
     let removed = doc.erase_strokes_in_rect(sheet, x0, y0, x1, y1);
+    if !removed.is_empty() {
+        if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+            for &id in &removed {
+                let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
+            }
+        }
+    }
     Ok(removed.into_iter().map(|id| id.to_string()).collect())
 }
 
@@ -553,4 +599,64 @@ pub async fn insert_blank_page(
         width_pt,
         height_pt,
     })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    pub page_index: usize,
+    pub snippet: String,
+    pub match_count: usize,
+}
+
+#[tauri::command]
+pub async fn search_pdf(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchResultItem>, String> {
+    let query_trimmed = query.trim();
+    if query_trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let bytes = state
+        .pdf_bytes
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No PDF loaded")?;
+
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available")?;
+
+    let doc = pdfium
+        .load_pdf_from_byte_slice(&bytes, None)
+        .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+    let mut results = Vec::new();
+    let q_lower = query_trimmed.to_lowercase();
+    let n_pages = doc.pages().len() as usize;
+
+    for i in 0..n_pages {
+        if let Some(text) = inkwell_pdf::extract_text(&doc, i as u32) {
+            let text_lower = text.to_lowercase();
+            if let Some(idx) = text_lower.find(&q_lower) {
+                let start = idx.saturating_sub(40);
+                let end = (idx + query_trimmed.len() + 40).min(text.len());
+                let snippet = format!(
+                    "{}{}{}",
+                    if start > 0 { "…" } else { "" },
+                    text[start..end].replace('\n', " "),
+                    if end < text.len() { "…" } else { "" }
+                );
+                let match_count = text_lower.matches(&q_lower).count();
+                results.push(SearchResultItem {
+                    page_index: i,
+                    snippet,
+                    match_count,
+                });
+            }
+        }
+    }
+
+    Ok(results)
 }

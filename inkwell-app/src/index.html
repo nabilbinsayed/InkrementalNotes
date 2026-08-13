@@ -40,6 +40,10 @@
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.9a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="m22 12.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 12.5"/><path d="m22 17.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 17.5"/></svg>
       </button>
 
+      <button id="btnRailSplit" class="rail-btn" title="Toggle Split View (Dual Pane)" aria-label="Toggle split view">
+        <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+      </button>
+
       <button id="btnRailMore" class="rail-btn" title="More Options" aria-label="More options menu">
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
       </button>
@@ -62,7 +66,7 @@
   <aside id="navDrawer" class="nav-drawer hidden" aria-label="Secondary Navigation Panel">
     <div id="drawerHeader" class="drawer-header">
       <h3 id="drawerTitle">Thumbnails</h3>
-      <button id="btnCloseDrawer" class="icon-btn" title="Close Panel" aria-label="Close panel">✕</button>
+      <button id="btnCloseDrawer" class="drawer-close-btn" title="Close Panel" aria-label="Close panel">✕</button>
     </div>
 
     <!-- Thumbnails Drawer View -->
@@ -74,46 +78,62 @@
 
     <!-- Outline / TOC Drawer View -->
     <div id="drawerOutline" class="drawer-content hidden">
-      <div id="outlineList" class="outline-list">
-        <div class="info-item">No bookmarks or table of contents found in document.</div>
+      <div id="outlineList" class="outline-list"></div>
+      <div id="outlineEmptyState" class="drawer-empty-state">
+        <div class="empty-state-icon">📑</div>
+        <div class="empty-state-title">No Table of Contents</div>
+        <div class="empty-state-desc">This PDF does not contain embedded bookmarks or chapter outlines. You can create custom bookmarks for fast navigation.</div>
+        <button id="btnOutlineAddBookmark" class="btn-add-bookmark-action">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+          <span>Bookmark Current Page</span>
+        </button>
       </div>
     </div>
 
     <!-- Search Drawer View -->
     <div id="drawerSearch" class="drawer-content hidden">
       <div class="search-box-wrap">
-        <input type="text" id="drawerSearchInput" placeholder="Search document text..." autocomplete="off">
-        <button id="btnExecuteSearch" class="btn btn-secondary">Find</button>
+        <svg class="search-icon-inline" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input type="text" id="drawerSearchInput" placeholder="Search in document text..." autocomplete="off">
+        <button id="btnExecuteSearch" class="btn-search-exec">Find</button>
       </div>
-      <div id="drawerSearchResults" class="search-results-list"></div>
+      <div id="drawerSearchResults" class="search-results-list">
+        <div class="drawer-empty-state">
+          <div class="empty-state-icon">🔍</div>
+          <div class="empty-state-title">Search Document Text</div>
+          <div class="empty-state-desc">Type any keyword above and press Enter to search across all pages.</div>
+        </div>
+      </div>
     </div>
 
     <!-- Bookmarks Drawer View -->
     <div id="drawerBookmarks" class="drawer-content hidden">
-      <button id="btnAddBookmark" class="btn btn-secondary">+ Bookmark Current Page</button>
-      <div id="bookmarksList" class="bookmarks-list" style="margin-top:12px;"></div>
+      <button id="btnAddBookmark" class="btn-add-bookmark-action">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+        <span>Bookmark Current Page</span>
+      </button>
+      <div id="bookmarksList" class="bookmarks-list" style="margin-top:14px;"></div>
     </div>
 
     <!-- Layers Drawer View -->
     <div id="drawerLayers" class="drawer-content hidden">
-      <div class="layer-item active">
-        <span>Vector Ink Layer (Default)</span>
-        <span class="badge">Active</span>
-      </div>
+      <div class="drawer-section-heading">Annotation & Background Layers</div>
       <div id="layersList" class="layers-list"></div>
     </div>
 
     <!-- Document Info Drawer View -->
     <div id="drawerDocInfo" class="drawer-content hidden">
+      <div class="drawer-section-heading">Document Metadata</div>
       <div id="docInfo" class="info-box">
         <div>No document loaded</div>
       </div>
-      <div style="margin-top:16px;">
-        <button id="btnOpen" class="btn" aria-label="Open PDF file">📂 Open PDF</button>
-        <button id="btnSave" class="btn btn-secondary" style="margin-top:8px;" aria-label="Save PDF file">💾 Save (Ctrl+S)</button>
-        <button id="btnInsertBlank" class="btn btn-secondary" style="margin-top:8px;" aria-label="Insert blank page">📄 Insert Blank Page</button>
+      <div class="drawer-actions-grid" style="margin-top:16px;">
+        <button id="btnOpen" class="btn btn-secondary" aria-label="Open PDF file">📂 Open PDF</button>
+        <button id="btnSave" class="btn btn-secondary" aria-label="Save PDF file">💾 Save PDF</button>
+        <button id="btnInsertBlank" class="btn btn-secondary" aria-label="Insert blank page">📄 Insert Page</button>
       </div>
-      <div id="inputStats" class="info-box" style="margin-top:16px;">
+      <div class="drawer-section-heading" style="margin-top:18px;">Input Pipeline Stats</div>
+      <div id="inputStats" class="info-box">
         <div>Pointer: --</div>
         <div>Samples: 0</div>
         <div>Strokes: 0</div>
@@ -123,20 +143,55 @@
     <!-- Settings Drawer View -->
     <div id="drawerSettings" class="drawer-content hidden">
       <div id="settingsPanel" class="settings-panel">
-        <h4>Render & Stroke Settings</h4>
-        <div class="setting-row">
-          <label for="cCoalesced">
-            <input type="checkbox" id="cCoalesced" checked> Enable Pointer Coalescing
+        <div class="drawer-section-heading">Render & Calibration</div>
+
+        <!-- Coalesced Switch Card -->
+        <div class="settings-card">
+          <label class="setting-toggle-row" for="cCoalesced">
+            <div class="toggle-text">
+              <span class="setting-title">Pointer Coalescing</span>
+              <span class="setting-desc">Smooths stylus polling on high-refresh screens</span>
+            </div>
+            <div class="custom-toggle">
+              <input type="checkbox" id="cCoalesced" checked>
+              <span class="toggle-slider"></span>
+            </div>
           </label>
         </div>
-        <div class="setting-row">
-          <label>Stroke Width</label>
-          <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6">
-          <span id="widthVal">1.6 pt</span>
+
+        <!-- Stroke Width Card -->
+        <div class="settings-card">
+          <div class="setting-header-row">
+            <span class="setting-title">Stroke Width</span>
+            <span id="widthVal" class="setting-value-badge">1.6 pt</span>
+          </div>
+          <div class="range-slider-wrap">
+            <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6" class="custom-range-slider">
+          </div>
+          <div class="slider-marks">
+            <span>0.5 pt</span>
+            <span>8 pt</span>
+            <span>16 pt</span>
+          </div>
         </div>
-        <div class="setting-row">
-          <label>Ink Color</label>
-          <input type="color" id="colorPicker" value="#141724" style="border:none; background:none; cursor:pointer; width:32px; height:32px;">
+
+        <!-- Ink Color Card -->
+        <div class="settings-card">
+          <div class="setting-header-row">
+            <span class="setting-title">Ink Color Palette</span>
+            <label class="custom-color-btn" title="Pick custom HEX color">
+              <input type="color" id="colorPicker" value="#141724">
+              <span class="color-picker-icon">🎨</span>
+            </label>
+          </div>
+          <div class="setting-color-grid">
+            <button class="settings-color-swatch active" data-color="#141724" style="background:#141724;" title="Carbon Black"></button>
+            <button class="settings-color-swatch" data-color="#1e40af" style="background:#1e40af;" title="Oxford Blue"></button>
+            <button class="settings-color-swatch" data-color="#b91c1c" style="background:#b91c1c;" title="Crimson Red"></button>
+            <button class="settings-color-swatch" data-color="#047857" style="background:#047857;" title="Forest Green"></button>
+            <button class="settings-color-swatch" data-color="#7c3aed" style="background:#7c3aed;" title="Royal Purple"></button>
+            <button class="settings-color-swatch" data-color="#b45309" style="background:#b45309;" title="Amber Brown"></button>
+          </div>
         </div>
       </div>
     </div>
@@ -148,10 +203,10 @@
     <header id="topHeader" class="top-header">
       <!-- Left history & navigation controls -->
       <div class="header-left">
-        <button id="btnNavBack" class="header-icon-btn" title="Back" aria-label="Back">
+        <button id="btnNavBack" class="header-icon-btn" title="Back in navigation history" aria-label="Back">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
         </button>
-        <button id="btnNavForward" class="header-icon-btn" title="Forward" aria-label="Forward">
+        <button id="btnNavForward" class="header-icon-btn" title="Forward in navigation history" aria-label="Forward">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
         </button>
         <button id="btnHeaderOpen" class="btn-primary-accent" title="Open PDF File (Ctrl+O)" aria-label="Open PDF File">
@@ -172,28 +227,60 @@
         <button id="btnNewTab" class="tab-add-btn" title="Open new document / tab" aria-label="New tab">+</button>
       </div>
 
-      <!-- Page selector dropdown & zoom pill -->
+      <!-- Center: First-Class Page Navigation Suite -->
       <div class="header-center">
-        <div id="pageSelectorPill" class="page-selector-pill">
-          <button id="btnPageDropdown" class="page-dropdown-btn">
-            <span id="pageNumDisplay">1</span> <span class="caret">▼</span>
+        <div id="pageNavCluster" class="page-nav-cluster">
+          <button id="btnHeaderPrevPage" class="nav-cluster-btn" title="Previous Page (Left Arrow / PageUp)" aria-label="Previous page">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg>
           </button>
-          <button id="btnHeaderAddPage" class="page-add-btn" title="Add blank page" aria-label="Add blank page">+</button>
+
+          <div id="pageSelectorPill" class="page-selector-pill" title="Click to view all page thumbnails or type page number">
+            <button id="btnPageDropdown" class="page-dropdown-btn">
+              <span class="page-pill-prefix">Page</span>
+              <span id="pageNumDisplay">1</span>
+              <span class="page-total-label">/ <span id="pageTotalDisplay">1</span></span>
+              <span class="caret">▼</span>
+            </button>
+          </div>
+
+          <button id="btnHeaderNextPage" class="nav-cluster-btn" title="Next Page (Right Arrow / PageDown)" aria-label="Next page">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+
+          <div class="cluster-divider"></div>
+
+          <button id="btnHeaderAddPage" class="nav-cluster-btn add-btn" title="Insert blank page after current" aria-label="Insert blank page">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+        </div>
+
+        <!-- Split mode dual-pane page cluster -->
+        <div id="splitPageNavCluster" class="split-page-nav-cluster hidden">
+          <div class="pane-nav-subcluster">
+            <span class="pane-nav-tag">Left</span>
+            <button id="btnLeftPanePrev" class="nav-cluster-btn mini" title="Previous page (left pane)">‹</button>
+            <span id="leftPanePageNum" class="pane-page-num">1</span>
+            <button id="btnLeftPaneNext" class="nav-cluster-btn mini" title="Next page (left pane)">›</button>
+          </div>
+          <div class="pane-nav-subcluster">
+            <span class="pane-nav-tag">Right</span>
+            <button id="btnRightPanePrev" class="nav-cluster-btn mini" title="Previous page (right pane)">‹</button>
+            <span id="rightPanePageNum" class="pane-page-num">2</span>
+            <button id="btnRightPaneNext" class="nav-cluster-btn mini" title="Next page (right pane)">›</button>
+          </div>
         </div>
       </div>
 
-      <!-- Right Header Actions (Upload/Share & User Profile) -->
+      <!-- Right Header Actions (Upload/Share & Document Status) -->
       <div class="header-right">
-        <button id="btnExportShare" class="btn-share-pill" title="Export / Share PDF">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
-          <span>Export / Share</span>
+        <button id="btnExportShare" class="btn-share-pill" title="Export / Save PDF">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>
+          <span>Export</span>
         </button>
 
-        <div id="userProfilePill" class="user-profile-pill" title="User Profile">
-          <div class="avatar-circle">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>
-          </div>
-          <span class="profile-label">Basic Upgrade</span>
+        <div id="docStatusBadge" class="doc-status-badge" title="Vector Engine & WAL Journal Active">
+          <span class="status-indicator-dot"></span>
+          <span id="docStatusText">Vector Ready</span>
         </div>
       </div>
     </header>
@@ -277,16 +364,36 @@
 
       <!-- Floating Zoom Controls (bottom-right overlay) -->
       <div id="zoomControl" class="zoom-control-dock">
-        <button id="btnZoomOut" class="tool-btn" title="Zoom Out (-)" aria-label="Zoom out (-)">🔍-</button>
+        <button id="btnZoomOut" class="zoom-dock-btn" title="Zoom Out (-)" aria-label="Zoom out (-)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
         <span id="zoomLevelDisplay" class="zoom-display">100%</span>
-        <button id="btnZoomIn" class="tool-btn" title="Zoom In (+)" aria-label="Zoom in (+)">🔍+</button>
-        <button id="btnZoomFit" class="tool-btn" title="Fit Page (⤢)" aria-label="Fit page">⤢</button>
-        <button id="btnFullscreen" class="tool-btn" title="Toggle Fullscreen (F11)" aria-label="Toggle fullscreen">⛶</button>
+        <button id="btnZoomIn" class="zoom-dock-btn" title="Zoom In (+)" aria-label="Zoom in (+)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+        </button>
+        <div class="zoom-divider"></div>
+        <button id="btnZoomFit" class="zoom-dock-btn" title="Fit Page (⤢)" aria-label="Fit page">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        </button>
+        <button id="btnZoomSplit" class="zoom-dock-btn" title="Toggle Split View (Dual Pane)" aria-label="Toggle split view">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+        </button>
+        <button id="btnFullscreen" class="zoom-dock-btn" title="Toggle Fullscreen (F11)" aria-label="Toggle fullscreen">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+        </button>
       </div>
 
       <!-- Floating Scroll Back to Top Button -->
       <button id="btnScrollTop" class="floating-scroll-btn" title="Scroll to top / Page Jump" aria-label="Scroll to top">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m18 15-6-6-6 6"/></svg>
+      </button>
+
+      <!-- Floating Canvas Edge Page Flippers -->
+      <button id="btnCanvasPrevPage" class="canvas-edge-nav-btn prev" title="Previous Page (Left Arrow / PageUp)" aria-label="Previous page">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+      <button id="btnCanvasNextPage" class="canvas-edge-nav-btn next" title="Next Page (Right Arrow / PageDown)" aria-label="Next page">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>
       </button>
 
       <!-- Canvases -->
@@ -357,23 +464,49 @@
   </main>
 </div>
 
-<!-- Export / Share Modal -->
-<div id="exportModal" class="modal-overlay hidden">
+<!-- Export / Save Document Modal -->
+<div id="exportModal" class="modal-overlay hidden" aria-modal="true" role="dialog">
   <div class="modal-card">
     <div class="modal-header">
-      <h3>Export / Share PDF</h3>
-      <button id="btnCloseExportModal" class="icon-btn">✕</button>
+      <div class="modal-title-group">
+        <h3 class="modal-title">Save & Export PDF</h3>
+        <p class="modal-subtitle">Choose how you would like to save your document</p>
+      </div>
+      <button id="btnCloseExportModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
     </div>
-    <div class="modal-body">
-      <p style="color:var(--text-muted); font-size:14px; margin-bottom:16px;">
-        Choose export format for standard PDF compliance:
-      </p>
-      <button id="btnExportIncremental" class="btn" style="width:100%; margin-bottom:8px;">
-        💾 Append-Only Incremental Save (Vector PDF)
-      </button>
-      <button id="btnExportFlattened" class="btn btn-secondary" style="width:100%;">
-        📄 Flatten Vector Ink Streams into PDF
-      </button>
+
+    <div class="modal-options-list">
+      <!-- Option 1: Direct Save Document -->
+      <div class="export-option-card recommended" id="btnExportIncremental" tabindex="0" role="button" aria-label="Save Document">
+        <div class="option-icon-box accent">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+        </div>
+        <div class="option-info">
+          <div class="option-title-row">
+            <span class="option-title">Save Document</span>
+            <span class="option-tag-badge">Recommended</span>
+          </div>
+          <p class="option-desc">Saves all vector ink strokes directly into the PDF. Retains 100% vector fidelity and full compatibility with Acrobat, Edge, and iOS.</p>
+        </div>
+      </div>
+
+      <!-- Option 2: Export As New File (Save As) -->
+      <div class="export-option-card" id="btnExportFlattened" tabindex="0" role="button" aria-label="Export As New File">
+        <div class="option-icon-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        </div>
+        <div class="option-info">
+          <div class="option-title-row">
+            <span class="option-title">Export As New Copy...</span>
+          </div>
+          <p class="option-desc">Save a standalone copy of this PDF to a new location or with a new file name.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer-info">
+      <span class="footer-info-icon">🔒</span>
+      <span>Base document bytes are never corrupted or rasterised.</span>
     </div>
   </div>
 </div>
