@@ -366,6 +366,7 @@ async function drawTileData(data, tr, pl, pane, pi) {
   const [pageX1, pageY1] = viewport.worldToScreen(pl.x + pi.width_pt, pl.y + pi.height_pt, pane);
 
   tctx.save();
+  tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.scale(state.dpr, state.dpr);
   clipToPane(tctx, pane);
   tctx.beginPath();
@@ -590,30 +591,36 @@ function fitPageInPanes(piLeft = state.pageInfos[state.leftSheet], piRight = sta
   const stageH = r ? r.height : (tilesCanvas.height / state.dpr);
   const margin = 40;
 
+  const maxW = viewport.maxDocWidth || piLeft.width_pt || 595.0;
+
   if (viewport.splitMode && piRight) {
     const halfW = stageW / 2;
     const availW = Math.max(100, halfW - margin);
     const availH = Math.max(100, stageH - margin);
 
-    const fitZoomLeft = Math.max(0.2, Math.min(4.0, Math.min(availW / piLeft.width_pt, availH / piLeft.height_pt)));
-    const fitZoomRight = Math.max(0.2, Math.min(4.0, Math.min(availW / piRight.width_pt, availH / piRight.height_pt)));
+    const fitZoomLeft = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piLeft.height_pt)));
+    const fitZoomRight = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piRight.height_pt)));
     const fitZoom = Math.min(fitZoomLeft, fitZoomRight);
 
     viewport.zoom = fitZoom;
     viewport.rightZoom = fitZoom;
 
-    viewport.panX = Math.round((halfW - piLeft.width_pt * fitZoom) / 2);
-    viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * fitZoom) / 2));
+    const layoutLeft = viewport.getPageLayout(state.leftSheet);
+    const layoutRight = viewport.getPageLayout(state.rightSheet);
 
-    viewport.rightPanX = Math.round(halfW + (halfW - piRight.width_pt * fitZoom) / 2);
-    viewport.rightPanY = Math.max(20, Math.round((stageH - piRight.height_pt * fitZoom) / 2));
+    viewport.panX = Math.round((halfW - maxW * fitZoom) / 2);
+    viewport.panY = Math.round(-layoutLeft.y * fitZoom + 30);
+
+    viewport.rightPanX = Math.round(halfW + (halfW - maxW * fitZoom) / 2);
+    viewport.rightPanY = Math.round(-layoutRight.y * fitZoom + 30);
   } else {
     const availW = Math.max(100, stageW - margin);
     const availH = Math.max(100, stageH - margin);
-    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / piLeft.width_pt, availH / piLeft.height_pt)));
+    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / maxW, availH / piLeft.height_pt)));
     viewport.zoom = fitZoom;
-    viewport.panX = Math.round((stageW - piLeft.width_pt * fitZoom) / 2);
-    viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * fitZoom) / 2));
+    const layoutLeft = viewport.getPageLayout(state.leftSheet);
+    viewport.panX = Math.round((stageW - maxW * fitZoom) / 2);
+    viewport.panY = Math.round(-layoutLeft.y * fitZoom + 30);
   }
 }
 
@@ -621,17 +628,19 @@ function recenterPanesOnly(piLeft = state.pageInfos[state.leftSheet], piRight = 
   if (!piLeft) return;
   const r = stageRect || (wetCanvas ? wetCanvas.getBoundingClientRect() : null);
   const stageW = r ? r.width : (tilesCanvas.width / state.dpr);
-  const stageH = r ? r.height : (tilesCanvas.height / state.dpr);
+  const maxW = viewport.maxDocWidth || piLeft.width_pt || 595.0;
 
+  const layoutLeft = viewport.getPageLayout(state.leftSheet);
   if (viewport.splitMode && piRight) {
     const halfW = stageW / 2;
-    viewport.panX = Math.round((halfW - piLeft.width_pt * viewport.zoom) / 2);
-    viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * viewport.zoom) / 2));
-    viewport.rightPanX = Math.round(halfW + (halfW - piRight.width_pt * viewport.rightZoom) / 2);
-    viewport.rightPanY = Math.max(20, Math.round((stageH - piRight.height_pt * viewport.rightZoom) / 2));
+    const layoutRight = viewport.getPageLayout(state.rightSheet);
+    viewport.panX = Math.round((halfW - maxW * viewport.zoom) / 2);
+    viewport.panY = Math.round(-layoutLeft.y * viewport.zoom + 30);
+    viewport.rightPanX = Math.round(halfW + (halfW - maxW * viewport.rightZoom) / 2);
+    viewport.rightPanY = Math.round(-layoutRight.y * viewport.rightZoom + 30);
   } else {
-    viewport.panX = Math.round((stageW - piLeft.width_pt * viewport.zoom) / 2);
-    viewport.panY = Math.max(20, Math.round((stageH - piLeft.height_pt * viewport.zoom) / 2));
+    viewport.panX = Math.round((stageW - maxW * viewport.zoom) / 2);
+    viewport.panY = Math.round(-layoutLeft.y * viewport.zoom + 30);
   }
 }
 
