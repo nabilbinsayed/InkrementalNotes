@@ -1,6 +1,7 @@
 use crate::state::{AppState, CachedPageBitmap, WalOp};
 use serde::{Deserialize, Serialize};
 use tauri::State;
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 use pdfium_render::prelude::*;
 use inkwell_core::{Document, Sample, Stroke, ToolKind, Brush, PdfFile, SidecarStatus, wal::{atomic_write, Wal, WalEntry}};
@@ -67,12 +68,13 @@ pub struct FrontendStroke {
     pub deleted: bool,
 }
 
-/// Result of opening a PDF: page dimensions plus recovered/loaded strokes.
+/// Result of opening a PDF: page dimensions plus recovered/loaded strokes and outline.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenPdfResult {
     pub page_infos: Vec<PageInfo>,
     pub recovered_strokes: usize,
     pub loaded_strokes: Vec<FrontendStroke>,
+    pub outline: Vec<inkwell_pdf::TocItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,19 +114,18 @@ fn extract_frontend_strokes(doc: &Document) -> Vec<FrontendStroke> {
     out
 }
 
-/// Extract page count and dimensions from PDF bytes using the cached PDFium instance.
+/// Extract page count, dimensions, and table of contents from PDF bytes using PDFium.
 /// Falls back to the shallow `PdfFile` reader if PDFium is unavailable.
-fn get_page_infos(
+fn extract_pdf_meta(
     bytes: &[u8],
     state: &AppState,
-    pdf_file_fallback: Option<&PdfFile>,
-) -> Vec<PageInfo> {
+) -> (Vec<PageInfo>, Vec<inkwell_pdf::TocItem>) {
     let pdfium_guard = state.pdfium.lock().unwrap();
     if let Some(pdfium) = pdfium_guard.as_ref() {
         match pdfium.load_pdf_from_byte_slice(bytes, None) {
             Ok(doc) => {
                 let n = doc.pages().len() as usize;
-                return (0..n)
+                let page_infos = (0..n)
                     .map(|i| {
                         let (w, h) = doc.pages()
                             .get(i as i32)
@@ -134,9 +135,11 @@ fn get_page_infos(
                         PageInfo { page_index: i, width_pt: w, height_pt: h }
                     })
                     .collect();
+                let outline = inkwell_pdf::extract_outline(&doc);
+                return (page_infos, outline);
             }
             Err(e) => {
-                eprintln!("[inkwell] PDFium failed to load PDF for page info: {e:?}");
+                eprintln!("[inkwell] PDFium failed to load PDF for metadata: {e:?}");
             }
         }
     } else {
@@ -144,50 +147,13 @@ fn get_page_infos(
     }
 
     // Fallback: use the shallow PdfFile reader (only works for classic-xref PDFs)
-    let n = pdf_file_fallback
+    let n = PdfFile::open(bytes.to_vec())
         .map(|f| f.page_count())
         .unwrap_or(1);
-    (0..n)
+    let page_infos = (0..n)
         .map(|i| PageInfo { page_index: i, width_pt: 595.0, height_pt: 842.0 })
-        .collect()
-}
-
-/// Normalise PDF bytes using the cached PDFium instance.
-/// Returns the original bytes unchanged if PDFium is unavailable or normalisation fails.
-fn normalise_if_needed(bytes: Vec<u8>, state: &AppState) -> Result<(Vec<u8>, Option<PdfFile>), String> {
-    match PdfFile::open(bytes.clone()) {
-        Ok(f) => Ok((bytes, Some(f))),
-        Err(e) => {
-            eprintln!("[inkwell] Shallow PDF parser error ({e:?}), attempting PDFium normalisation...");
-            let pdfium_guard = state.pdfium.lock().unwrap();
-            match pdfium_guard.as_ref() {
-                Some(pdfium) => {
-                    match inkwell_pdf::normalise(pdfium, &bytes) {
-                        Ok(norm_bytes) => {
-                            eprintln!("[inkwell] PDFium normalisation succeeded ({} bytes -> {} bytes).", bytes.len(), norm_bytes.len());
-                            // The normalised bytes should parse with the shallow reader now.
-                            let f = PdfFile::open(norm_bytes.clone()).ok();
-                            Ok((norm_bytes, f))
-                        }
-                        Err(norm_err) => {
-                            // Normalisation failed: surface a real error rather than silently
-                            // loading malformed bytes and showing a blank document.
-                            Err(format!(
-                                "Failed to parse PDF ({e}) and PDFium normalisation also failed: {norm_err:?}"
-                            ))
-                        }
-                    }
-                }
-                None => {
-                    // PDFium not available — this PDF format requires it.
-                    Err(format!(
-                        "Failed to parse PDF ({e}). PDFium is not available (pdfium.dll not found). \
-                         This PDF format requires PDFium to open."
-                    ))
-                }
-            }
-        }
-    }
+        .collect();
+    (page_infos, Vec::new())
 }
 
 use tauri_plugin_dialog::DialogExt;
@@ -218,12 +184,11 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     let path = PathBuf::from(&path_str);
     let bytes = std::fs::read(&path).map_err(|e| format!("Failed to read PDF file: {e}"))?;
 
-    let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
-
-    let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
+    let arc_bytes = Arc::new(bytes);
+    let (page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
     let n_pages = page_infos.len();
 
-    let mut doc = match inkwell_core::pdf::read_sidecar(&valid_bytes) {
+    let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
         Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
             eprintln!("[inkwell] Loaded sidecar with {} strokes from {:?}", d.stroke_count(), path);
             let mut d = d;
@@ -243,8 +208,9 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
             eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
             for entry in entries {
                 match entry {
-                    WalEntry::Added(s) => { doc.push_stroke(0, s); recovered_strokes += 1; }
+                    WalEntry::Added { sheet, stroke } => { doc.push_stroke(sheet, stroke); recovered_strokes += 1; }
                     WalEntry::Removed(id) => { doc.remove_stroke(id); }
+                    WalEntry::PageInserted { index, .. } => { doc.insert_sheet(index); }
                 }
             }
         }
@@ -254,7 +220,8 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
-    *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    state.page_bitmap_cache.lock().unwrap().clear();
 
     // Open WAL in temp dir (not the synced folder).
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
@@ -268,8 +235,8 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF: {:?} — {} pages, {} loaded strokes", path, n_pages, loaded_strokes.len());
-    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes })
+    eprintln!("[inkwell] Opened PDF: {:?} — {} pages, {} loaded strokes, {} outline nodes", path, n_pages, loaded_strokes.len(), outline.len());
+    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes, outline })
 }
 
 #[tauri::command]
@@ -319,12 +286,11 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     let path = std::env::temp_dir().join(format!("inkwell-{:016x}-{}", h, clean_name));
     let _ = std::fs::write(&path, &bytes);
 
-    let (valid_bytes, pdf_file) = normalise_if_needed(bytes, &state)?;
-
-    let page_infos = get_page_infos(&valid_bytes, &state, pdf_file.as_ref());
+    let arc_bytes = Arc::new(bytes);
+    let (page_infos, outline) = extract_pdf_meta(&arc_bytes, &state);
     let n_pages = page_infos.len();
 
-    let mut doc = match inkwell_core::pdf::read_sidecar(&valid_bytes) {
+    let mut doc = match inkwell_core::pdf::read_sidecar(&arc_bytes) {
         Ok(SidecarStatus::Ok(d)) | Ok(SidecarStatus::Stale(d)) => {
             eprintln!("[inkwell] Loaded sidecar with {} strokes from bytes ({})", d.stroke_count(), name);
             let mut d = d;
@@ -343,8 +309,9 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
             eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
             for entry in entries {
                 match entry {
-                    WalEntry::Added(s) => { doc.push_stroke(0, s); recovered_strokes += 1; }
+                    WalEntry::Added { sheet, stroke } => { doc.push_stroke(sheet, stroke); recovered_strokes += 1; }
                     WalEntry::Removed(id) => { doc.remove_stroke(id); }
+                    WalEntry::PageInserted { index, .. } => { doc.insert_sheet(index); }
                 }
             }
         }
@@ -354,7 +321,8 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
-    *state.pdf_bytes.lock().unwrap() = Some(valid_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    state.page_bitmap_cache.lock().unwrap().clear();
 
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
         let _ = old_tx.send(WalOp::Close);
@@ -367,8 +335,8 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages, {} loaded strokes", name, n_pages, loaded_strokes.len());
-    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes })
+    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages, {} loaded strokes, {} outline nodes", name, n_pages, loaded_strokes.len(), outline.len());
+    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes, outline })
 }
 
 #[tauri::command]
@@ -391,39 +359,36 @@ pub async fn render_tile(
     let rh = (rect[3] - rect[1]).max(1.0);
     let scale = ((px as f64) / rw.max(rh)).min(16.0);
 
-    // Copy the PDF bytes under a short-lived lock so the (potentially slow)
-    // PDFium rasterisation below does not hold the pdf_bytes mutex open.
-    let bytes = state
+    // Get an atomic Arc clone under a short-lived lock (zero heap allocation)
+    let arc_bytes = state
         .pdf_bytes
         .lock()
         .unwrap()
         .clone()
         .ok_or("No PDF loaded")?;
 
-    let pdfium_guard = state.pdfium.lock().unwrap();
-    let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-        "PDFium is not available (pdfium.dll was not found at startup). \
-         PDF tiles cannot be rendered.".to_string()
-    })?;
+    let (bgra_bytes, bitmap_w, bitmap_h) = {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+            "PDFium is not available (pdfium.dll was not found at startup). \
+             PDF tiles cannot be rendered.".to_string()
+        })?;
 
-    let doc = pdfium
-        .load_pdf_from_byte_slice(&bytes, None)
-        .map_err(|e| format!("PDFium load error: {e:?}"))?;
+        let doc = pdfium
+            .load_pdf_from_byte_slice(&arc_bytes, None)
+            .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
-    let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
-    let page_w = page_obj.width().value as f64;
-    let page_h = page_obj.height().value as f64;
+        let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+        let page_w = page_obj.width().value as f64;
+        let page_h = page_obj.height().value as f64;
 
-    let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
-    let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
+        let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
+        let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
 
-    let mut cache_guard = state.page_bitmap_cache.lock().unwrap();
-
-    let (bgra_bytes, bitmap_w, bitmap_h) = match cache_guard.as_ref() {
-        Some(c) if c.page == page && c.target_w == target_w && c.target_h == target_h => {
-            (c.bgra_bytes.clone(), c.bitmap_w, c.bitmap_h)
-        }
-        _ => {
+        let mut cache_guard = state.page_bitmap_cache.lock().unwrap();
+        if let Some(cached) = cache_guard.get(page, target_w, target_h) {
+            cached
+        } else {
             let config = PdfRenderConfig::new()
                 .set_target_width(target_w)
                 .set_maximum_height(target_h)
@@ -433,11 +398,11 @@ pub async fn render_tile(
                 format!("PDFium failed to render page {page}: {e:?}")
             })?;
 
-            let bgra = bitmap.as_raw_bytes().to_vec();
+            let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
             let bw = bitmap.width() as u32;
             let bh = bitmap.height() as u32;
 
-            *cache_guard = Some(CachedPageBitmap {
+            cache_guard.put(CachedPageBitmap {
                 page,
                 target_w,
                 target_h,
@@ -449,7 +414,6 @@ pub async fn render_tile(
             (bgra, bw, bh)
         }
     };
-    drop(cache_guard);
 
 
     // Crop the tile rect from the page bitmap
@@ -545,7 +509,7 @@ pub async fn commit_stroke(
 
     // Offload WAL append to background worker thread channel.
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
-        let _ = tx.send(WalOp::Append(WalEntry::Added(stroke)));
+        let _ = tx.send(WalOp::Append(WalEntry::Added { sheet, stroke }));
     }
 
     Ok(stroke_id.to_string())
@@ -567,7 +531,11 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
 }
 
 #[tauri::command]
-pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
+pub async fn save_pdf(
+    out_path_str: Option<String>,
+    images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
@@ -580,15 +548,30 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
         state.pdf_path.lock().unwrap().clone().ok_or("No target file path")?
     };
 
-    let (_norm_bytes, mut pdf_file) = match PdfFile::open(input_bytes.clone()) {
-        Ok(f) => (input_bytes.clone(), f),
+    // 1. If images were provided, embed them into the base PDF using PDFium
+    let base_with_images = if let Some(ref img_list) = images {
+        if !img_list.is_empty() {
+            let pdfium_guard = state.pdfium.lock().unwrap();
+            let pdfium = pdfium_guard.as_ref().ok_or("PDFium is unavailable for image embedding")?;
+            inkwell_pdf::embed_images_in_pdf(pdfium, input_bytes, img_list)
+                .map_err(|e| format!("Failed to embed images in PDF: {e:?}"))?
+        } else {
+            input_bytes.to_vec()
+        }
+    } else {
+        input_bytes.to_vec()
+    };
+
+    // 2. Open PDF and append vector ink layers
+    let (_norm_bytes, mut pdf_file) = match PdfFile::open(base_with_images.clone()) {
+        Ok(f) => (base_with_images.clone(), f),
         Err(e) => {
             eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
             let pdfium_guard = state.pdfium.lock().unwrap();
             let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
                 format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
             })?;
-            let nb = inkwell_pdf::normalise(pdfium, input_bytes)
+            let nb = inkwell_pdf::normalise(pdfium, &base_with_images)
                 .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
             let f = PdfFile::open(nb.clone())
                 .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
@@ -606,7 +589,7 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
     // Update in-memory state with the written PDF bytes
     drop(bytes_guard);
     drop(doc_guard);
-    *state.pdf_bytes.lock().unwrap() = Some(final_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(Arc::new(final_bytes));
     *state.pdf_path.lock().unwrap() = Some(target_path.clone());
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
@@ -618,6 +601,7 @@ pub async fn save_pdf(out_path_str: Option<String>, state: State<'_, AppState>) 
 
 #[tauri::command]
 pub async fn save_pdf_dialog(
+    images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -634,7 +618,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), state).await
+        save_pdf(Some(path_str), images, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -711,21 +695,30 @@ pub async fn insert_blank_page(
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
     if let Some(bytes) = orig_bytes_opt {
         let pdfium_guard = state.pdfium.lock().unwrap();
-        if let Some(pdfium) = pdfium_guard.as_ref() {
-            if let Ok(mut pdf_doc) = pdfium.load_pdf_from_byte_slice(&bytes, None) {
-                use pdfium_render::prelude::*;
-                let w = PdfPoints::new(width_pt as f32);
-                let h = PdfPoints::new(height_pt as f32);
-                let target_idx = (index as i32).min(pdf_doc.pages().len());
-                let _ = pdf_doc.pages_mut().create_page_at_index(
-                    PdfPagePaperSize::Custom(w, h),
-                    target_idx,
-                );
-                if let Ok(new_bytes) = pdf_doc.save_to_bytes() {
-                    *state.pdf_bytes.lock().unwrap() = Some(new_bytes);
-                }
-            }
-        }
+        let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available for page insertion")?;
+        use pdfium_render::prelude::*;
+        let mut pdf_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+            .map_err(|e| format!("PDFium failed to load PDF for page insertion: {e:?}"))?;
+        let w = PdfPoints::new(width_pt as f32);
+        let h = PdfPoints::new(height_pt as f32);
+        let target_idx = (index as i32).min(pdf_doc.pages().len());
+        pdf_doc.pages_mut().create_page_at_index(
+            PdfPagePaperSize::Custom(w, h),
+            target_idx,
+        ).map_err(|e| format!("PDFium create_page_at_index failed: {e:?}"))?;
+        let new_bytes = pdf_doc.save_to_bytes()
+            .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+    }
+
+    state.page_bitmap_cache.lock().unwrap().clear();
+
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::PageInserted {
+            index,
+            width_pt,
+            height_pt,
+        }));
     }
 
     Ok(PageInfo {
@@ -793,4 +786,23 @@ pub async fn search_pdf(
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+pub async fn get_pdf_outline(state: State<'_, AppState>) -> Result<Vec<inkwell_pdf::TocItem>, String> {
+    let bytes = state
+        .pdf_bytes
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No PDF loaded")?;
+
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available")?;
+
+    let doc = pdfium
+        .load_pdf_from_byte_slice(&bytes, None)
+        .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+    Ok(inkwell_pdf::extract_outline(&doc))
 }

@@ -2570,3 +2570,300 @@ button:focus-visible, .rail-btn:focus-visible, .dock-btn:focus-visible, .header-
   margin-top: 6px;
 }
 
+/* ==========================================================================
+ * Document Outline / TOC Drawer Styles
+ * ========================================================================== */
+.outline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.outline-item {
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+.outline-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #d1d5db;
+  font-size: 12.5px;
+  line-height: 1.35;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.outline-header:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #f9fafb;
+}
+
+.outline-item.active > .outline-header {
+  background: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+  font-weight: 600;
+}
+
+.outline-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: #9ca3af;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.outline-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.outline-toggle.collapsed svg {
+  transform: rotate(-90deg);
+}
+
+.outline-toggle.leaf {
+  visibility: hidden;
+}
+
+.outline-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-page-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
+}
+
+.outline-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  margin-left: 9px;
+}
+
+.outline-children.hidden {
+  display: none;
+}
+
+/* ==========================================================================
+ * Floating Right Document Scrollbar
+ * ========================================================================== */
+.doc-scrollbar {
+  position: absolute;
+  top: 12px;
+  right: 8px;
+  bottom: 12px;
+  width: 14px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  opacity: 0.45;
+  transition: opacity 0.2s ease, width 0.15s ease;
+}
+
+.doc-scrollbar:hover,
+.doc-scrollbar.dragging {
+  opacity: 1;
+  width: 18px;
+}
+
+.doc-scrollbar-track {
+  width: 6px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-radius: 10px;
+  position: relative;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: width 0.15s ease;
+}
+
+.doc-scrollbar:hover .doc-scrollbar-track,
+.doc-scrollbar.dragging .doc-scrollbar-track {
+  width: 8px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.doc-scrollbar-thumb {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 28px;
+  background: #6366f1;
+  border-radius: 10px;
+  cursor: grab;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: background 0.15s ease;
+}
+
+.doc-scrollbar-thumb:hover {
+  background: #818cf8;
+}
+
+.doc-scrollbar-thumb:active,
+.doc-scrollbar.dragging .doc-scrollbar-thumb {
+  cursor: grabbing;
+  background: #a5b4fc;
+}
+
+.doc-scrollbar-tooltip {
+  position: absolute;
+  right: 26px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #ffffff;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+  transform: translateY(-50%);
+  z-index: 50;
+}
+
+/* ==========================================================================
+ * Floating Selection Action Toolbar
+ * ========================================================================== */
+.selection-toolbar {
+  position: absolute;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(17, 24, 39, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(99, 102, 241, 0.2);
+  animation: popInSel 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+
+@keyframes popInSel {
+  from { opacity: 0; transform: translateY(4px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.sel-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  background: transparent;
+  color: #e5e7eb;
+  border: none;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sel-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.sel-tool-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.sel-tool-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 2px;
+}
+
+/* ==========================================================================
+ * Right-Click Context Menu
+ * ========================================================================== */
+.canvas-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 170px;
+  background: rgba(17, 24, 39, 0.96);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: popInCtx 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+@keyframes popInCtx {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #e5e7eb;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.ctx-menu-item:hover {
+  background: rgba(99, 102, 241, 0.25);
+  color: #ffffff;
+}
+
+.ctx-menu-item.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #fca5a5;
+}
+
+.ctx-menu-item kbd {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: #9ca3af;
+  font-family: inherit;
+}
+
+.ctx-menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 2px;
+}
+

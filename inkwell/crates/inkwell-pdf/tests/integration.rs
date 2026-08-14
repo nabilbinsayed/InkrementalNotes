@@ -53,9 +53,123 @@ fn test_pdfium_integration_or_graceful_skip() {
                 t.data.chunks_exact(3).any(|rgb| rgb != [255, 255, 255]),
                 "A text-bearing fixture must not rasterize to an all-white tile"
             );
+
+            // Test inserting a blank page
+            use pdfium_render::prelude::*;
+            let mut mut_doc = pdfium.load_pdf_from_byte_slice(&bytes, None).expect("load for insert");
+            let initial_count = mut_doc.pages().len();
+            let new_page = mut_doc.pages_mut().create_page_at_index(
+                PdfPagePaperSize::Custom(PdfPoints::new(595.0), PdfPoints::new(842.0)),
+                initial_count,
+            );
+            println!("create_page_at_index result: {:?}", new_page.is_ok());
+            assert!(new_page.is_ok(), "create_page_at_index should succeed: {:?}", new_page.err());
+            let saved = mut_doc.save_to_bytes();
+            println!("save_to_bytes result: {:?}", saved.is_ok());
+            assert!(saved.is_ok(), "save_to_bytes should succeed: {:?}", saved.err());
+            let new_bytes = saved.unwrap();
+            
+            let reloaded = pdfium.load_pdf_from_byte_slice(&new_bytes, None).expect("reload");
+            assert_eq!(reloaded.pages().len(), initial_count + 1, "Page count should increase by 1");
+            
+            let parsed = PdfFile::open(new_bytes.clone());
+            println!("PdfFile::open after insert: {:?}", parsed.as_ref().map(|p| p.page_count()));
         }
         Err(e) => {
             eprintln!("PDFium library not available at runtime ({:?}); skipping live PDFium render tests.", e);
         }
     }
 }
+
+#[test]
+fn test_extract_outline() {
+    let pdfium = match init_pdfium() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let fixture_path = get_fixture_path();
+    let bytes = std::fs::read(fixture_path).expect("read lecture.pdf");
+    let doc = pdfium.load_pdf_from_byte_slice(&bytes, None).expect("load lecture.pdf");
+    let outline = inkwell_pdf::extract_outline(&doc);
+    println!("Extracted outline items: {}", outline.len());
+}
+
+#[test]
+fn test_insert_blank_page_draw_and_save_multi_page() {
+    let pdfium = match init_pdfium() {
+        Ok(p) => p,
+        Err(_) => return, // Gracefully skip if pdfium.dll not present
+    };
+
+    let fixture_path = get_fixture_path();
+    let original_bytes = std::fs::read(fixture_path).expect("read lecture.pdf");
+
+    // 1. Initial 1-page document
+    let mut doc = inkwell_core::Document::for_pdf(1);
+    assert_eq!(doc.sheets.len(), 1);
+
+    // 2. Insert blank page at index 1
+    doc.insert_sheet(1);
+    assert_eq!(doc.sheets.len(), 2);
+
+    let mut pdf_doc = pdfium.load_pdf_from_byte_slice(&original_bytes, None).expect("load pdf");
+    assert_eq!(pdf_doc.pages().len(), 1);
+    pdf_doc.pages_mut().create_page_at_index(
+        pdfium_render::prelude::PdfPagePaperSize::Custom(
+            pdfium_render::prelude::PdfPoints::new(595.0),
+            pdfium_render::prelude::PdfPoints::new(842.0),
+        ),
+        1,
+    ).expect("create blank page");
+    let updated_base_bytes = pdf_doc.save_to_bytes().expect("save base with blank page");
+    drop(pdf_doc);
+
+    // 3. User draws stroke on Page 2 (sheet index 1)
+    let stroke = inkwell_core::Stroke {
+        id: 9999,
+        kind: inkwell_core::ToolKind::Pen,
+        brush: inkwell_core::Brush {
+            base_width: 3.0,
+            min_ratio: 0.22,
+            gamma: 1.0,
+        },
+        rgb: [0.0, 0.0, 0.8],
+        samples: vec![
+            inkwell_core::Sample::new(100.0, 100.0, 0.5, 0.0),
+            inkwell_core::Sample::new(150.0, 150.0, 0.5, 10.0),
+            inkwell_core::Sample::new(200.0, 200.0, 0.5, 20.0),
+        ],
+    };
+    doc.push_stroke(1, stroke);
+    assert_eq!(doc.sheets[0].stroke_count(), 0);
+    assert_eq!(doc.sheets[1].stroke_count(), 1);
+
+    // 4. Save document
+    let mut pdf_file = PdfFile::open(updated_base_bytes).expect("open updated base");
+    assert_eq!(pdf_file.page_count(), 2);
+    pdf_file.write_document(&doc, inkwell_core::pdf::DEFAULT_GROUP).expect("write document");
+    let final_bytes = pdf_file.finish();
+
+    // 5. Verify saved PDF
+    let verify_pdf = pdfium.load_pdf_from_byte_slice(&final_bytes, None).expect("load saved pdf");
+    assert_eq!(verify_pdf.pages().len(), 2, "Saved PDF must have exactly 2 pages");
+    drop(verify_pdf);
+
+    // 6. Verify sidecar
+    match inkwell_core::pdf::read_sidecar(&final_bytes) {
+        Ok(inkwell_core::SidecarStatus::Ok(saved_doc)) => {
+            assert_eq!(saved_doc.sheets.len(), 2, "Sidecar must preserve 2 sheets");
+            assert_eq!(saved_doc.sheets[0].stroke_count(), 0, "Page 1 must have 0 strokes");
+            assert_eq!(saved_doc.sheets[1].stroke_count(), 1, "Page 2 must have 1 stroke");
+        }
+        _ => panic!("Unexpected sidecar status"),
+    }
+}
+
+
+
+
+
+
+
+

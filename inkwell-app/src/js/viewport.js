@@ -1,6 +1,8 @@
 /* ============================================================================
- * viewport.js — Viewport pan/zoom management
+ * viewport.js — Viewport pan/zoom and continuous document layout management
  * ========================================================================== */
+
+const PAGE_GAP = 24.0; // gap in points between consecutive pages in continuous scroll
 
 class ViewportManager {
   constructor(onChange) {
@@ -17,12 +19,125 @@ class ViewportManager {
     this.lastPanPt = [0, 0];
     this.stageRect = null;
     this.element = null;
+
+    // Document multi-page continuous layout state
+    this.pageLayouts = []; // array of { sheet, x, y, width, height }
+    this.maxDocWidth = 595.0;
+    this.totalDocHeight = 842.0;
   }
 
   updateStageRect() {
     if (this.element) {
       this.stageRect = this.element.getBoundingClientRect();
     }
+  }
+
+  updateDocumentLayout(pageInfos) {
+    if (!pageInfos || !pageInfos.length) {
+      this.pageLayouts = [];
+      this.maxDocWidth = 595.0;
+      this.totalDocHeight = 842.0;
+      return;
+    }
+
+    let maxW = 0;
+    for (const pi of pageInfos) {
+      if (pi.width_pt > maxW) maxW = pi.width_pt;
+    }
+    if (maxW <= 0) maxW = 595.0;
+    this.maxDocWidth = maxW;
+
+    let curY = 0;
+    const layouts = [];
+    for (let i = 0; i < pageInfos.length; i++) {
+      const pi = pageInfos[i];
+      const w = pi.width_pt || 595.0;
+      const h = pi.height_pt || 842.0;
+      const x = (maxW - w) / 2;
+      layouts.push({
+        sheet: i,
+        x,
+        y: curY,
+        width: w,
+        height: h,
+      });
+      curY += h + PAGE_GAP;
+    }
+    this.pageLayouts = layouts;
+    this.totalDocHeight = Math.max(curY - PAGE_GAP, 100);
+  }
+
+  getPageLayout(sheetIndex) {
+    if (this.pageLayouts && this.pageLayouts[sheetIndex]) {
+      return this.pageLayouts[sheetIndex];
+    }
+    return { sheet: sheetIndex, x: 0, y: 0, width: 595.0, height: 842.0 };
+  }
+
+  pageToWorld(sheetIndex, px, py) {
+    const layout = this.getPageLayout(sheetIndex);
+    return [px + layout.x, py + layout.y];
+  }
+
+  worldToPage(wx, wy) {
+    if (!this.pageLayouts || !this.pageLayouts.length) {
+      return { sheet: 0, px: wx, py: wy };
+    }
+    // Find page whose y bounds enclose wy
+    for (let i = 0; i < this.pageLayouts.length; i++) {
+      const pl = this.pageLayouts[i];
+      if (wy >= pl.y && wy <= pl.y + pl.height + PAGE_GAP) {
+        return {
+          sheet: i,
+          px: wx - pl.x,
+          py: Math.max(0, Math.min(pl.height, wy - pl.y)),
+        };
+      }
+    }
+    // If above first page
+    if (wy < this.pageLayouts[0].y) {
+      const pl = this.pageLayouts[0];
+      return { sheet: 0, px: wx - pl.x, py: wy - pl.y };
+    }
+    // If below last page
+    const last = this.pageLayouts[this.pageLayouts.length - 1];
+    return { sheet: last.sheet, px: wx - last.x, py: wy - last.y };
+  }
+
+  getVisiblePages(pane = 'left', margin = 40) {
+    if (!this.pageLayouts || !this.pageLayouts.length) return [];
+    if (!this.stageRect) this.updateStageRect();
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const stageW = this.stageRect ? this.stageRect.width : 800;
+    const w = this.splitMode ? stageW / 2 : stageW;
+
+    const [, topWy] = this.screenToWorld(0, -margin, pane);
+    const [, bottomWy] = this.screenToWorld(0, stageH + margin, pane);
+    const minWy = Math.min(topWy, bottomWy);
+    const maxWy = Math.max(topWy, bottomWy);
+
+    return this.pageLayouts.filter(pl => {
+      const pageTop = pl.y;
+      const pageBottom = pl.y + pl.height;
+      return pageBottom >= minWy && pageTop <= maxWy;
+    });
+  }
+
+  getActivePageInView(pane = 'left') {
+    if (!this.pageLayouts || !this.pageLayouts.length) return 0;
+    if (!this.stageRect) this.updateStageRect();
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const centerY = stageH * 0.35; // upper third center of viewport
+    const [, centerWy] = this.screenToWorld(0, centerY, pane);
+
+    for (let i = 0; i < this.pageLayouts.length; i++) {
+      const pl = this.pageLayouts[i];
+      if (centerWy >= pl.y && centerWy <= pl.y + pl.height + PAGE_GAP) {
+        return i;
+      }
+    }
+    if (centerWy < this.pageLayouts[0].y) return 0;
+    return this.pageLayouts.length - 1;
   }
 
   toggleSplitMode() {
@@ -56,7 +171,7 @@ class ViewportManager {
     const curPanX = isRight ? this.rightPanX : this.panX;
     const curPanY = isRight ? this.rightPanY : this.panY;
 
-    const newZoom = Math.max(0.2, Math.min(16.0, z));
+    const newZoom = Math.max(0.1, Math.min(16.0, z));
     if (centerPx && curZoom !== newZoom) {
       const scale = newZoom / curZoom;
       const newPanX = centerPx[0] - (centerPx[0] - curPanX) * scale;
@@ -78,34 +193,45 @@ class ViewportManager {
   }
 
   centerDocument(pageWidthPt, pageHeightPt, pane = 'left') {
-    if (!pageWidthPt || !pageHeightPt) return;
+    const docW = this.maxDocWidth || pageWidthPt || 595.0;
     if (!this.stageRect) this.updateStageRect();
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
     const totalW = this.stageRect ? this.stageRect.width : 800;
     const stageW = this.splitMode ? totalW / 2 : totalW;
-    const stageH = this.stageRect ? this.stageRect.height : 600;
 
     const offsetLeft = isRight ? stageW : 0;
-    const targetPanX = Math.round(offsetLeft + (stageW - pageWidthPt * z) / 2);
-    const targetPanY = Math.max(20, Math.round((stageH - pageHeightPt * z) / 2));
+    const targetPanX = Math.round(offsetLeft + (stageW - docW * z) / 2);
+    const targetPanY = 30;
     this.setPan(targetPanX, targetPanY, pane);
   }
 
   fitPage(pageWidthPt, pageHeightPt, pane = 'left') {
-    if (!pageWidthPt || !pageHeightPt) return;
+    const docW = this.maxDocWidth || pageWidthPt || 595.0;
+    const firstH = (this.pageLayouts && this.pageLayouts[0]) ? this.pageLayouts[0].height : (pageHeightPt || 842.0);
     if (!this.stageRect) this.updateStageRect();
     const totalW = this.stageRect ? this.stageRect.width : 800;
     const stageW = this.splitMode ? totalW / 2 : totalW;
     const stageH = this.stageRect ? this.stageRect.height : 600;
 
-    const margin = 40;
+    const margin = 48;
     const availW = Math.max(100, stageW - margin);
     const availH = Math.max(100, stageH - margin);
 
-    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / pageWidthPt, availH / pageHeightPt)));
+    const fitZoom = Math.max(0.2, Math.min(4.0, Math.min(availW / docW, availH / firstH)));
     this.setZoom(fitZoom, null, pane);
-    this.centerDocument(pageWidthPt, pageHeightPt, pane);
+    this.centerDocument(docW, firstH, pane);
+  }
+
+  scrollToPage(sheetIndex, pane = 'left') {
+    const layout = this.getPageLayout(sheetIndex);
+    if (!layout) return;
+    const isRight = pane === 'right' && this.splitMode;
+    const z = isRight ? this.rightZoom : this.zoom;
+    const curPanX = isRight ? this.rightPanX : this.panX;
+
+    const targetPanY = Math.round(-layout.y * z + 30);
+    this.setPan(curPanX, targetPanY, pane);
   }
 
   screenToWorld(sx, sy, pane = 'left') {
@@ -192,3 +318,4 @@ class ViewportManager {
 }
 
 window.ViewportManager = ViewportManager;
+

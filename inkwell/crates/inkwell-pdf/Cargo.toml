@@ -8,6 +8,9 @@ description = "PDFium integration for Inkwell: PDF normalisation, tile rasterisa
 [dependencies]
 inkwell-core = { path = "../inkwell-core" }
 pdfium-render = "0.9"
+serde = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
 log = "0.4"
 
 [dev-dependencies]

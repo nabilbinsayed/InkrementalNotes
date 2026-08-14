@@ -1,8 +1,12 @@
+pub mod images;
 pub mod normalise;
+pub mod outline;
 pub mod rasterizer;
 pub mod text;
 
+pub use images::{embed_images_in_pdf, ImageAnnotation};
 pub use normalise::normalise;
+pub use outline::{extract_outline, TocItem};
 pub use rasterizer::PdfiumRasterizer;
 pub use text::extract_text;
 
@@ -50,13 +54,20 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
                     eprintln!("Successfully loaded PDFium library from {:?}", dll_path);
                     return Ok(Pdfium::new(bindings));
                 }
+                Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+                    return Ok(Pdfium::default());
+                }
                 Err(error) => eprintln!("Failed to load PDFium from {dll_path:?}: {error:?}"),
             }
         }
     }
 
-    let bindings = Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
+    match Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("./"))
         .or_else(|_| Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path("../")))
-        .or_else(|_| Pdfium::bind_to_system_library())?;
-    Ok(Pdfium::new(bindings))
+        .or_else(|_| Pdfium::bind_to_system_library())
+    {
+        Ok(bindings) => Ok(Pdfium::new(bindings)),
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Ok(Pdfium::default()),
+        Err(e) => Err(e),
+    }
 }

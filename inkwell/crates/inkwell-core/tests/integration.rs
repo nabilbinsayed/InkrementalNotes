@@ -346,18 +346,30 @@ fn wal_replays_every_intact_record() {
     let p = dir.path().join("doc.wal");
     let mut w = Wal::open(&p).unwrap();
     let strokes: Vec<Stroke> = (0..12).map(|i| synth(i as u128 + 1, 400.0, 120, ToolKind::Pen)).collect();
-    for s in &strokes {
-        w.append(&WalEntry::Added(s.clone())).unwrap();
+    for (i, s) in strokes.iter().enumerate() {
+        w.append(&WalEntry::Added { sheet: i % 2, stroke: s.clone() }).unwrap();
     }
     w.append(&WalEntry::Removed(strokes[3].id)).unwrap();
+    w.append(&WalEntry::PageInserted { index: 1, width_pt: 595.0, height_pt: 842.0 }).unwrap();
 
     let back = Wal::replay(&p).unwrap();
-    assert_eq!(back.len(), 13);
+    assert_eq!(back.len(), 14);
     match &back[0] {
-        WalEntry::Added(s) => assert_eq!(s.id, strokes[0].id),
+        WalEntry::Added { sheet, stroke } => {
+            assert_eq!(*sheet, 0);
+            assert_eq!(stroke.id, strokes[0].id);
+        }
+        _ => panic!("wrong entry kind"),
+    }
+    match &back[1] {
+        WalEntry::Added { sheet, stroke } => {
+            assert_eq!(*sheet, 1);
+            assert_eq!(stroke.id, strokes[1].id);
+        }
         _ => panic!("wrong entry kind"),
     }
     assert_eq!(back[12], WalEntry::Removed(strokes[3].id));
+    assert_eq!(back[13], WalEntry::PageInserted { index: 1, width_pt: 595.0, height_pt: 842.0 });
 }
 
 #[test]
@@ -367,7 +379,7 @@ fn wal_drops_only_the_torn_final_record() {
     {
         let mut w = Wal::open(&p).unwrap();
         for i in 0..6 {
-            w.append(&WalEntry::Added(synth(i as u128 + 1, 400.0, 90, ToolKind::Pen))).unwrap();
+            w.append(&WalEntry::Added { sheet: 0, stroke: synth(i as u128 + 1, 400.0, 90, ToolKind::Pen) }).unwrap();
         }
     }
     let full = std::fs::read(&p).unwrap();
@@ -392,7 +404,7 @@ fn wal_truncate_resets_after_a_successful_pdf_write() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("doc.wal");
     let mut w = Wal::open(&p).unwrap();
-    w.append(&WalEntry::Added(synth(1, 400.0, 50, ToolKind::Pen))).unwrap();
+    w.append(&WalEntry::Added { sheet: 0, stroke: synth(1, 400.0, 50, ToolKind::Pen) }).unwrap();
     assert_eq!(Wal::replay(&p).unwrap().len(), 1);
     w.truncate().unwrap();
     assert_eq!(Wal::replay(&p).unwrap().len(), 0);
@@ -402,6 +414,7 @@ fn wal_truncate_resets_after_a_successful_pdf_write() {
 fn missing_wal_is_not_an_error() {
     assert_eq!(Wal::replay("/nonexistent/path/x.wal").unwrap().len(), 0);
 }
+
 
 // ===========================================================================
 // autosave policy

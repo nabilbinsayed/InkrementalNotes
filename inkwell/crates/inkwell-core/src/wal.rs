@@ -23,13 +23,23 @@ use std::path::{Path, PathBuf};
 use crate::codec;
 use crate::ink::Stroke;
 
-const KIND_ADD: u8 = 1;
+const KIND_ADD_LEGACY: u8 = 1;
 const KIND_REMOVE: u8 = 2;
+const KIND_ADD: u8 = 3;
+const KIND_PAGE_INSERT: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WalEntry {
-    Added(Stroke),
+    Added {
+        sheet: usize,
+        stroke: Stroke,
+    },
     Removed(u128),
+    PageInserted {
+        index: usize,
+        width_pt: f64,
+        height_pt: f64,
+    },
 }
 
 pub struct Wal {
@@ -69,8 +79,20 @@ impl Wal {
 
     pub fn append(&mut self, entry: &WalEntry) -> std::io::Result<()> {
         let (kind, payload) = match entry {
-            WalEntry::Added(s) => (KIND_ADD, codec::encode(std::slice::from_ref(s))),
+            WalEntry::Added { sheet, stroke } => {
+                let mut p = Vec::new();
+                p.extend_from_slice(&(*sheet as u32).to_le_bytes());
+                p.extend_from_slice(&codec::encode(std::slice::from_ref(stroke)));
+                (KIND_ADD, p)
+            }
             WalEntry::Removed(id) => (KIND_REMOVE, id.to_be_bytes().to_vec()),
+            WalEntry::PageInserted { index, width_pt, height_pt } => {
+                let mut p = Vec::with_capacity(20);
+                p.extend_from_slice(&(*index as u32).to_le_bytes());
+                p.extend_from_slice(&width_pt.to_le_bytes());
+                p.extend_from_slice(&height_pt.to_le_bytes());
+                (KIND_PAGE_INSERT, p)
+            }
         };
         let mut rec = Vec::with_capacity(payload.len() + 9);
         rec.push(kind);
@@ -114,10 +136,18 @@ impl Wal {
                 break; // torn or corrupt tail
             }
             match kind {
-                KIND_ADD => {
+                KIND_ADD_LEGACY => {
                     if let Ok(mut v) = codec::decode(payload) {
                         if let Some(s) = v.pop() {
-                            out.push(WalEntry::Added(s));
+                            out.push(WalEntry::Added { sheet: 0, stroke: s });
+                        }
+                    }
+                }
+                KIND_ADD if len >= 4 => {
+                    let sheet = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                    if let Ok(mut v) = codec::decode(&payload[4..]) {
+                        if let Some(s) = v.pop() {
+                            out.push(WalEntry::Added { sheet, stroke: s });
                         }
                     }
                 }
@@ -126,12 +156,25 @@ impl Wal {
                     b.copy_from_slice(payload);
                     out.push(WalEntry::Removed(u128::from_be_bytes(b)));
                 }
+                KIND_PAGE_INSERT if len == 20 => {
+                    let index = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                    let width_pt = f64::from_le_bytes([
+                        payload[4], payload[5], payload[6], payload[7],
+                        payload[8], payload[9], payload[10], payload[11],
+                    ]);
+                    let height_pt = f64::from_le_bytes([
+                        payload[12], payload[13], payload[14], payload[15],
+                        payload[16], payload[17], payload[18], payload[19],
+                    ]);
+                    out.push(WalEntry::PageInserted { index, width_pt, height_pt });
+                }
                 _ => break,
             }
             i = ce;
         }
         Ok(out)
     }
+
 
     /// Called after the PDF has been written successfully. Order matters:
     /// flush the PDF first, then truncate the journal. Never the other way.

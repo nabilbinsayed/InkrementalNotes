@@ -128,6 +128,9 @@ impl Document {
     }
 
     pub fn push_stroke(&mut self, sheet: usize, stroke: Stroke) {
+        while self.sheets.len() <= sheet {
+            self.sheets.push(Sheet::bounded(self.sheets.len()));
+        }
         if let Some(sh) = self.sheets.get_mut(sheet) {
             if sh.layers.is_empty() {
                 sh.layers.push(Layer::new("Ink"));
@@ -135,6 +138,7 @@ impl Document {
             sh.layers[0].strokes.push(stroke);
         }
     }
+
 
     /// Remove a stroke by id from anywhere in the document.
     pub fn remove_stroke(&mut self, id: u128) -> bool {

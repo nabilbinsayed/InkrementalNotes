@@ -59,8 +59,11 @@ const state = {
   springKey: null,        // which key is spring-held right now
   color: [0.08, 0.09, 0.14],
   baseWidth: 1.6,         // Fine elegant line width matching Xournal++ / Excalidraw
-  strokes: [],           // {id, kind, rgb, base_width, points[], deleted}
+  strokes: [],           // {id, kind, rgb, base_width, points[], deleted, sheet}
   selectedStrokes: [],
+  images: [],            // [{id, sheet, x, y, width, height, dataUrl, _el, deleted}]
+  selectedImages: [],
+  clipboard: null,       // { type: 'inkwell_objects', strokes: [], images: [] }
   undoStack: [],
   redoStack: [],
   cur: null,
@@ -76,13 +79,18 @@ const state = {
     else state.leftSheet = v;
   },
   pageInfos: [],         // [{page_index, width_pt, height_pt}, ...]
+  outline: [],           // hierarchical outline [{ title, page_index, children }]
   bookmarks: [],         // [{ id, page, label, createdAt }]
   inkVisible: true,
   shapeStart: null,
   shapeEnd: null,
   shapeKind: null,       // 'rect' | 'ellipse' | 'line'
-  lassoStart: null,
-  lassoRect: null,
+  lassoPath: null,       // [[wx, wy], ...] for freeform lasso polygon
+  transformMode: null,   // 'move' | 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
+  transformStartPt: null,
+  transformInitialBounds: null,
+  transformInitialStrokes: null,
+  transformInitialImages: null,
   laserPos: null,
   laserTimer: null,
   laserPoints: [],
@@ -244,14 +252,11 @@ async function fetchTile(page, rect, px) {
   return task;
 }
 
-// ---- Page background (white paper rect with red border like Xournal++) ----
-function drawPageBackground(pane = 'left') {
-  if (!state.pageInfos.length) return;
-  const sheetIdx = paneSheet(pane);
-  const pi = state.pageInfos[sheetIdx];
-  if (!pi) return;
-  const [sx0, sy0] = viewport.worldToScreen(0, 0, pane);
-  const [sx1, sy1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
+// ---- Page background (white paper rect with shadow and border) ----
+function drawPageBackground(pl, pane = 'left') {
+  if (!pl) return;
+  const [sx0, sy0] = viewport.worldToScreen(pl.x, pl.y, pane);
+  const [sx1, sy1] = viewport.worldToScreen(pl.x + pl.width, pl.y + pl.height, pane);
 
   tctx.save();
   tctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -266,7 +271,7 @@ function drawPageBackground(pane = 'left') {
 
   tctx.shadowBlur = 0;
   tctx.shadowOffsetY = 0;
-  // Subtle dark page border
+  // Subtle page border
   tctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
   tctx.lineWidth = 1;
   tctx.strokeRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
@@ -313,17 +318,21 @@ async function redrawTiles() {
   tctx.setTransform(1, 0, 0, 1, 0, 0);
   tctx.clearRect(0, 0, tilesCanvas.width, tilesCanvas.height);
 
-  for (const pane of visiblePanes()) drawPageBackground(pane);
-
-  if (state.pageInfos.length) {
-    await Promise.all(visiblePanes().map(pane => {
-      const sheetIdx = paneSheet(pane);
-      const pi = state.pageInfos[sheetIdx];
-      return pi ? redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) : Promise.resolve();
-    }));
+  for (const pane of visiblePanes()) {
+    const visiblePages = viewport.getVisiblePages(pane);
+    for (const pl of visiblePages) {
+      drawPageBackground(pl, pane);
+    }
+    if (visiblePages.length) {
+      await Promise.all(visiblePages.map(pl => {
+        const pi = state.pageInfos[pl.sheet];
+        return pi ? redrawTilesForPage(pane, pi, pl, drawEpoch) : Promise.resolve();
+      }));
+    }
   }
 
   drawZoomIndicator();
+  updateDocScrollbar();
   evictTileCache();
 }
 redrawTiles.epoch = 0;
@@ -349,12 +358,12 @@ function findCachedTileFallback(sheetIdx, tr) {
   return null;
 }
 
-async function drawTileData(data, tr, pane, pi) {
+async function drawTileData(data, tr, pl, pane, pi) {
   if (!data) return;
-  const [sx0, sy0] = viewport.worldToScreen(tr[0], tr[1], pane);
-  const [sx1, sy1] = viewport.worldToScreen(tr[2], tr[3], pane);
-  const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
-  const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
+  const [sx0, sy0] = viewport.worldToScreen(pl.x + tr[0], pl.y + tr[1], pane);
+  const [sx1, sy1] = viewport.worldToScreen(pl.x + tr[2], pl.y + tr[3], pane);
+  const [pageX0, pageY0] = viewport.worldToScreen(pl.x, pl.y, pane);
+  const [pageX1, pageY1] = viewport.worldToScreen(pl.x + pi.width_pt, pl.y + pi.height_pt, pane);
 
   tctx.save();
   tctx.scale(state.dpr, state.dpr);
@@ -376,13 +385,15 @@ async function drawTileData(data, tr, pane, pi) {
   tctx.restore();
 }
 
-async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
+async function redrawTilesForPage(pane, pi, pl, drawEpoch) {
   const bounds = paneBounds(pane);
 
   const [wx0, wy0] = viewport.screenToWorld(bounds.x, bounds.y, pane);
   const [wx1, wy1] = viewport.screenToWorld(bounds.x + bounds.width, bounds.y + bounds.height, pane);
-  const rx0 = Math.max(0, wx0), ry0 = Math.max(0, wy0);
-  const rx1 = Math.min(pi.width_pt, wx1), ry1 = Math.min(pi.height_pt, wy1);
+  const rx0 = Math.max(0, wx0 - pl.x);
+  const ry0 = Math.max(0, wy0 - pl.y);
+  const rx1 = Math.min(pi.width_pt, wx1 - pl.x);
+  const ry1 = Math.min(pi.height_pt, wy1 - pl.y);
   if (rx1 <= rx0 || ry1 <= ry0) return;
 
   const zoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
@@ -398,51 +409,26 @@ async function redrawTilesForPane(pane, pi, sheetIdx, drawEpoch) {
     ];
     if (tr[2] <= tr[0] || tr[3] <= tr[1]) return;
 
-    const trKey = `${sheetIdx}:${tr.join(',')}:${px}`;
+    const trKey = `${pl.sheet}:${tr.join(',')}:${px}`;
     if (tileCache.has(trKey)) {
-      await drawTileData(tileCache.get(trKey), tr, pane, pi);
+      await drawTileData(tileCache.get(trKey), tr, pl, pane, pi);
       return;
     }
 
     // Blit fallback cached tile immediately to prevent flicker during LOD fetch
-    const fallback = findCachedTileFallback(sheetIdx, tr);
+    const fallback = findCachedTileFallback(pl.sheet, tr);
     if (fallback) {
-      await drawTileData(fallback, tr, pane, pi);
+      await drawTileData(fallback, tr, pl, pane, pi);
     }
 
-    const result = await fetchTile(sheetIdx, tr, px);
+    const result = await fetchTile(pl.sheet, tr, px);
     if (!result || drawEpoch !== redrawTiles.epoch) return;
 
-    await drawTileData(result.data, tr, pane, pi);
+    await drawTileData(result.data, tr, pl, pane, pi);
   });
 
   await Promise.all(promises);
-
-  if (tileRenderError && drawEpoch === redrawTiles.epoch && tileCache.size === 0) {
-    const [pageX0, pageY0] = viewport.worldToScreen(0, 0, pane);
-    const [pageX1, pageY1] = viewport.worldToScreen(pi.width_pt, pi.height_pt, pane);
-    const pw = pageX1 - pageX0, ph = pageY1 - pageY0;
-    tctx.save();
-    tctx.scale(state.dpr, state.dpr);
-    clipToPane(tctx, pane);
-    tctx.fillStyle = 'rgba(239,68,68,0.10)';
-    tctx.fillRect(pageX0, pageY0, pw, ph);
-    tctx.fillStyle = '#ef4444';
-    tctx.font = `bold ${Math.min(24, pw * 0.06)}px system-ui, sans-serif`;
-    tctx.textAlign = 'center';
-    tctx.textBaseline = 'middle';
-    const cx = pageX0 + pw / 2, cy = pageY0 + ph / 2;
-    tctx.fillText('⚠ PDF render failed', cx, cy - 18);
-    tctx.font = `${Math.min(13, pw * 0.032)}px system-ui, sans-serif`;
-    tctx.fillStyle = '#b91c1c';
-    const errText = tileRenderError.length > 80
-      ? tileRenderError.slice(0, 77) + '…'
-      : tileRenderError;
-    tctx.fillText(errText, cx, cy + 12);
-    tctx.restore();
-  }
 }
-
 
 function makeCtx(canvas) {
   return canvas.getContext('2d', { desynchronized: true, alpha: true });
@@ -451,9 +437,11 @@ function makeCtx(canvas) {
 function resize() {
   updateStageRect();
   const r = stageRect;
+  if (!r || r.width <= 0 || r.height <= 0) return;
   state.dpr = Math.max(1, window.devicePixelRatio || 1);
 
   for (const c of [tilesCanvas, dryCanvas, wetCanvas]) {
+    if (!c) continue;
     c.width = Math.round(r.width * state.dpr);
     c.height = Math.round(r.height * state.dpr);
     c.style.width = r.width + 'px';
@@ -464,10 +452,12 @@ function resize() {
   dctx = makeCtx(dryCanvas);
   wctx = makeCtx(wetCanvas);
 
-  for (const ctx of [tctx, dctx, wctx]) ctx.scale(state.dpr, state.dpr);
-  for (const pane of visiblePanes()) drawPageBackground(pane);
+  for (const ctx of [tctx, dctx, wctx]) {
+    if (ctx) ctx.scale(state.dpr, state.dpr);
+  }
   scheduleRedrawTiles();
   redrawAll();
+  updateDocScrollbar();
 }
 
 let redrawAllPending = false;
@@ -485,27 +475,60 @@ function redrawAll() {
   dctx.setTransform(1, 0, 0, 1, 0, 0);
   dctx.clearRect(0, 0, dryCanvas.width, dryCanvas.height);
   dctx.scale(state.dpr, state.dpr);
+
+  if (!state.inkVisible) return;
+
   for (const pane of visiblePanes()) {
-    const sheetIdx = paneSheet(pane);
+    const visiblePages = viewport.getVisiblePages(pane);
     dctx.save();
     clipToPane(dctx, pane);
-    paneTransform(dctx, pane);
-    for (const s of state.strokes) {
-      if (!s.deleted && s.sheet === sheetIdx) Ink.drawStroke(dctx, s);
+
+    for (const pl of visiblePages) {
+      dctx.save();
+      const [psx, psy] = viewport.worldToScreen(pl.x, pl.y, pane);
+      const z = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+      dctx.translate(psx, psy);
+      dctx.scale(z, z);
+
+      // 1. Draw images on sheet pl.sheet
+      if (state.images && state.images.length) {
+        for (const img of state.images) {
+          if (!img.deleted && img.sheet === pl.sheet && img._el) {
+            try {
+              dctx.drawImage(img._el, img.x, img.y, img.width, img.height);
+            } catch (_) {}
+          }
+        }
+      }
+
+      // 2. Draw ink strokes on sheet pl.sheet
+      for (const s of state.strokes) {
+        if (!s.deleted && s.sheet === pl.sheet) {
+          Ink.drawStroke(dctx, s);
+        }
+      }
+
+      dctx.restore();
     }
     dctx.restore();
   }
+
+  // Draw lasso / selection overlay
+  drawLassoOverlay();
 }
 
 function drawCommittedStroke(stroke) {
   if (!dctx) return;
+  const pl = viewport.getPageLayout(stroke.sheet);
   for (const pane of visiblePanes()) {
-    if (stroke.sheet !== paneSheet(pane)) continue;
     dctx.save();
     dctx.setTransform(1, 0, 0, 1, 0, 0);
     dctx.scale(state.dpr, state.dpr);
     clipToPane(dctx, pane);
-    paneTransform(dctx, pane);
+    const [psx, psy] = viewport.worldToScreen(pl.x, pl.y, pane);
+    const z = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
+    dctx.translate(psx, psy);
+    dctx.scale(z, z);
     Ink.drawStroke(dctx, stroke);
     dctx.restore();
   }
@@ -524,18 +547,22 @@ function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
 }
 
 // ---- Page navigation & pre-fetching ----
+let prefetchTimer = null;
 function prefetchAdjacentPages() {
-  if (!state.pageInfos.length) return;
-  const curr = state.leftSheet;
-  const total = state.pageInfos.length;
-  const adjacentSheets = [curr - 1, curr + 1].filter(s => s >= 0 && s < total);
+  if (prefetchTimer) clearTimeout(prefetchTimer);
+  prefetchTimer = setTimeout(() => {
+    if (!state.pageInfos || !state.pageInfos.length) return;
+    const curr = state.leftSheet;
+    const total = state.pageInfos.length;
+    const adjacentSheets = [curr - 1, curr + 1].filter(s => s >= 0 && s < total);
 
-  for (const sheetIdx of adjacentSheets) {
-    const pi = state.pageInfos[sheetIdx];
-    if (!pi) continue;
-    const tr = [0, 0, pi.width_pt, pi.height_pt];
-    fetchTile(sheetIdx, tr, 512).catch(() => {});
-  }
+    for (const sheetIdx of adjacentSheets) {
+      const pi = state.pageInfos[sheetIdx];
+      if (!pi) continue;
+      const tr = [0, 0, pi.width_pt, pi.height_pt];
+      fetchTile(sheetIdx, tr, 512).catch(() => {});
+    }
+  }, 250);
 }
 
 function goToPage(i, pane = 'left') {
@@ -547,11 +574,11 @@ function goToPage(i, pane = 'left') {
   } else {
     state.leftSheet = i;
   }
-  const pi = state.pageInfos[i];
-  recenterPanesOnly(pi);
+  viewport.scrollToPage(i, pane);
   updatePageUI();
   scheduleRedrawTiles();
   redrawAll();
+  updateDocScrollbar();
   prefetchAdjacentPages();
 }
 
@@ -678,36 +705,43 @@ function updatePageUI() {
   updateToolBadges();
 }
 
-// ---- Eraser (stroke-erase by proximity) ----
+// ---- Eraser (stroke-erase by proximity in continuous document space) ----
 function eraseStrokesAt(e) {
   const pane = state.drawingPane || paneForEvent(e);
-  const targetSheet = paneSheet(pane);
   const [wx, wy] = localXY(e, pane);
+  const pageCoord = viewport.worldToPage(wx, wy);
+  const targetSheet = pageCoord.sheet;
   const eraserZoom = (pane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
-  const radius = 10 / (eraserZoom || 1);
-  let erased = [];
+  const radius = 16 / (eraserZoom || 1);
+  let erasedStrokes = [];
 
-  for (const s of state.strokes) {
-    if (s.deleted || s.sheet !== targetSheet) continue;
-    for (const pt of s.points) {
-      if (Math.hypot(pt.x - wx, pt.y - wy) < radius + pt.w / 2) {
-        s.deleted = true;
-        erased.push(s);
-        break;
+  // Check all strokes across all visible pages
+  const visiblePages = viewport.getVisiblePages(pane);
+  for (const pl of visiblePages) {
+    for (const s of state.strokes) {
+      if (s.deleted || s.sheet !== pl.sheet) continue;
+      for (const pt of s.points) {
+        const strokeWorldX = pl.x + pt.x;
+        const strokeWorldY = pl.y + pt.y;
+        if (Math.hypot(strokeWorldX - wx, strokeWorldY - wy) < radius + (pt.w || 2) / 2) {
+          s.deleted = true;
+          erasedStrokes.push(s);
+          break;
+        }
       }
     }
   }
 
-  if (erased.length) {
-    state.undoStack.push({ type: 'erase', strokes: erased });
+  if (erasedStrokes.length) {
+    state.undoStack.push({ type: 'delete_objects', strokes: erasedStrokes, images: [] });
     state.redoStack = [];
     redrawAll();
     const invoke = getInvoke();
     if (invoke) {
       invoke('erase_strokes_near', {
         sheet: targetSheet,
-        px: wx,
-        py: wy,
+        px: pageCoord.px,
+        py: pageCoord.py,
         radius: radius,
       }).catch(err => console.warn('erase IPC failed:', err));
     }
@@ -772,58 +806,679 @@ function drawShapeOverlay() {
   wctx.restore();
 }
 
-// ---- Lasso overlay ----
+// ---- Polygon Point-in-Polygon Hit-Testing (Ray casting) ----
+function pointInPolygon(px, py, polygon) {
+  if (!polygon || polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = ((yi > py) !== (yj > py)) &&
+                      (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// ---- Selection Bounds & Transform Handles ----
+function getSelectionBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let hasItems = false;
+
+  if (state.selectedStrokes && state.selectedStrokes.length) {
+    for (const s of state.selectedStrokes) {
+      if (s.deleted) continue;
+      const pl = viewport.getPageLayout(s.sheet);
+      for (const pt of s.points) {
+        const wx = pl.x + pt.x;
+        const wy = pl.y + pt.y;
+        minX = Math.min(minX, wx); minY = Math.min(minY, wy);
+        maxX = Math.max(maxX, wx); maxY = Math.max(maxY, wy);
+        hasItems = true;
+      }
+    }
+  }
+
+  if (state.selectedImages && state.selectedImages.length) {
+    for (const img of state.selectedImages) {
+      if (img.deleted) continue;
+      const pl = viewport.getPageLayout(img.sheet);
+      const wx0 = pl.x + img.x;
+      const wy0 = pl.y + img.y;
+      const wx1 = wx0 + img.width;
+      const wy1 = wy0 + img.height;
+      minX = Math.min(minX, wx0); minY = Math.min(minY, wy0);
+      maxX = Math.max(maxX, wx1); maxY = Math.max(maxY, wy1);
+      hasItems = true;
+    }
+  }
+
+  if (!hasItems || minX >= maxX || minY >= maxY) return null;
+  return { x0: minX, y0: minY, x1: maxX, y1: maxY, width: maxX - minX, height: maxY - minY };
+}
+
+function getSelectionHandleAt(screenX, screenY) {
+  const bounds = getSelectionBounds();
+  if (!bounds) return null;
+  const pad = 6;
+  const [sx0, sy0] = viewport.worldToScreen(bounds.x0 - pad, bounds.y0 - pad, state.drawingPane);
+  const [sx1, sy1] = viewport.worldToScreen(bounds.x1 + pad, bounds.y1 + pad, state.drawingPane);
+  const midSx = (sx0 + sx1) / 2;
+  const midSy = (sy0 + sy1) / 2;
+
+  const handles = [
+    { name: 'nw', x: sx0, y: sy0, cursor: 'nwse-resize' },
+    { name: 'n',  x: midSx, y: sy0, cursor: 'ns-resize' },
+    { name: 'ne', x: sx1, y: sy0, cursor: 'nesw-resize' },
+    { name: 'e',  x: sx1, y: midSy, cursor: 'ew-resize' },
+    { name: 'se', x: sx1, y: sy1, cursor: 'nwse-resize' },
+    { name: 's',  x: midSx, y: sy1, cursor: 'ns-resize' },
+    { name: 'sw', x: sx0, y: sy1, cursor: 'nesw-resize' },
+    { name: 'w',  x: sx0, y: midSy, cursor: 'ew-resize' },
+  ];
+
+  for (const h of handles) {
+    if (Math.hypot(screenX - h.x, screenY - h.y) <= 8) {
+      return h;
+    }
+  }
+
+  // Inside bounding box -> move handle
+  if (screenX >= sx0 && screenX <= sx1 && screenY >= sy0 && screenY <= sy1) {
+    return { name: 'move', cursor: 'move' };
+  }
+  return null;
+}
+
+function findObjectAtWorld(wx, wy, radius = 10) {
+  const pageCoord = viewport.worldToPage(wx, wy);
+  const targetSheet = pageCoord.sheet;
+  const pl = viewport.getPageLayout(targetSheet);
+
+  // 1. Check images on this sheet (top to bottom)
+  if (state.images && state.images.length) {
+    for (let i = state.images.length - 1; i >= 0; i--) {
+      const img = state.images[i];
+      if (img.deleted || img.sheet !== targetSheet) continue;
+      const x0 = pl.x + img.x;
+      const y0 = pl.y + img.y;
+      if (wx >= x0 && wx <= x0 + img.width && wy >= y0 && wy <= y0 + img.height) {
+        return { type: 'image', item: img };
+      }
+    }
+  }
+
+  // 2. Check strokes on this sheet (in reverse order)
+  for (let i = state.strokes.length - 1; i >= 0; i--) {
+    const s = state.strokes[i];
+    if (s.deleted || s.sheet !== targetSheet) continue;
+    for (const pt of s.points) {
+      const sx = pl.x + pt.x;
+      const sy = pl.y + pt.y;
+      if (Math.hypot(wx - sx, wy - sy) <= radius + (pt.w || 2)) {
+        return { type: 'stroke', item: s };
+      }
+    }
+  }
+
+  return null;
+}
+
+// ---- Lasso & Selection Overlay ----
 function drawLassoOverlay() {
+  if (!wctx || !wetCanvas) return;
   wctx.save();
   wctx.setTransform(1, 0, 0, 1, 0, 0);
   wctx.scale(state.dpr, state.dpr);
 
-  if (state.lassoRect) {
-    const { x0, y0, x1, y1 } = state.lassoRect;
-    const [sx0, sy0] = viewport.worldToScreen(x0, y0, state.drawingPane);
-    const [sx1, sy1] = viewport.worldToScreen(x1, y1, state.drawingPane);
-    wctx.strokeStyle = 'rgba(79,70,229,0.9)';
-    wctx.fillStyle = 'rgba(79,70,229,0.12)';
+  // 1. Freeform lasso drawing in progress
+  if (state.lassoPath && state.lassoPath.length > 1) {
+    wctx.strokeStyle = 'rgba(99, 102, 241, 0.9)';
+    wctx.fillStyle = 'rgba(99, 102, 241, 0.12)';
+    wctx.lineWidth = 2;
+    wctx.setLineDash([6, 4]);
+
+    wctx.beginPath();
+    const [startSx, startSy] = viewport.worldToScreen(state.lassoPath[0][0], state.lassoPath[0][1], state.drawingPane);
+    wctx.moveTo(startSx, startSy);
+    for (let i = 1; i < state.lassoPath.length; i++) {
+      const [sx, sy] = viewport.worldToScreen(state.lassoPath[i][0], state.lassoPath[i][1], state.drawingPane);
+      wctx.lineTo(sx, sy);
+    }
+    wctx.closePath();
+    wctx.fill();
+    wctx.stroke();
+  }
+
+  // 2. Selection bounding box with transform handles
+  const bounds = getSelectionBounds();
+  const selToolbar = $('selectionToolbar');
+
+  if (bounds) {
+    const pad = 6;
+    const [sx0, sy0] = viewport.worldToScreen(bounds.x0 - pad, bounds.y0 - pad, state.drawingPane);
+    const [sx1, sy1] = viewport.worldToScreen(bounds.x1 + pad, bounds.y1 + pad, state.drawingPane);
+
+    wctx.strokeStyle = '#6366f1';
+    wctx.fillStyle = 'rgba(99, 102, 241, 0.06)';
     wctx.lineWidth = 1.5;
     wctx.setLineDash([6, 4]);
     wctx.beginPath();
     wctx.rect(sx0, sy0, sx1 - sx0, sy1 - sy0);
     wctx.fill();
     wctx.stroke();
-  } else if (state.selectedStrokes && state.selectedStrokes.length) {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const s of state.selectedStrokes) {
-      if (s.deleted) continue;
-      for (const pt of s.points) {
-        minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
-        maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
-      }
-    }
-    if (minX < maxX && minY < maxY) {
-      const [sx0, sy0] = viewport.worldToScreen(minX - 4, minY - 4, state.drawingPane);
-      const [sx1, sy1] = viewport.worldToScreen(maxX + 4, maxY + 4, state.drawingPane);
-      wctx.strokeStyle = '#6366f1';
-      wctx.fillStyle = 'rgba(99,102,241,0.08)';
-      wctx.lineWidth = 2;
-      wctx.setLineDash([6, 4]);
+
+    // Draw 8 handles: 4 corners + 4 midpoints
+    const midSx = (sx0 + sx1) / 2;
+    const midSy = (sy0 + sy1) / 2;
+    const handlePts = [
+      [sx0, sy0], [midSx, sy0], [sx1, sy0],
+      [sx1, midSy], [sx1, sy1], [midSx, sy1],
+      [sx0, sy1], [sx0, midSy]
+    ];
+
+    wctx.fillStyle = '#ffffff';
+    wctx.strokeStyle = '#4f46e5';
+    wctx.lineWidth = 2;
+    wctx.setLineDash([]);
+
+    for (const [hx, hy] of handlePts) {
       wctx.beginPath();
-      wctx.rect(sx0, sy0, sx1 - sx0, sy1 - sy0);
+      wctx.arc(hx, hy, 5, 0, Math.PI * 2);
       wctx.fill();
       wctx.stroke();
+    }
 
-      wctx.fillStyle = '#ffffff';
-      wctx.strokeStyle = '#4f46e5';
-      wctx.lineWidth = 2;
-      wctx.setLineDash([]);
-      for (const [hx, hy] of [[sx0, sy0], [sx1, sy0], [sx1, sy1], [sx0, sy1]]) {
-        wctx.beginPath();
-        wctx.arc(hx, hy, 5, 0, Math.PI * 2);
-        wctx.fill();
-        wctx.stroke();
+    // Position floating selection toolbar above top edge
+    if (selToolbar) {
+      selToolbar.classList.remove('hidden');
+      const tbX = Math.max(10, midSx - (selToolbar.offsetWidth / 2 || 90));
+      const tbY = Math.max(10, sy0 - 44);
+      selToolbar.style.left = `${tbX}px`;
+      selToolbar.style.top = `${tbY}px`;
+    }
+  } else {
+    if (selToolbar) selToolbar.classList.add('hidden');
+  }
+
+  wctx.restore();
+}
+
+// ---- Selection & Clipboard Operations ----
+function selectAllOnCurrentPage() {
+  const activeSheet = viewport.getActivePageInView(state.drawingPane || 'left');
+  state.currentSheet = activeSheet;
+
+  const strokesOnSheet = state.strokes.filter(s => !s.deleted && s.sheet === activeSheet);
+  const imagesOnSheet = (state.images || []).filter(img => !img.deleted && img.sheet === activeSheet);
+
+  state.selectedStrokes = strokesOnSheet;
+  state.selectedImages = imagesOnSheet;
+
+  if (strokesOnSheet.length || imagesOnSheet.length) {
+    setTool('lasso');
+    clearWet();
+    drawLassoOverlay();
+    showToast(`Selected ${strokesOnSheet.length + imagesOnSheet.length} objects on Page ${activeSheet + 1}`, 'info');
+  } else {
+    showToast(`No objects to select on Page ${activeSheet + 1}`, 'info');
+  }
+}
+
+function copySelection() {
+  const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
+  const images = (state.selectedImages || []).filter(img => !img.deleted);
+  if (!strokes.length && !images.length) return false;
+
+  state.clipboard = {
+    type: 'inkwell_objects',
+    strokes: strokes.map(s => JSON.parse(JSON.stringify(s))),
+    images: images.map(img => JSON.parse(JSON.stringify(img))),
+  };
+
+  showToast(`Copied ${strokes.length + images.length} objects`, 'info');
+  return true;
+}
+
+function cutSelection() {
+  if (!copySelection()) return;
+  deleteSelection();
+  showToast('Cut selection to clipboard', 'info');
+}
+
+function deleteSelection() {
+  const deletedStrokes = [];
+  for (const s of (state.selectedStrokes || [])) {
+    if (!s.deleted) {
+      s.deleted = true;
+      deletedStrokes.push(s);
+    }
+  }
+
+  const deletedImages = [];
+  for (const img of (state.selectedImages || [])) {
+    if (!img.deleted) {
+      img.deleted = true;
+      deletedImages.push(img);
+    }
+  }
+
+  if (deletedStrokes.length || deletedImages.length) {
+    state.undoStack.push({
+      type: 'delete_objects',
+      strokes: deletedStrokes,
+      images: deletedImages,
+    });
+    state.redoStack = [];
+    state.selectedStrokes = [];
+    state.selectedImages = [];
+    clearWet();
+    redrawAll();
+  }
+}
+
+function duplicateSelection() {
+  const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
+  const images = (state.selectedImages || []).filter(img => !img.deleted);
+  if (!strokes.length && !images.length) return;
+
+  const offset = 18;
+  const newStrokes = [];
+  const newImages = [];
+
+  for (const s of strokes) {
+    const clone = JSON.parse(JSON.stringify(s));
+    clone.id = 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    clone.points.forEach(p => { p.x += offset; p.y += offset; });
+    if (typeof Ink.getPath2D === 'function') {
+      clone._cachedPath2D = Ink.getPath2D(clone);
+    }
+    state.strokes.push(clone);
+    newStrokes.push(clone);
+  }
+
+  for (const img of images) {
+    const clone = JSON.parse(JSON.stringify(img));
+    clone.id = 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    clone.x += offset;
+    clone.y += offset;
+    const imgEl = new Image();
+    imgEl.src = clone.dataUrl;
+    clone._el = imgEl;
+    if (!state.images) state.images = [];
+    state.images.push(clone);
+    newImages.push(clone);
+  }
+
+  state.undoStack.push({
+    type: 'add_objects',
+    strokes: newStrokes,
+    images: newImages,
+  });
+  state.redoStack = [];
+
+  state.selectedStrokes = newStrokes;
+  state.selectedImages = newImages;
+
+  clearWet();
+  redrawAll();
+  drawLassoOverlay();
+  showToast('Duplicated selection', 'info');
+}
+
+function pasteClipboard() {
+  if (!state.clipboard || state.clipboard.type !== 'inkwell_objects') {
+    return false;
+  }
+
+  const activeSheet = viewport.getActivePageInView(state.drawingPane || 'left');
+  const offset = 16;
+  const newStrokes = [];
+  const newImages = [];
+
+  for (const s of (state.clipboard.strokes || [])) {
+    const clone = JSON.parse(JSON.stringify(s));
+    clone.id = 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    clone.sheet = activeSheet;
+    clone.points.forEach(p => { p.x += offset; p.y += offset; });
+    if (typeof Ink.getPath2D === 'function') {
+      clone._cachedPath2D = Ink.getPath2D(clone);
+    }
+    state.strokes.push(clone);
+    newStrokes.push(clone);
+  }
+
+  for (const img of (state.clipboard.images || [])) {
+    const clone = JSON.parse(JSON.stringify(img));
+    clone.id = 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+    clone.sheet = activeSheet;
+    clone.x += offset;
+    clone.y += offset;
+    const imgEl = new Image();
+    imgEl.src = clone.dataUrl;
+    clone._el = imgEl;
+    if (!state.images) state.images = [];
+    state.images.push(clone);
+    newImages.push(clone);
+  }
+
+  state.undoStack.push({
+    type: 'add_objects',
+    strokes: newStrokes,
+    images: newImages,
+  });
+  state.redoStack = [];
+
+  state.selectedStrokes = newStrokes;
+  state.selectedImages = newImages;
+
+  clearWet();
+  redrawAll();
+  drawLassoOverlay();
+  showToast(`Pasted ${newStrokes.length + newImages.length} objects`, 'success');
+  return true;
+}
+
+// ---- Image Pasting from System Clipboard ----
+async function handleGlobalPaste(e) {
+  const activeEl = document.activeElement;
+  const isTyping = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+  if (isTyping) return;
+
+  const clipboardData = e.clipboardData || window.clipboardData;
+  if (!clipboardData) return;
+
+  const items = clipboardData.items;
+  if (items && items.length) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.indexOf('image') !== -1) {
+        e.preventDefault();
+        const blob = item.getAsFile();
+        if (blob) {
+          const reader = new FileReader();
+          reader.onload = evt => {
+            const dataUrl = evt.target.result;
+            insertPastedImage(dataUrl);
+          };
+          reader.readAsDataURL(blob);
+          return;
+        }
       }
     }
   }
-  wctx.restore();
+
+  // If no system image, paste internal clipboard
+  if (pasteClipboard()) {
+    e.preventDefault();
+  }
+}
+
+function insertPastedImage(dataUrl) {
+  const imgEl = new Image();
+  imgEl.onload = () => {
+    const activeSheet = viewport.getActivePageInView(state.drawingPane || 'left');
+    const pl = viewport.getPageLayout(activeSheet);
+    
+    let w = imgEl.naturalWidth || 300;
+    let h = imgEl.naturalHeight || 200;
+    const maxW = Math.min(420, pl.width * 0.75);
+    if (w > maxW) {
+      const ratio = maxW / w;
+      w = maxW;
+      h = h * ratio;
+    }
+
+    const x = Math.max(20, (pl.width - w) / 2);
+    const y = Math.max(20, (pl.height - h) / 3);
+
+    const imgObj = {
+      id: 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+      sheet: activeSheet,
+      x,
+      y,
+      width: w,
+      height: h,
+      dataUrl,
+      _el: imgEl,
+      deleted: false,
+    };
+
+    if (!state.images) state.images = [];
+    state.images.push(imgObj);
+
+    state.undoStack.push({
+      type: 'add_image',
+      image: imgObj,
+    });
+    state.redoStack = [];
+
+    setTool('lasso');
+    state.selectedStrokes = [];
+    state.selectedImages = [imgObj];
+
+    clearWet();
+    redrawAll();
+    drawLassoOverlay();
+    showToast('Image pasted! Drag to move or drag corners to resize.', 'success');
+  };
+  imgEl.src = dataUrl;
+}
+
+// ---- Document Outline (TOC) Rendering ----
+function renderOutline() {
+  const container = $('outlineList');
+  const emptyState = $('outlineEmptyState');
+  if (!container) return;
+
+  const outline = state.outline || [];
+  if (!outline.length) {
+    container.innerHTML = '';
+    if (emptyState) emptyState.classList.remove('hidden');
+    return;
+  }
+
+  if (emptyState) emptyState.classList.add('hidden');
+
+  function renderTree(nodes, depth = 0) {
+    return nodes.map(node => {
+      const hasChildren = node.children && node.children.length > 0;
+      const targetPage = node.page_index != null ? node.page_index : null;
+      const pageLabel = targetPage != null ? `p. ${targetPage + 1}` : '';
+      const childrenHtml = hasChildren ? `<div class="outline-children">${renderTree(node.children, depth + 1)}</div>` : '';
+      
+      return `
+        <div class="outline-item" data-page="${targetPage != null ? targetPage : ''}">
+          <div class="outline-header" data-page="${targetPage != null ? targetPage : ''}">
+            <button class="outline-toggle ${hasChildren ? '' : 'leaf'}" title="Toggle section">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <span class="outline-title" title="${escapeHtml(node.title)}">${escapeHtml(node.title)}</span>
+            ${pageLabel ? `<span class="outline-page-badge">${pageLabel}</span>` : ''}
+          </div>
+          ${childrenHtml}
+        </div>
+      `;
+    }).join('');
+  }
+
+  container.innerHTML = renderTree(outline);
+
+  // Click listeners for expand/collapse and page navigation
+  container.querySelectorAll('.outline-toggle').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      btn.classList.toggle('collapsed');
+      const children = btn.closest('.outline-item').querySelector('.outline-children');
+      if (children) children.classList.toggle('hidden');
+    });
+  });
+
+  container.querySelectorAll('.outline-header').forEach(header => {
+    header.addEventListener('click', e => {
+      if (e.target.closest('.outline-toggle')) return;
+      const pageStr = header.dataset.page;
+      if (pageStr !== '') {
+        const pageIdx = parseInt(pageStr, 10);
+        if (!isNaN(pageIdx)) {
+          goToPage(pageIdx, 'left');
+          container.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
+          header.closest('.outline-item').classList.add('active');
+        }
+      }
+    });
+  });
+}
+
+// ---- Floating Right Document Scrollbar ----
+function updateDocScrollbar() {
+  const track = $('docScrollbarTrack');
+  const thumb = $('docScrollbarThumb');
+  if (!track || !thumb || !state.pageInfos.length) return;
+
+  const trackH = track.clientHeight || 400;
+  if (!stageRect) updateStageRect();
+  const stageH = stageRect ? stageRect.height : 600;
+  const docTotalH = (viewport.totalDocHeight || 800) * viewport.zoom;
+
+  const thumbH = Math.max(28, Math.min(trackH, (stageH / Math.max(stageH, docTotalH)) * trackH));
+  thumb.style.height = `${thumbH}px`;
+
+  const maxPan = Math.max(1, docTotalH - stageH);
+  const scrollPct = Math.max(0, Math.min(1, (-viewport.panY + 30) / maxPan));
+  const thumbTop = scrollPct * (trackH - thumbH);
+  thumb.style.top = `${thumbTop}px`;
+}
+
+function initDocScrollbar() {
+  const scrollbar = $('docScrollbar');
+  const track = $('docScrollbarTrack');
+  const thumb = $('docScrollbarThumb');
+  const tooltip = $('docScrollbarTooltip');
+  if (!scrollbar || !track || !thumb) return;
+
+  let isDraggingThumb = false;
+  let startDragY = 0;
+  let startPanY = 0;
+
+  const onThumbDown = e => {
+    e.preventDefault();
+    e.stopPropagation();
+    isDraggingThumb = true;
+    startDragY = e.clientY;
+    startPanY = viewport.panY;
+    scrollbar.classList.add('dragging');
+    if (tooltip) tooltip.classList.remove('hidden');
+    window.addEventListener('pointermove', onThumbMove);
+    window.addEventListener('pointerup', onThumbUp);
+  };
+
+  const onThumbMove = e => {
+    if (!isDraggingThumb) return;
+    const dy = e.clientY - startDragY;
+    const trackH = track.clientHeight;
+    const docTotalH = (viewport.totalDocHeight || 800) * viewport.zoom;
+    const stageH = stageRect ? stageRect.height : 600;
+    const thumbH = thumb.clientHeight;
+    const scrollableTrack = Math.max(1, trackH - thumbH);
+    
+    const panDelta = (dy / scrollableTrack) * (docTotalH - stageH);
+    viewport.setPan(viewport.panX, startPanY - panDelta, 'left');
+    scheduleRedrawTiles();
+    redrawAll();
+    updateDocScrollbar();
+
+    const curPage = viewport.getActivePageInView('left');
+    if (tooltip) {
+      tooltip.textContent = `Page ${curPage + 1} / ${state.pageInfos.length || 1}`;
+      tooltip.style.top = `${thumb.offsetTop + thumbH / 2}px`;
+    }
+  };
+
+  const onThumbUp = () => {
+    isDraggingThumb = false;
+    scrollbar.classList.remove('dragging');
+    if (tooltip) tooltip.classList.add('hidden');
+    window.removeEventListener('pointermove', onThumbMove);
+    window.removeEventListener('pointerup', onThumbUp);
+  };
+
+  thumb.addEventListener('pointerdown', onThumbDown);
+
+  track.addEventListener('click', e => {
+    if (e.target === thumb) return;
+    const rect = track.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    const trackH = rect.height;
+    const pct = Math.max(0, Math.min(1, clickY / trackH));
+    const docTotalH = (viewport.totalDocHeight || 800) * viewport.zoom;
+    const stageH = stageRect ? stageRect.height : 600;
+    const targetPanY = 30 - pct * Math.max(0, docTotalH - stageH);
+    viewport.setPan(viewport.panX, targetPanY, 'left');
+    scheduleRedrawTiles();
+    redrawAll();
+    updateDocScrollbar();
+  });
+}
+
+// ---- Canvas Right-Click Context Menu ----
+function initContextMenu() {
+  const menu = $('canvasContextMenu');
+  if (!menu) return;
+
+  const hideMenu = () => {
+    menu.classList.add('hidden');
+  };
+
+  window.addEventListener('click', e => {
+    if (!e.target.closest('#canvasContextMenu')) hideMenu();
+  });
+
+  window.addEventListener('contextmenu', e => {
+    if (!e.target.closest('#stage')) return;
+    e.preventDefault();
+
+    const [wx, wy] = localXY(e, state.drawingPane);
+    
+    const handle = getSelectionHandleAt(e.clientX - (stageRect ? stageRect.left : 0), e.clientY - (stageRect ? stageRect.top : 0));
+    if (!handle) {
+      const hit = findObjectAtWorld(wx, wy);
+      if (hit) {
+        if (hit.type === 'stroke') {
+          state.selectedStrokes = [hit.item];
+          state.selectedImages = [];
+        } else if (hit.type === 'image') {
+          state.selectedStrokes = [];
+          state.selectedImages = [hit.item];
+        }
+        setTool('lasso');
+        clearWet();
+        drawLassoOverlay();
+      }
+    }
+
+    menu.classList.remove('hidden');
+    const menuW = menu.offsetWidth || 180;
+    const menuH = menu.offsetHeight || 220;
+    const posX = Math.min(window.innerWidth - menuW - 10, Math.max(10, e.clientX));
+    const posY = Math.min(window.innerHeight - menuH - 10, Math.max(10, e.clientY));
+    menu.style.left = `${posX}px`;
+    menu.style.top = `${posY}px`;
+  });
+
+  $('ctxMenuCut') && $('ctxMenuCut').addEventListener('click', () => { hideMenu(); cutSelection(); });
+  $('ctxMenuCopy') && $('ctxMenuCopy').addEventListener('click', () => { hideMenu(); copySelection(); });
+  $('ctxMenuPaste') && $('ctxMenuPaste').addEventListener('click', () => { hideMenu(); pasteClipboard(); });
+  $('ctxMenuDuplicate') && $('ctxMenuDuplicate').addEventListener('click', () => { hideMenu(); duplicateSelection(); });
+  $('ctxMenuSelectAll') && $('ctxMenuSelectAll').addEventListener('click', () => { hideMenu(); selectAllOnCurrentPage(); });
+  $('ctxMenuDelete') && $('ctxMenuDelete').addEventListener('click', () => { hideMenu(); deleteSelection(); });
+}
+
+function initSelectionToolbar() {
+  $('btnSelCopy') && $('btnSelCopy').addEventListener('click', () => copySelection());
+  $('btnSelCut') && $('btnSelCut').addEventListener('click', () => cutSelection());
+  $('btnSelDuplicate') && $('btnSelDuplicate').addEventListener('click', () => duplicateSelection());
+  $('btnSelDelete') && $('btnSelDelete').addEventListener('click', () => deleteSelection());
 }
 
 // ---- Laser pointer ----
@@ -948,7 +1603,6 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
 }
 
 // ---- Pointer handlers ----
-// ---- Pointer handlers ----
 function onDown(e) {
   if (e.button !== 0 && e.pointerType !== 'pen') return;
   updateStageRect();
@@ -988,8 +1642,63 @@ function onDown(e) {
   }
 
   if (state.activeTool === 'lasso') {
-    state.lassoStart = [wx, wy];
-    state.lassoRect = { x0: wx, y0: wy, x1: wx, y1: wy };
+    const relX = e.clientX - (stageRect ? stageRect.left : 0);
+    const relY = e.clientY - (stageRect ? stageRect.top : 0);
+    const handle = getSelectionHandleAt(relX, relY);
+
+    if (handle) {
+      state.transformMode = handle.name;
+      state.transformStartPt = [wx, wy];
+      state.transformInitialBounds = getSelectionBounds();
+      state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
+        id: s.id,
+        points: s.points.map(p => ({ ...p }))
+      }));
+      state.transformInitialImages = (state.selectedImages || []).map(img => ({
+        id: img.id,
+        x: img.x,
+        y: img.y,
+        width: img.width,
+        height: img.height,
+      }));
+      return;
+    }
+
+    // Direct click hit test on a stroke or image
+    const hit = findObjectAtWorld(wx, wy);
+    if (hit) {
+      if (hit.type === 'stroke') {
+        state.selectedStrokes = [hit.item];
+        state.selectedImages = [];
+      } else if (hit.type === 'image') {
+        state.selectedStrokes = [];
+        state.selectedImages = [hit.item];
+      }
+      state.transformMode = 'move';
+      state.transformStartPt = [wx, wy];
+      state.transformInitialBounds = getSelectionBounds();
+      state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
+        id: s.id,
+        points: s.points.map(p => ({ ...p }))
+      }));
+      state.transformInitialImages = (state.selectedImages || []).map(img => ({
+        id: img.id,
+        x: img.x,
+        y: img.y,
+        width: img.width,
+        height: img.height,
+      }));
+      clearWet();
+      drawLassoOverlay();
+      return;
+    }
+
+    // Click on blank canvas -> deselect and begin freeform lasso
+    state.selectedStrokes = [];
+    state.selectedImages = [];
+    state.lassoPath = [[wx, wy]];
+    clearWet();
+    drawLassoOverlay();
     return;
   }
 
@@ -1014,6 +1723,9 @@ function onDown(e) {
     return;
   }
 
+  const pageCoord = viewport.worldToPage(wx, wy);
+  state.currentSheet = pageCoord.sheet;
+
   const isHighlighter = state.activeTool === 'highlighter';
   state.cur = new Ink.Stroke({
     kind: state.activeTool,
@@ -1037,6 +1749,13 @@ function onMove(e) {
     viewport.setPan(curPanX + dx, curPanY + dy, pane);
     scheduleRedrawTiles();
     redrawAll();
+    updateDocScrollbar();
+
+    const activePage = viewport.getActivePageInView(pane);
+    if (activePage !== state.leftSheet) {
+      state.leftSheet = activePage;
+      updatePageUI();
+    }
     return;
   }
 
@@ -1055,13 +1774,128 @@ function onMove(e) {
     return;
   }
 
-  if (state.isErasing) { eraseStrokesAt(e); return; }
-
-  if (state.activeTool === 'lasso' && state.lassoStart) {
-    state.lassoRect = { x0: state.lassoStart[0], y0: state.lassoStart[1], x1: wx, y1: wy };
+  if (state.activeTool === 'eraser') {
+    if (state.isErasing || e.buttons !== 0) {
+      eraseStrokesAt(e);
+    }
     clearWet();
-    drawLassoOverlay();
+    const eraserZoom = (state.drawingPane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
+    const radius = 16;
+    const [sx, sy] = viewport.worldToScreen(wx, wy, state.drawingPane);
+    wctx.save();
+    wctx.setTransform(1, 0, 0, 1, 0, 0);
+    wctx.scale(state.dpr, state.dpr);
+    clipToPane(wctx, state.drawingPane);
+    wctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+    wctx.fillStyle = 'rgba(239, 68, 68, 0.1)';
+    wctx.lineWidth = 1.5;
+    wctx.beginPath();
+    wctx.arc(sx, sy, radius, 0, Math.PI * 2);
+    wctx.fill();
+    wctx.stroke();
+    wctx.restore();
     return;
+  }
+
+  if (state.activeTool === 'lasso') {
+    if (!state.transformMode && !state.lassoPath) {
+      const relX = e.clientX - (stageRect ? stageRect.left : 0);
+      const relY = e.clientY - (stageRect ? stageRect.top : 0);
+      const handle = getSelectionHandleAt(relX, relY);
+      if (wetCanvas) wetCanvas.style.cursor = handle ? handle.cursor : 'default';
+    }
+
+    if (state.transformMode && state.transformStartPt) {
+      const dx = wx - state.transformStartPt[0];
+      const dy = wy - state.transformStartPt[1];
+
+      if (state.transformMode === 'move') {
+        for (const s of (state.selectedStrokes || [])) {
+          const init = (state.transformInitialStrokes || []).find(t => t.id === s.id);
+          if (init) {
+            s.points = init.points.map(p => ({
+              x: p.x + dx,
+              y: p.y + dy,
+              w: p.w,
+              p: p.p,
+              t: p.t,
+            }));
+            if (typeof Ink.getPath2D === 'function') {
+              s._cachedPath2D = Ink.getPath2D(s);
+            }
+          }
+        }
+        for (const img of (state.selectedImages || [])) {
+          const init = (state.transformInitialImages || []).find(t => t.id === img.id);
+          if (init) {
+            img.x = init.x + dx;
+            img.y = init.y + dy;
+          }
+        }
+      } else {
+        const b = state.transformInitialBounds;
+        if (b && b.width > 0 && b.height > 0) {
+          let newX0 = b.x0, newY0 = b.y0, newX1 = b.x1, newY1 = b.y1;
+          const mode = state.transformMode;
+          if (mode.includes('e')) newX1 += dx;
+          if (mode.includes('w')) newX0 += dx;
+          if (mode.includes('s')) newY1 += dy;
+          if (mode.includes('n')) newY0 += dy;
+
+          const newW = Math.max(10, newX1 - newX0);
+          const newH = Math.max(10, newY1 - newY0);
+          const scaleX = newW / b.width;
+          const scaleY = newH / b.height;
+
+          for (const s of (state.selectedStrokes || [])) {
+            const init = (state.transformInitialStrokes || []).find(t => t.id === s.id);
+            if (init) {
+              const pl = viewport.getPageLayout(s.sheet);
+              s.points = init.points.map(p => {
+                const curWx = pl.x + p.x;
+                const curWy = pl.y + p.y;
+                const normX = (curWx - b.x0) / b.width;
+                const normY = (curWy - b.y0) / b.height;
+                const scaledWx = newX0 + normX * newW;
+                const scaledWy = newY0 + normY * newH;
+                return {
+                  x: scaledWx - pl.x,
+                  y: scaledWy - pl.y,
+                  w: p.w * Math.min(scaleX, scaleY),
+                  p: p.p,
+                  t: p.t,
+                };
+              });
+              if (typeof Ink.getPath2D === 'function') {
+                s._cachedPath2D = Ink.getPath2D(s);
+              }
+            }
+          }
+
+          for (const img of (state.selectedImages || [])) {
+            const init = (state.transformInitialImages || []).find(t => t.id === img.id);
+            if (init) {
+              img.width = Math.max(10, init.width * scaleX);
+              img.height = Math.max(10, init.height * scaleY);
+            }
+          }
+        }
+      }
+
+      clearWet();
+      redrawAll();
+      return;
+    }
+
+    if (state.lassoPath) {
+      const last = state.lassoPath[state.lassoPath.length - 1];
+      if (!last || Math.hypot(wx - last[0], wy - last[1]) > 2) {
+        state.lassoPath.push([wx, wy]);
+        clearWet();
+        drawLassoOverlay();
+      }
+      return;
+    }
   }
 
   if ((state.activeTool === 'ruler' || state.activeTool === 'rect' ||
@@ -1129,29 +1963,80 @@ async function onUp(e) {
     return;
   }
 
-  state.isErasing = false;
-
-  // Lasso Select commit
-  if (state.activeTool === 'lasso' && state.lassoRect) {
-    const { x0, y0, x1, y1 } = state.lassoRect;
-    const rx0 = Math.min(x0, x1), rx1 = Math.max(x0, x1);
-    const ry0 = Math.min(y0, y1), ry1 = Math.max(y0, y1);
-    let selected = [];
-    if (Math.abs(rx1 - rx0) > 3 || Math.abs(ry1 - ry0) > 3) {
-      for (const s of state.strokes) {
-        if (s.deleted || s.sheet !== state.currentSheet) continue;
-        if (s.points.some(pt => pt.x >= rx0 && pt.x <= rx1 && pt.y >= ry0 && pt.y <= ry1)) {
-          selected.push(s);
-        }
-      }
-    }
-    state.selectedStrokes = selected;
-    state.lassoStart = null;
-    state.lassoRect = null;
+  if (state.activeTool === 'eraser') {
+    state.isErasing = false;
     clearWet();
-    drawLassoOverlay();
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
     return;
+  }
+
+  // Lasso / Transform Commit
+  if (state.activeTool === 'lasso') {
+    if (wetCanvas) wetCanvas.style.cursor = 'default';
+    if (state.transformMode) {
+      state.undoStack.push({
+        type: 'transform_objects',
+        initialStrokes: state.transformInitialStrokes,
+        initialImages: state.transformInitialImages,
+        finalStrokes: (state.selectedStrokes || []).map(s => ({
+          id: s.id,
+          points: s.points.map(p => ({ ...p }))
+        })),
+        finalImages: (state.selectedImages || []).map(img => ({
+          id: img.id,
+          x: img.x,
+          y: img.y,
+          width: img.width,
+          height: img.height,
+        })),
+      });
+      state.redoStack = [];
+      state.transformMode = null;
+      state.transformStartPt = null;
+      state.transformInitialBounds = null;
+      state.transformInitialStrokes = null;
+      state.transformInitialImages = null;
+      clearWet();
+      redrawAll();
+      try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
+
+    if (state.lassoPath) {
+      if (state.lassoPath.length >= 3) {
+        const polygon = state.lassoPath;
+        const matchedStrokes = [];
+        const matchedImages = [];
+
+        for (const s of state.strokes) {
+          if (s.deleted) continue;
+          const pl = viewport.getPageLayout(s.sheet);
+          const hasPointInside = s.points.some(pt => pointInPolygon(pl.x + pt.x, pl.y + pt.y, polygon));
+          if (hasPointInside) matchedStrokes.push(s);
+        }
+
+        if (state.images) {
+          for (const img of state.images) {
+            if (img.deleted) continue;
+            const pl = viewport.getPageLayout(img.sheet);
+            const cx = pl.x + img.x + img.width / 2;
+            const cy = pl.y + img.y + img.height / 2;
+            if (pointInPolygon(cx, cy, polygon) || pointInPolygon(pl.x + img.x, pl.y + img.y, polygon)) {
+              matchedImages.push(img);
+            }
+          }
+        }
+
+        state.selectedStrokes = matchedStrokes;
+        state.selectedImages = matchedImages;
+      }
+
+      state.lassoPath = null;
+      clearWet();
+      redrawAll();
+      try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      return;
+    }
   }
 
   // Shape commit
@@ -1159,17 +2044,20 @@ async function onUp(e) {
        state.activeTool === 'ellipse') && state.shapeStart && state.shapeEnd) {
     const [ax, ay] = state.shapeStart, [bx, by] = state.shapeEnd;
     clearWet();
+    const pageCoord = viewport.worldToPage(ax, ay);
+    const pl = viewport.getPageLayout(pageCoord.sheet);
+    const localAx = ax - pl.x, localAy = ay - pl.y;
+    const localBx = bx - pl.x, localBy = by - pl.y;
+
     if (Math.hypot(bx - ax, by - ay) > 2) {
       if (state.shapeKind === 'line') {
         const rulerStroke = new Ink.Stroke({ kind: 'pen', rgb: state.color, baseWidth: state.baseWidth });
-        rulerStroke.push(ax, ay, 0.7, 0);
-        rulerStroke.push(bx, by, 0.7, 50);
-        const stroke = { ...rulerStroke, sheet: state.currentSheet, deleted: false };
-        // Ink.Stroke is a class; clone its points
+        rulerStroke.push(localAx, localAy, 0.7, 0);
+        rulerStroke.push(localBx, localBy, 0.7, 50);
         const finishedStroke = {
           id: rulerStroke.id, kind: rulerStroke.kind, rgb: rulerStroke.rgb,
           base_width: rulerStroke.base_width, points: rulerStroke.points.slice(),
-          sheet: state.currentSheet, deleted: false,
+          sheet: pageCoord.sheet, deleted: false,
         };
         state.strokes.push(finishedStroke);
         state.undoStack.push({ type: 'add', stroke: finishedStroke });
@@ -1178,14 +2066,14 @@ async function onUp(e) {
         const invoke = getInvoke();
         if (invoke) {
           invoke('commit_stroke', {
-            sheet: state.currentSheet, tool: 'pen', rgb: state.color,
+            sheet: pageCoord.sheet, tool: 'pen', rgb: state.color,
             baseWidth: state.baseWidth,
-            samples: [{ x: ax, y: ay, pressure: 0.7, t_ms: 0 },
-                      { x: bx, y: by, pressure: 0.7, t_ms: 50 }],
+            samples: [{ x: localAx, y: localAy, pressure: 0.7, t_ms: 0 },
+                      { x: localBx, y: localBy, pressure: 0.7, t_ms: 50 }],
           }).catch(err => console.warn('ruler commit failed:', err));
         }
       } else {
-        await commitShape(state.shapeKind, ax, ay, bx, by);
+        await commitShape(state.shapeKind, localAx, localAy, localBx, localBy);
       }
     }
     state.shapeStart = null; state.shapeEnd = null; state.shapeKind = null;
@@ -1196,15 +2084,27 @@ async function onUp(e) {
   if (!state.cur) return;
 
   const finishedStroke = state.cur;
-  if (typeof Ink.getPath2D === 'function') {
-    finishedStroke._cachedPath2D = Ink.getPath2D(finishedStroke);
-  }
+  const pageCoord = viewport.worldToPage(finishedStroke.points[0]?.x || 0, finishedStroke.points[0]?.y || 0);
+  const pl = viewport.getPageLayout(pageCoord.sheet);
+
+  // Convert points to sheet-local coordinates
+  const localPoints = finishedStroke.points.map(p => ({
+    x: p.x - pl.x,
+    y: p.y - pl.y,
+    w: p.w,
+    p: p.p,
+    t: p.t,
+  }));
+
   const strokeRec = {
     id: finishedStroke.id, kind: finishedStroke.kind, rgb: finishedStroke.rgb,
-    base_width: finishedStroke.base_width, points: finishedStroke.points.slice(),
-    sheet: state.currentSheet, deleted: false,
-    _cachedPath2D: finishedStroke._cachedPath2D || null,
+    base_width: finishedStroke.base_width, points: localPoints,
+    sheet: pageCoord.sheet, deleted: false,
+    _cachedPath2D: null,
   };
+  if (typeof Ink.getPath2D === 'function') {
+    strokeRec._cachedPath2D = Ink.getPath2D(strokeRec);
+  }
   state.strokes.push(strokeRec);
   state.undoStack.push({ type: 'add', stroke: strokeRec });
   state.redoStack = [];
@@ -1212,14 +2112,14 @@ async function onUp(e) {
   const invoke = getInvoke();
   if (invoke) {
     try {
-      const samplesPayload = finishedStroke.points.map(pt => ({
+      const samplesPayload = localPoints.map(pt => ({
         x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
       }));
       await invoke('commit_stroke', {
-        sheet: state.currentSheet,
-        tool: finishedStroke.kind,
-        rgb: finishedStroke.rgb,
-        baseWidth: finishedStroke.base_width,
+        sheet: pageCoord.sheet,
+        tool: strokeRec.kind,
+        rgb: strokeRec.rgb,
+        baseWidth: strokeRec.base_width,
         samples: samplesPayload,
       });
     } catch (err) { console.warn('Failed to commit stroke to Rust core:', err); }
@@ -1340,7 +2240,35 @@ function undo() {
   } else if (op.type === 'erase') {
     for (const s of op.strokes) s.deleted = false;
     state.redoStack.push(op);
+  } else if (op.type === 'delete_objects') {
+    for (const s of (op.strokes || [])) s.deleted = false;
+    for (const img of (op.images || [])) img.deleted = false;
+    state.redoStack.push(op);
+  } else if (op.type === 'add_objects') {
+    for (const s of (op.strokes || [])) s.deleted = true;
+    for (const img of (op.images || [])) img.deleted = true;
+    state.redoStack.push(op);
+  } else if (op.type === 'add_image') {
+    op.image.deleted = true;
+    state.redoStack.push(op);
+  } else if (op.type === 'transform_objects') {
+    for (const init of (op.initialStrokes || [])) {
+      const s = state.strokes.find(st => st.id === init.id);
+      if (s) {
+        s.points = init.points.map(p => ({ ...p }));
+        if (typeof Ink.getPath2D === 'function') s._cachedPath2D = Ink.getPath2D(s);
+      }
+    }
+    for (const init of (op.initialImages || [])) {
+      const img = (state.images || []).find(im => im.id === init.id);
+      if (img) {
+        img.x = init.x; img.y = init.y;
+        img.width = init.width; img.height = init.height;
+      }
+    }
+    state.redoStack.push(op);
   }
+  clearWet();
   redrawAll();
 }
 
@@ -1352,8 +2280,36 @@ function redo() {
     state.undoStack.push(op);
   } else if (op.type === 'erase') {
     for (const s of op.strokes) s.deleted = true;
-    state.redoStack.push(op);
+    state.undoStack.push(op);
+  } else if (op.type === 'delete_objects') {
+    for (const s of (op.strokes || [])) s.deleted = true;
+    for (const img of (op.images || [])) img.deleted = true;
+    state.undoStack.push(op);
+  } else if (op.type === 'add_objects') {
+    for (const s of (op.strokes || [])) s.deleted = false;
+    for (const img of (op.images || [])) img.deleted = false;
+    state.undoStack.push(op);
+  } else if (op.type === 'add_image') {
+    op.image.deleted = false;
+    state.undoStack.push(op);
+  } else if (op.type === 'transform_objects') {
+    for (const fin of (op.finalStrokes || [])) {
+      const s = state.strokes.find(st => st.id === fin.id);
+      if (s) {
+        s.points = fin.points.map(p => ({ ...p }));
+        if (typeof Ink.getPath2D === 'function') s._cachedPath2D = Ink.getPath2D(s);
+      }
+    }
+    for (const fin of (op.finalImages || [])) {
+      const img = (state.images || []).find(im => im.id === fin.id);
+      if (img) {
+        img.x = fin.x; img.y = fin.y;
+        img.width = fin.width; img.height = fin.height;
+      }
+    }
+    state.undoStack.push(op);
   }
+  clearWet();
   redrawAll();
 }
 
@@ -1383,14 +2339,26 @@ async function insertBlankPage() {
         index: newIndex, widthPt: width_pt, heightPt: height_pt,
       });
       state.pageInfos.push(pageInfo);
+      const curTab = state.tabs && state.tabs.find(t => t.id === state.activeTabId);
+      if (curTab && curTab.pageInfos !== state.pageInfos) {
+        curTab.pageInfos.push(pageInfo);
+      }
     } catch (err) {
-      console.warn('insert_blank_page failed in backend:', err);
-      state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
+      console.error('[inkwell] insert_blank_page failed in backend:', err);
+      showToast('Failed to insert page: ' + (err.message || err), 'error');
+      return;
     }
   } else {
-    state.pageInfos.push({ page_index: newIndex, width_pt, height_pt });
+    const pageInfo = { page_index: newIndex, width_pt, height_pt };
+    state.pageInfos.push(pageInfo);
+    const curTab = state.tabs && state.tabs.find(t => t.id === state.activeTabId);
+    if (curTab && curTab.pageInfos !== state.pageInfos) {
+      curTab.pageInfos.push(pageInfo);
+    }
   }
   updatePageUI();
+  updateDocInfo();
+  updateToolBadges();
   goToPage(newIndex);
 }
 
@@ -1595,6 +2563,9 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
     pageInfos: pageInfos || [],
     strokes: [],
     selectedStrokes: [],
+    images: [],
+    selectedImages: [],
+    outline: [],
     undoStack: [],
     redoStack: [],
     bookmarks: [],
@@ -1611,16 +2582,15 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
 }
 
 async function switchTab(tabId) {
-  // Only save the outgoing tab's view state when actually switching to a
-  // DIFFERENT tab. When a tab is refreshed/reused in place (e.g. loading a
-  // PDF into the existing tab), saving here would clobber the new data — e.g.
-  // overwriting the just-loaded pageInfos with the stale global state.
   if (state.activeTabId && tabId !== state.activeTabId) {
     const curTab = state.tabs.find(t => t.id === state.activeTabId);
     if (curTab) {
       curTab.pageInfos = state.pageInfos;
       curTab.strokes = state.strokes;
       curTab.selectedStrokes = state.selectedStrokes;
+      curTab.images = state.images || [];
+      curTab.selectedImages = state.selectedImages || [];
+      curTab.outline = state.outline || [];
       curTab.undoStack = state.undoStack;
       curTab.redoStack = state.redoStack;
       curTab.bookmarks = state.bookmarks || [];
@@ -1635,51 +2605,32 @@ async function switchTab(tabId) {
   state.activeTabId = tabId;
   state.pageInfos = targetTab.pageInfos;
   state.strokes = targetTab.strokes;
-  state.selectedStrokes = targetTab.selectedStrokes;
+  state.selectedStrokes = targetTab.selectedStrokes || [];
+  state.images = targetTab.images || [];
+  state.selectedImages = targetTab.selectedImages || [];
+  state.outline = targetTab.outline || [];
   state.undoStack = targetTab.undoStack;
   state.redoStack = targetTab.redoStack;
   state.bookmarks = targetTab.bookmarks || [];
   state.leftSheet = targetTab.leftSheet;
   state.rightSheet = targetTab.rightSheet;
 
+  viewport.updateDocumentLayout(state.pageInfos);
+
   if ($('activeTabTitle')) $('activeTabTitle').textContent = targetTab.title;
   renderTabsDOM();
   updatePageUI();
+  updateDocInfo();
+  updateToolBadges();
+  renderOutline();
   clearTileCache();
   scheduleRedrawTiles();
   redrawAll();
+  updateDocScrollbar();
   renderBookmarks();
   renderLayersDrawer();
-
-  // If the target tab has a backing file path, sync Rust backend AppState
-  const invoke = getInvoke();
-  if (invoke && targetTab.pathStr) {
-    try {
-      const res = await invoke('open_pdf', { pathStr: targetTab.pathStr });
-      if (res && res.loaded_strokes && (!targetTab.strokes || !targetTab.strokes.length)) {
-        targetTab.strokes = res.loaded_strokes.map(s => {
-          const rec = {
-            id: s.id,
-            kind: s.kind,
-            rgb: s.rgb,
-            base_width: s.base_width,
-            points: (s.points || []).map(p => ({ x: p.x, y: p.y, w: p.w, p: p.p, t: p.t })),
-            sheet: s.sheet || 0,
-            deleted: !!s.deleted,
-          };
-          if (typeof Ink.getPath2D === 'function') {
-            rec._cachedPath2D = Ink.getPath2D(rec);
-          }
-          return rec;
-        });
-        state.strokes = targetTab.strokes;
-        scheduleRedrawAll();
-      }
-    } catch (err) {
-      console.warn('[inkwell] switchTab backend sync failed:', err);
-    }
-  }
 }
+
 
 function closeTab(tabId, e) {
   if (e) e.stopPropagation();
@@ -1915,6 +2866,7 @@ function toggleDrawer(name) {
     $(view.viewId) && $(view.viewId).classList.remove('hidden');
     if ($('drawerTitle')) $('drawerTitle').textContent = view.title;
     if (name === 'thumbnails') renderThumbnails();
+    if (name === 'outline') renderOutline();
     if (name === 'docInfo') updateDocInfo();
     if (name === 'bookmarks') renderBookmarks();
     if (name === 'layers') renderLayersDrawer();
@@ -2007,7 +2959,7 @@ async function createBlankWhiteboard() {
         heightPt: 595.0,
       });
       if (res && res.page_infos) {
-        handlePdfLoadSuccess('Untitled Whiteboard.pdf', null, res.page_infos, res.recovered_strokes || 0, res.loaded_strokes || []);
+        handlePdfLoadSuccess('Untitled Whiteboard.pdf', null, res.page_infos, res.recovered_strokes || 0, res.loaded_strokes || [], res.outline || []);
         showToast('Blank whiteboard ready!', 'success');
         return;
       }
@@ -2017,7 +2969,7 @@ async function createBlankWhiteboard() {
   }
 
   // Fallback locally
-  handlePdfLoadSuccess('Untitled Whiteboard.pdf', null, [{ page_index: 0, width_pt: 842.0, height_pt: 595.0 }], 0, []);
+  handlePdfLoadSuccess('Untitled Whiteboard.pdf', null, [{ page_index: 0, width_pt: 842.0, height_pt: 595.0 }], 0, [], []);
   showToast('Blank whiteboard ready!', 'success');
 }
 
@@ -2040,6 +2992,24 @@ function clearCurrentPageInk() {
 }
 
 // ---- Live Page Thumbnail Previews ----
+let thumbObserver = null;
+const renderedThumbnails = new Set();
+const thumbQueue = [];
+let activeThumbFetches = 0;
+const MAX_CONCURRENT_THUMBS = 2;
+
+function pumpThumbQueue() {
+  while (activeThumbFetches < MAX_CONCURRENT_THUMBS && thumbQueue.length > 0) {
+    const task = thumbQueue.shift();
+    if (!task) break;
+    activeThumbFetches++;
+    task().finally(() => {
+      activeThumbFetches--;
+      pumpThumbQueue();
+    });
+  }
+}
+
 async function renderThumbnails() {
   const grid = $('thumbnailGrid');
   if (!grid) return;
@@ -2047,6 +3017,12 @@ async function renderThumbnails() {
     grid.innerHTML = '<div class="thumb-empty">No pages available</div>';
     return;
   }
+
+  if (thumbObserver) {
+    thumbObserver.disconnect();
+  }
+  renderedThumbnails.clear();
+  thumbQueue.length = 0;
 
   grid.innerHTML = state.pageInfos.map((pi, i) => {
     const active = (i === state.leftSheet) ? ' active' : '';
@@ -2068,56 +3044,77 @@ async function renderThumbnails() {
     });
   });
 
-  // Render actual PDF page previews asynchronously into each thumbnail canvas
-  state.pageInfos.forEach(async (pi, i) => {
-    const canvas = $(`thumbCanvas_${i}`);
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  // Lazy render thumbnails via IntersectionObserver
+  thumbObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const card = entry.target;
+      const i = parseInt(card.getAttribute('data-page'), 10);
+      if (isNaN(i) || renderedThumbnails.has(i)) return;
+      renderedThumbnails.add(i);
 
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+      thumbQueue.push(async () => {
+        const pi = state.pageInfos[i];
+        if (!pi) return;
+        const canvas = $(`thumbCanvas_${i}`);
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-    try {
-      const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
-      if (tile && tile.data) {
-        const offscreen = document.createElement('canvas');
-        offscreen.width = tile.data.width;
-        offscreen.height = tile.data.height;
-        offscreen.getContext('2d').putImageData(tile.data, 0, 0);
-        ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-      }
-    } catch (e) {
-      console.warn('thumb render error for page', i, e);
-    }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const pageStrokes = state.strokes.filter(s => !s.deleted && s.sheet === i);
-    if (pageStrokes.length) {
-      ctx.save();
-      const scaleX = canvas.width / pi.width_pt;
-      const scaleY = canvas.height / pi.height_pt;
-      ctx.scale(scaleX, scaleY);
-      for (const stroke of pageStrokes) {
-        ctx.strokeStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
-        ctx.lineWidth = Math.max(1, stroke.base_width);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        if (stroke.kind === 'highlighter') {
-          ctx.globalAlpha = 0.42;
-        } else {
-          ctx.globalAlpha = 1.0;
-        }
-        if (stroke.points && stroke.points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-          for (let p = 1; p < stroke.points.length; p++) {
-            ctx.lineTo(stroke.points[p].x, stroke.points[p].y);
+        try {
+          const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
+          if (tile && tile.data) {
+            const offscreen = document.createElement('canvas');
+            offscreen.width = tile.data.width;
+            offscreen.height = tile.data.height;
+            offscreen.getContext('2d').putImageData(tile.data, 0, 0);
+            ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
           }
-          ctx.stroke();
+        } catch (e) {
+          console.warn('thumb render error for page', i, e);
         }
-      }
-      ctx.restore();
-    }
+
+        const pageStrokes = state.strokes.filter(s => !s.deleted && s.sheet === i);
+        if (pageStrokes.length) {
+          ctx.save();
+          const scaleX = canvas.width / pi.width_pt;
+          const scaleY = canvas.height / pi.height_pt;
+          ctx.scale(scaleX, scaleY);
+          for (const stroke of pageStrokes) {
+            ctx.strokeStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+            ctx.lineWidth = Math.max(1, stroke.base_width);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            if (stroke.kind === 'highlighter') {
+              ctx.globalAlpha = 0.42;
+            } else {
+              ctx.globalAlpha = 1.0;
+            }
+            if (stroke.points && stroke.points.length > 1) {
+              ctx.beginPath();
+              ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+              for (let p = 1; p < stroke.points.length; p++) {
+                ctx.lineTo(stroke.points[p].x, stroke.points[p].y);
+              }
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        }
+      });
+      pumpThumbQueue();
+    });
+  }, {
+    root: $('sidebarDrawer'),
+    rootMargin: '100px',
+    threshold: 0.01,
+  });
+
+  grid.querySelectorAll('.thumb-card').forEach(el => {
+    thumbObserver.observe(el);
   });
 }
 
@@ -2440,8 +3437,9 @@ function showSaveProgress(show, message = 'Saving document...') {
   }
 }
 
-function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedStrokes = []) {
+function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedStrokes = [], outline = []) {
   try {
+    state.outline = outline || [];
     const formattedStrokes = Array.isArray(loadedStrokes) ? loadedStrokes.map(s => {
       const strokeRec = {
         id: s.id,
@@ -2462,6 +3460,7 @@ function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedS
       const tab = createTab(title, selectedPath, infos);
       if (tab) {
         tab.strokes = formattedStrokes;
+        tab.outline = outline || [];
         state.strokes = tab.strokes;
       }
     } else {
@@ -2471,7 +3470,10 @@ function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedS
         cur.pathStr = selectedPath;
         cur.pageInfos = infos;
         cur.strokes = formattedStrokes;
+        cur.outline = outline || [];
         cur.selectedStrokes = [];
+        cur.images = [];
+        cur.selectedImages = [];
         cur.undoStack = [];
         cur.redoStack = [];
         cur.leftSheet = 0;
@@ -2481,12 +3483,18 @@ function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedS
         const tab = createTab(title, selectedPath, infos);
         if (tab) {
           tab.strokes = formattedStrokes;
+          tab.outline = outline || [];
           state.strokes = tab.strokes;
         }
       }
     }
+    viewport.updateDocumentLayout(state.pageInfos);
+    viewport.fitPage(state.pageInfos[0]?.width_pt, state.pageInfos[0]?.height_pt, 'left');
+    renderOutline();
     if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
     scheduleRedrawAll();
+    scheduleRedrawTiles();
+    updateDocScrollbar();
   } catch (err) {
     console.error('[inkwell] handlePdfLoadSuccess setup error:', err);
   }
@@ -2504,7 +3512,7 @@ function attachOpenListeners() {
           const selectedPath = res[0];
           const r = res[1] || {};
           const title = selectedPath.split('\\').pop().split('/').pop();
-          handlePdfLoadSuccess(title, selectedPath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || []);
+          handlePdfLoadSuccess(title, selectedPath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || [], r.outline || []);
         }
         return;
       } catch (err) {
@@ -2536,7 +3544,7 @@ function attachOpenListeners() {
       const filePath = file.path || file.webkitRelativePath;
       if (filePath && invoke) {
         const r = await invoke('open_pdf', { pathStr: filePath });
-        handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || []);
+        handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || [], r.outline || []);
         return;
       }
 
@@ -2547,7 +3555,7 @@ function attachOpenListeners() {
       }
       if (invoke) {
         const r2 = await invoke('open_pdf_bytes', { name: file.name, bytes });
-        handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0, r2.loaded_strokes || []);
+        handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0, r2.loaded_strokes || [], r2.outline || []);
         return;
       }
       showToast('Tauri IPC is unavailable in this environment.', 'warning');
@@ -2572,15 +3580,33 @@ async function saveDocument(forceSaveAs = false) {
     const hasPath = curTab && curTab.pathStr;
     console.log('[inkwell] Current tab:', curTab, 'hasPath:', hasPath);
 
+    const nonDeletedImages = (state.images || [])
+      .filter(img => !img.deleted && img.dataUrl)
+      .map(img => ({
+        sheet: img.sheet || 0,
+        x: img.x,
+        y: img.y,
+        width: img.width,
+        height: img.height,
+        data_url: img.dataUrl,
+      }));
+
     if (!forceSaveAs && hasPath) {
       try {
-        savedPath = await invoke('save_pdf', { outPathStr: curTab.pathStr });
+        savedPath = await invoke('save_pdf', {
+          outPathStr: curTab.pathStr,
+          images: nonDeletedImages,
+        });
       } catch (err) {
         console.warn('[inkwell] Direct save_pdf failed, opening save dialog:', err);
-        savedPath = await invoke('save_pdf_dialog');
+        savedPath = await invoke('save_pdf_dialog', {
+          images: nonDeletedImages,
+        });
       }
     } else {
-      savedPath = await invoke('save_pdf_dialog');
+      savedPath = await invoke('save_pdf_dialog', {
+        images: nonDeletedImages,
+      });
     }
 
     console.log('[inkwell] Save returned:', savedPath);
@@ -2663,14 +3689,14 @@ window.saveDocument = saveDocument;
         const filePath = file.path || file.webkitRelativePath;
         if (filePath && invoke) {
           const r = await invoke('open_pdf', { pathStr: filePath });
-          handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || []);
+          handlePdfLoadSuccess(file.name, filePath, r.page_infos || [], r.recovered_strokes || 0, r.loaded_strokes || [], r.outline || []);
           return;
         }
         const arrayBuf = await file.arrayBuffer();
         const bytes = Array.from(new Uint8Array(arrayBuf));
         if (invoke) {
           const r2 = await invoke('open_pdf_bytes', { name: file.name, bytes });
-          handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0, r2.loaded_strokes || []);
+          handlePdfLoadSuccess(file.name, null, r2.page_infos || [], r2.recovered_strokes || 0, r2.loaded_strokes || [], r2.outline || []);
         }
       } catch (err) {
         console.error('[inkwell] Drop error:', err);
@@ -2796,22 +3822,9 @@ window.addEventListener('keydown', e => {
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (!isTyping && state.selectedStrokes && state.selectedStrokes.length) {
+    if (!isTyping && ((state.selectedStrokes && state.selectedStrokes.length) || (state.selectedImages && state.selectedImages.length))) {
       e.preventDefault();
-      const deleted = [];
-      for (const s of state.selectedStrokes) {
-        if (!s.deleted) {
-          s.deleted = true;
-          deleted.push(s);
-        }
-      }
-      state.selectedStrokes = [];
-      if (deleted.length) {
-        state.undoStack.push({ type: 'erase', strokes: deleted });
-        state.redoStack = [];
-        redrawAll();
-        clearWet();
-      }
+      deleteSelection();
       return;
     }
   }
@@ -2823,6 +3836,32 @@ window.addEventListener('keydown', e => {
   }
 
   if (e.ctrlKey || e.metaKey) {
+    if (e.key === 'a' || e.key === 'A') {
+      e.preventDefault();
+      selectAllOnCurrentPage();
+      return;
+    }
+    if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault();
+      copySelection();
+      return;
+    }
+    if (e.key === 'x' || e.key === 'X') {
+      e.preventDefault();
+      cutSelection();
+      return;
+    }
+    if (e.key === 'v' || e.key === 'V') {
+      if (pasteClipboard()) {
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.key === 'd' || e.key === 'D') {
+      e.preventDefault();
+      duplicateSelection();
+      return;
+    }
     if (e.key === 'n' || e.key === 'N') {
       e.preventDefault();
       createBlankWhiteboard();
@@ -2943,6 +3982,11 @@ window.addEventListener('DOMContentLoaded', () => {
   attachPointerHandlers();
   bindUI();
   attachOpenListeners();
+  initDocScrollbar();
+  initContextMenu();
+  initSelectionToolbar();
+  window.addEventListener('paste', handleGlobalPaste);
+
   setTool(state.activeTool);
   updatePageUI();
 

@@ -490,6 +490,71 @@
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg>
       </button>
 
+      <!-- Floating Vertical Right Scrollbar -->
+      <div id="docScrollbar" class="doc-scrollbar">
+        <div id="docScrollbarTrack" class="doc-scrollbar-track">
+          <div id="docScrollbarThumb" class="doc-scrollbar-thumb"></div>
+        </div>
+        <div id="docScrollbarTooltip" class="doc-scrollbar-tooltip hidden">Page 1 / 1</div>
+      </div>
+
+      <!-- Floating Selection Action Bar -->
+      <div id="selectionToolbar" class="selection-toolbar hidden">
+        <button id="btnSelCopy" class="sel-tool-btn" title="Copy (Ctrl+C)" aria-label="Copy">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>Copy</span>
+        </button>
+        <button id="btnSelCut" class="sel-tool-btn" title="Cut (Ctrl+X)" aria-label="Cut">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+          <span>Cut</span>
+        </button>
+        <button id="btnSelDuplicate" class="sel-tool-btn" title="Duplicate (Ctrl+D)" aria-label="Duplicate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h12"/></svg>
+          <span>Duplicate</span>
+        </button>
+        <div class="sel-tool-divider"></div>
+        <button id="btnSelDelete" class="sel-tool-btn danger" title="Delete (Del)" aria-label="Delete">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <span>Delete</span>
+        </button>
+      </div>
+
+      <!-- Canvas Right-Click Context Menu -->
+      <div id="canvasContextMenu" class="canvas-context-menu hidden">
+        <div class="ctx-menu-item" id="ctxMenuCut">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+          <span>Cut</span>
+          <kbd>Ctrl+X</kbd>
+        </div>
+        <div class="ctx-menu-item" id="ctxMenuCopy">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>Copy</span>
+          <kbd>Ctrl+C</kbd>
+        </div>
+        <div class="ctx-menu-item" id="ctxMenuPaste">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>
+          <span>Paste</span>
+          <kbd>Ctrl+V</kbd>
+        </div>
+        <div class="ctx-menu-item" id="ctxMenuDuplicate">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16V4a2 2 0 0 1 2-2h12"/></svg>
+          <span>Duplicate</span>
+          <kbd>Ctrl+D</kbd>
+        </div>
+        <div class="ctx-menu-divider"></div>
+        <div class="ctx-menu-item" id="ctxMenuSelectAll">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="3 3"/></svg>
+          <span>Select All</span>
+          <kbd>Ctrl+A</kbd>
+        </div>
+        <div class="ctx-menu-divider"></div>
+        <div class="ctx-menu-item danger" id="ctxMenuDelete">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <span>Delete</span>
+          <kbd>Del</kbd>
+        </div>
+      </div>
+
       <!-- Canvases -->
       <canvas id="tiles"></canvas>
       <canvas id="dry"></canvas>
@@ -502,8 +567,8 @@
           <span class="dock-shortcut">H</span>
         </button>
 
-        <button id="btnDockLasso" class="dock-btn" title="Lasso Select & Erase (V)" aria-label="Lasso tool">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="3 3" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>
+        <button id="btnDockLasso" class="dock-btn" title="Lasso & Move (V)" aria-label="Lasso tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 22a5 5 0 0 1-2-4c0-4 4-6 9-6 4 0 7 2 7 5s-2 5-6 5c-3 0-5-1-6-3" stroke-dasharray="3 3"/><path d="M14 12c-2-2-4-7-1-10 2 2 4 7 1 10z"/></svg>
           <span class="dock-shortcut">V</span>
         </button>
 
