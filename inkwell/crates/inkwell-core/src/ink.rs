@@ -27,7 +27,7 @@ pub struct OneEuro {
 
 impl Default for OneEuro {
     fn default() -> Self {
-        Self::new(1.7, 0.02, 1.0)
+        Self::new(1.1, 0.006, 1.0)
     }
 }
 

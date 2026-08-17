@@ -92,14 +92,14 @@ pub fn get_uvarint(buf: &[u8], pos: &mut usize) -> Result<u64, CodecError> {
     loop {
         let b = *buf.get(*pos).ok_or(CodecError::Truncated)?;
         *pos += 1;
+        if shift >= 64 || (shift == 63 && (b & 0x7F) > 1) {
+            return Err(CodecError::Truncated);
+        }
         n |= ((b & 0x7F) as u64) << shift;
         if b & 0x80 == 0 {
             return Ok(n);
         }
         shift += 7;
-        if shift > 63 {
-            return Err(CodecError::Truncated);
-        }
     }
 }
 
@@ -154,7 +154,7 @@ pub fn decode(buf: &[u8]) -> Result<Vec<Stroke>, CodecError> {
     }
     let mut pos = 5usize;
     let count = get_uvarint(buf, &mut pos)? as usize;
-    let mut out = Vec::with_capacity(count);
+    let mut out = Vec::with_capacity(count.min(1024));
 
     for _ in 0..count {
         let idb: [u8; 16] = buf
@@ -178,7 +178,7 @@ pub fn decode(buf: &[u8]) -> Result<Vec<Stroke>, CodecError> {
         };
         let n = get_uvarint(buf, &mut pos)? as usize;
 
-        let mut samples = Vec::with_capacity(n);
+        let mut samples = Vec::with_capacity(n.min(1024));
         let (mut px, mut py, mut pp, mut pt) = (0i64, 0i64, 0i64, 0i64);
         for _ in 0..n {
             px += get_varint(buf, &mut pos)?;

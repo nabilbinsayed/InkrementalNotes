@@ -19,6 +19,11 @@ class ViewportManager {
     this.lastPanPt = [0, 0];
     this.stageRect = null;
     this.element = null;
+    this.isStylusActive = false;
+    this.activeTouches = new Map();
+    this.pinchStartDist = null;
+    this.pinchStartZoom = null;
+    this.pinchStartMid = null;
 
     // Document multi-page continuous layout state
     this.pageLayouts = []; // array of { sheet, x, y, width, height }
@@ -285,35 +290,97 @@ class ViewportManager {
       }
     }, { passive: false });
 
-    // Middle-mouse button panning
     element.addEventListener('pointerdown', e => {
-      if (e.button !== 1) return; // middle button only
-      e.preventDefault();
-      if (!this.stageRect) this.updateStageRect();
-      const stageRect = this.stageRect;
-      const relX = e.clientX - stageRect.left;
-      this.isPanning = true;
-      this.lastPanPt = [e.clientX, e.clientY];
-      this.activePane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
-      try { element.setPointerCapture(e.pointerId); } catch (_) {}
+      if (e.pointerType === 'pen') {
+        this.isStylusActive = true;
+      }
+      if (e.pointerType === 'touch') {
+        this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.activeTouches.size === 2) {
+          const pts = Array.from(this.activeTouches.values());
+          const dx = pts[1].x - pts[0].x;
+          const dy = pts[1].y - pts[0].y;
+          this.pinchStartDist = Math.hypot(dx, dy) || 1;
+          this.pinchStartMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
+          if (!this.stageRect) this.updateStageRect();
+          const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
+          const relX = this.pinchStartMid[0] - stageRect.left;
+          const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+          this.activePane = pane;
+          this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
+        }
+      }
+      if (e.button === 1) { // middle button only
+        e.preventDefault();
+        if (!this.stageRect) this.updateStageRect();
+        const stageRect = this.stageRect;
+        const relX = e.clientX - stageRect.left;
+        this.isPanning = true;
+        this.lastPanPt = [e.clientX, e.clientY];
+        this.activePane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+        try { element.setPointerCapture(e.pointerId); } catch (_) {}
+      }
     });
 
     element.addEventListener('pointermove', e => {
-      if (!this.isPanning) return;
-      const dx = e.clientX - this.lastPanPt[0];
-      const dy = e.clientY - this.lastPanPt[1];
-      this.lastPanPt = [e.clientX, e.clientY];
-      const pane = this.activePane;
-      const curPanX = pane === 'right' ? this.rightPanX : this.panX;
-      const curPanY = pane === 'right' ? this.rightPanY : this.panY;
-      this.setPan(curPanX + dx, curPanY + dy, pane);
+      if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) {
+        this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.activeTouches.size === 2 && this.pinchStartDist && this.pinchStartMid) {
+          e.preventDefault();
+          const pts = Array.from(this.activeTouches.values());
+          const curDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+          const curMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
+          const scale = curDist / this.pinchStartDist;
+          const newZoom = this.pinchStartZoom * scale;
+          const stageRect = this.stageRect || { left: 0, top: 0 };
+          const pivot = [this.pinchStartMid[0] - stageRect.left, this.pinchStartMid[1] - stageRect.top];
+          this.setZoom(newZoom, pivot, this.activePane);
+
+          const dMidX = curMid[0] - this.pinchStartMid[0];
+          const dMidY = curMid[1] - this.pinchStartMid[1];
+          if (Math.hypot(dMidX, dMidY) > 2) {
+            const pane = this.activePane;
+            const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+            const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+            this.setPan(curPanX + dMidX * 0.5, curPanY + dMidY * 0.5, pane);
+            this.pinchStartMid = curMid;
+          }
+          if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
+          if (typeof window.redrawAll === 'function') window.redrawAll();
+          return;
+        }
+      }
+
+      if (this.isPanning) {
+        const dx = e.clientX - this.lastPanPt[0];
+        const dy = e.clientY - this.lastPanPt[1];
+        this.lastPanPt = [e.clientX, e.clientY];
+        const pane = this.activePane;
+        const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+        const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+        this.setPan(curPanX + dx, curPanY + dy, pane);
+      }
     });
 
-    element.addEventListener('pointerup', e => {
-      if (e.button !== 1) return;
-      this.isPanning = false;
-      try { element.releasePointerCapture(e.pointerId); } catch (_) {}
-    });
+    const onPointerEnd = e => {
+      if (e.pointerType === 'pen') {
+        this.isStylusActive = false;
+      }
+      if (e.pointerType === 'touch') {
+        this.activeTouches.delete(e.pointerId);
+        if (this.activeTouches.size < 2) {
+          this.pinchStartDist = null;
+          this.pinchStartZoom = null;
+          this.pinchStartMid = null;
+        }
+      }
+      if (e.button === 1) {
+        this.isPanning = false;
+        try { element.releasePointerCapture(e.pointerId); } catch (_) {}
+      }
+    };
+    element.addEventListener('pointerup', onPointerEnd);
+    element.addEventListener('pointercancel', onPointerEnd);
   }
 }
 

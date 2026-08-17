@@ -166,6 +166,34 @@ fn test_insert_blank_page_draw_and_save_multi_page() {
     }
 }
 
+#[test]
+fn test_unicode_search_window_slicing_safety() {
+    let bangla_text = "অধ্যায় ৩: ত্রিকোণমিতি এবং ক্যালকুলাস 🧑‍🔬 ∑_{i=0}^∞ a_i x^i = e^x গণিত ও পদার্থবিজ্ঞান";
+    let q = "ত্রিকোণমিতি";
+    let q_lower = q.to_lowercase();
+    let q_chars: Vec<char> = q_lower.chars().collect();
+
+    let text_chars: Vec<char> = bangla_text.chars().collect();
+    let text_lower: String = text_chars.iter().collect::<String>().to_lowercase();
+    let text_lower_chars: Vec<char> = text_lower.chars().collect();
+
+    let found_pos = text_lower_chars.windows(q_chars.len()).position(|w| w == q_chars.as_slice());
+    assert!(found_pos.is_some(), "Must locate Bangla search query");
+
+    let char_idx = found_pos.unwrap();
+    let start = char_idx.saturating_sub(40).min(text_chars.len());
+    let end = (char_idx + q_chars.len() + 40).min(text_chars.len()).max(start);
+    let snippet_str: String = text_chars[start..end].iter().collect();
+    let snippet = format!(
+        "{}{}{}",
+        if start > 0 { "…" } else { "" },
+        snippet_str.replace('\n', " "),
+        if end < text_chars.len() { "…" } else { "" }
+    );
+    assert!(snippet.contains("ত্রিকোণমিতি"));
+}
+
+
 
 
 

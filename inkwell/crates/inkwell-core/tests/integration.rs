@@ -105,6 +105,44 @@ fn codec_rejects_garbage_instead_of_panicking() {
 }
 
 #[test]
+fn codec_rejects_overflowing_varint_and_bounds_allocation() {
+    // 10 consecutive bytes with MSB set (varint shift overflow >= 64 bits)
+    let bad_varint = [0xFF; 10];
+    let mut pos = 0;
+    assert!(codec::get_uvarint(&bad_varint, &mut pos).is_err());
+
+    // Shift == 63 with payload > 1
+    let bad_shift63 = [0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02];
+    let mut pos2 = 0;
+    assert!(codec::get_uvarint(&bad_shift63, &mut pos2).is_err());
+}
+
+#[test]
+fn pdfobj_skip_value_bounds_checks_and_clamps() {
+    use inkwell_core::pdfobj::skip_value;
+
+    // Trailing backslash inside string
+    let trailing_escape = b"(\\ ";
+    assert!(skip_value(trailing_escape, 0) <= trailing_escape.len());
+
+    // Unterminated dict
+    let unterminated_dict = b"<< /Key 123";
+    assert!(skip_value(unterminated_dict, 0) <= unterminated_dict.len());
+
+    // Unterminated hex string
+    let unterminated_hex = b"<ABC";
+    assert!(skip_value(unterminated_hex, 0) <= unterminated_hex.len());
+
+    // Unterminated array
+    let unterminated_arr = b"[ 1 2 3";
+    assert!(skip_value(unterminated_arr, 0) <= unterminated_arr.len());
+
+    // Abrupt end after slash
+    let slash = b"/";
+    assert!(skip_value(slash, 0) <= slash.len());
+}
+
+#[test]
 fn codec_size_is_about_four_bytes_per_sample() {
     let doc = sample_doc(10);
     let strokes: Vec<Stroke> = doc.sheets[0].strokes().cloned().collect();

@@ -86,7 +86,7 @@ function consume(e, predicted = false) {
   if (!pt) return;
   if (!predicted) state.m.onSample(e.timeStamp, p);
 
-  wctx.fillStyle = `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
   if (prev) Ink.drawSegment(wctx, prev, pt); else Ink.drawDot(wctx, pt);
 }
 

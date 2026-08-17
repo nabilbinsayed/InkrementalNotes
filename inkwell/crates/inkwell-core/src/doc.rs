@@ -161,9 +161,15 @@ impl Document {
         let Some(sh) = self.sheets.get_mut(sheet) else { return removed };
         for layer in &mut sh.layers {
             layer.strokes.retain(|s| {
+                let max_r = radius + s.brush.base_width * 0.5;
+                if let Some(b) = s.bbox() {
+                    if px + max_r < b[0] || px - max_r > b[2] || py + max_r < b[1] || py - max_r > b[3] {
+                        return true;
+                    }
+                }
                 let hit = s.samples.iter().any(|samp| {
                     let (sx, sy) = (samp.x, samp.y);
-                    (sx - px).hypot(sy - py) < radius + s.brush.base_width * 0.5
+                    (sx - px).hypot(sy - py) < max_r
                 });
                 if hit { removed.push(s.id); }
                 !hit
@@ -182,6 +188,11 @@ impl Document {
         let Some(sh) = self.sheets.get_mut(sheet) else { return removed };
         for layer in &mut sh.layers {
             layer.strokes.retain(|s| {
+                if let Some(b) = s.bbox() {
+                    if rx1 < b[0] || rx0 > b[2] || ry1 < b[1] || ry0 > b[3] {
+                        return true;
+                    }
+                }
                 let hit = s.samples.iter().any(|samp| {
                     samp.x >= rx0 && samp.x <= rx1 && samp.y >= ry0 && samp.y <= ry1
                 });

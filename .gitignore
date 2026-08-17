@@ -23,6 +23,10 @@ Thumbs.db
 # Python / Venv
 .venv/
 **/.venv/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+**/.pytest_cache/
 
 # Tauri generated
 gen/

@@ -15,7 +15,7 @@ class LowPass {
 }
 
 class OneEuro {
-  constructor(minCutoff = 0.8, beta = 0.004, dCutoff = 1.0) {
+  constructor(minCutoff = 1.1, beta = 0.006, dCutoff = 1.0) {
     this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
     this.x = new LowPass(); this.dx = new LowPass(); this.tPrev = null;
   }
@@ -57,6 +57,23 @@ class Streamline {
   }
 }
 
+function computeStrokeBbox(pts, baseWidth = 2.0) {
+  if (!pts || !pts.length) return [0, 0, 0, 0];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const halfW = (baseWidth || 2.0) / 2;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const x = p.x !== undefined ? p.x : p[0];
+    const y = p.y !== undefined ? p.y : p[1];
+    const w = (p.w !== undefined ? p.w / 2 : halfW) || halfW;
+    if (x - w < minX) minX = x - w;
+    if (y - w < minY) minY = y - w;
+    if (x + w > maxX) maxX = x + w;
+    if (y + w > maxY) maxY = y + w;
+  }
+  return [minX, minY, maxX, maxY];
+}
+
 class Stroke {
   constructor(opts = {}) {
     this.id = crypto.randomUUID ? crypto.randomUUID()
@@ -64,16 +81,19 @@ class Stroke {
     this.kind = opts.kind || 'pen';
     this.rgb = opts.rgb || [0.08, 0.09, 0.14];
     this.base_width = opts.baseWidth || 3.2;
+    this.cssColor = `rgb(${this.rgb.map(v => Math.round(v * 255)).join(',')})`;
     this.samples = [];
     this._pts = [];            // {x, y, w} in CSS px, post-filter
-    const minCut = opts.minCutoff !== undefined ? opts.minCutoff : 0.8;
-    const bCut = opts.beta !== undefined ? opts.beta : 0.004;
+    const minCut = opts.minCutoff !== undefined ? opts.minCutoff : 1.1;
+    const bCut = opts.beta !== undefined ? opts.beta : 0.006;
     this._fx = new OneEuro(minCut, bCut);
     this._fy = new OneEuro(minCut, bCut);
     this._p = null;
     this._gamma = opts.gamma || 1.0;
     this._smoothing = opts.smoothing !== false;
     this._warmup = 0;          // Huion reports garbage pressure on entry
+    this._cachedPath2D = null;
+    this.bbox = [Infinity, Infinity, -Infinity, -Infinity];
   }
 
   widthFor(p) {
@@ -93,9 +113,17 @@ class Stroke {
     const last = this._pts[this._pts.length - 1];
     if (last && Math.hypot(fx - last.x, fy - last.y) < 0.05) return null; // dedup
 
-    const pt = { x: fx, y: fy, w: this.widthFor(this._p), p: this._p, t: tMs };
+    const w = this.widthFor(this._p);
+    const pt = { x: fx, y: fy, w, p: this._p, t: tMs };
     this._pts.push(pt);
-    this.samples.push([+fx.toFixed(3), +fy.toFixed(3), +this._p.toFixed(4), +tMs.toFixed(1)]);
+    this.samples.push([fx, fy, this._p, tMs]);
+
+    const r = w / 2;
+    if (fx - r < this.bbox[0]) this.bbox[0] = fx - r;
+    if (fy - r < this.bbox[1]) this.bbox[1] = fy - r;
+    if (fx + r > this.bbox[2]) this.bbox[2] = fx + r;
+    if (fy + r > this.bbox[3]) this.bbox[3] = fy + r;
+
     return pt;
   }
 
@@ -133,38 +161,45 @@ function getChiselPath2D(rawPts, baseH = 16.0) {
   if (typeof Path2D === 'undefined' || !rawPts || !rawPts.length) return null;
   const path = new Path2D();
   const halfH = (baseH || 16.0) / 2;
+  // 45-degree chisel normal vector
+  const nx = 0.70710678 * halfH;
+  const ny = 0.70710678 * halfH;
 
   if (rawPts.length === 1) {
     const p = rawPts[0];
-    path.rect(p.x - 3, p.y - halfH, 6, halfH * 2);
+    path.moveTo(p.x - nx, p.y - ny);
+    path.lineTo(p.x + nx, p.y + ny);
+    path.lineTo(p.x + nx + 2, p.y + ny);
+    path.lineTo(p.x - nx + 2, p.y - ny);
+    path.closePath();
     return path;
   }
 
   const pts = chaikinSubdivide(rawPts, 1);
   if (pts.length < 2) return null;
 
-  // Top flat/smooth edge
-  path.moveTo(pts[0].x, pts[0].y - halfH);
+  // Upper chisel contour
+  path.moveTo(pts[0].x - nx, pts[0].y - ny);
   for (let i = 1; i < pts.length; i++) {
-    const mx = (pts[i - 1].x + pts[i].x) / 2;
-    const my = (pts[i - 1].y + pts[i].y) / 2 - halfH;
-    path.quadraticCurveTo(pts[i - 1].x, pts[i - 1].y - halfH, mx, my);
+    const mx = (pts[i - 1].x + pts[i].x) / 2 - nx;
+    const my = (pts[i - 1].y + pts[i].y) / 2 - ny;
+    path.quadraticCurveTo(pts[i - 1].x - nx, pts[i - 1].y - ny, mx, my);
   }
   const last = pts[pts.length - 1];
-  path.lineTo(last.x, last.y - halfH);
+  path.lineTo(last.x - nx, last.y - ny);
 
-  // Vertical flat end cap
-  path.lineTo(last.x, last.y + halfH);
+  // Chisel end cap
+  path.lineTo(last.x + nx, last.y + ny);
 
-  // Bottom flat/smooth edge
+  // Lower chisel contour
   for (let i = pts.length - 1; i > 0; i--) {
-    const mx = (pts[i].x + pts[i - 1].x) / 2;
-    const my = (pts[i].y + pts[i - 1].y) / 2 + halfH;
-    path.quadraticCurveTo(pts[i].x, pts[i].y + halfH, mx, my);
+    const mx = (pts[i].x + pts[i - 1].x) / 2 + nx;
+    const my = (pts[i].y + pts[i - 1].y) / 2 + ny;
+    path.quadraticCurveTo(pts[i].x + nx, pts[i].y + ny, mx, my);
   }
-  path.lineTo(pts[0].x, pts[0].y + halfH);
+  path.lineTo(pts[0].x + nx, pts[0].y + ny);
 
-  // Vertical flat start cap
+  // Chisel start cap
   path.closePath();
   return path;
 }
@@ -357,7 +392,7 @@ function drawStroke(ctx, stroke) {
     ctx.globalAlpha = 0.42;
   }
 
-  ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  ctx.fillStyle = stroke.cssColor || `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
 
   if (!stroke._cachedPath2D && typeof Path2D !== 'undefined') {
     stroke._cachedPath2D = getPath2D(stroke);
@@ -419,5 +454,5 @@ function drawStroke(ctx, stroke) {
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, computeStrokeBbox };
 

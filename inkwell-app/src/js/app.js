@@ -141,7 +141,7 @@ function visiblePanes() {
 }
 
 function paneForEvent(e) {
-  const r = (wetCanvas && wetCanvas.getBoundingClientRect()) || stageRect || { left: 0, width: window.innerWidth };
+  const r = stageRect || (wetCanvas ? (stageRect = wetCanvas.getBoundingClientRect()) : { left: 0, width: window.innerWidth });
   return viewport.splitMode && e.clientX - r.left > r.width / 2 ? 'right' : 'left';
 }
 
@@ -242,7 +242,7 @@ async function fetchTile(page, rect, px) {
       const msg = err && err.message ? err.message : String(err);
       console.error('[inkwell] render_tile error:', msg);
       tileRenderError = msg;
-      scheduleRedrawTiles();
+      tileCache.set(key, null);
       return null;
     } finally {
       tilesPending.delete(key);
@@ -543,7 +543,7 @@ function clearWet() {
 }
 
 function localXY(e, pane = state.drawingPane || paneForEvent(e)) {
-  const r = (wetCanvas && wetCanvas.getBoundingClientRect()) || stageRect || { left: 0, top: 0 };
+  const r = stageRect || (wetCanvas ? (stageRect = wetCanvas.getBoundingClientRect()) : { left: 0, top: 0 });
   return viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
 }
 
@@ -722,6 +722,10 @@ function eraseStrokesAt(e) {
   const targetSheet = pageCoord.sheet;
   const eraserZoom = (pane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
   const radius = 16 / (eraserZoom || 1);
+  const qMinX = wx - radius;
+  const qMaxX = wx + radius;
+  const qMinY = wy - radius;
+  const qMaxY = wy + radius;
   let erasedStrokes = [];
 
   // Check all strokes across all visible pages
@@ -729,6 +733,18 @@ function eraseStrokesAt(e) {
   for (const pl of visiblePages) {
     for (const s of state.strokes) {
       if (s.deleted || s.sheet !== pl.sheet) continue;
+      if (!s.bbox && s.points) {
+        s.bbox = (Ink.computeStrokeBbox || computeStrokeBbox)(s.points, s.base_width);
+      }
+      if (s.bbox) {
+        const sWorldMinX = pl.x + s.bbox[0];
+        const sWorldMinY = pl.y + s.bbox[1];
+        const sWorldMaxX = pl.x + s.bbox[2];
+        const sWorldMaxY = pl.y + s.bbox[3];
+        if (sWorldMaxX < qMinX || sWorldMinX > qMaxX || sWorldMaxY < qMinY || sWorldMinY > qMaxY) {
+          continue;
+        }
+      }
       for (const pt of s.points) {
         const strokeWorldX = pl.x + pt.x;
         const strokeWorldY = pl.y + pt.y;
@@ -778,7 +794,7 @@ function consume(e) {
   wctx.save();
   clipToPane(wctx, state.drawingPane);
   paneTransform(wctx, state.drawingPane);
-  wctx.fillStyle = `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
   if (state.cur.kind === 'highlighter') {
     wctx.globalCompositeOperation = 'multiply';
     wctx.globalAlpha = 0.42;
@@ -786,7 +802,6 @@ function consume(e) {
   if (prev) Ink.drawSegment(wctx, prev, pt);
   else Ink.drawDot(wctx, pt);
   wctx.restore();
-  updateStats(e.pointerType);
 }
 
 // ---- Shape overlay helpers ----
@@ -904,6 +919,11 @@ function findObjectAtWorld(wx, wy, radius = 10) {
   const targetSheet = pageCoord.sheet;
   const pl = viewport.getPageLayout(targetSheet);
 
+  const qMinX = wx - radius;
+  const qMaxX = wx + radius;
+  const qMinY = wy - radius;
+  const qMaxY = wy + radius;
+
   // 1. Check images on this sheet (top to bottom)
   if (state.images && state.images.length) {
     for (let i = state.images.length - 1; i >= 0; i--) {
@@ -921,6 +941,18 @@ function findObjectAtWorld(wx, wy, radius = 10) {
   for (let i = state.strokes.length - 1; i >= 0; i--) {
     const s = state.strokes[i];
     if (s.deleted || s.sheet !== targetSheet) continue;
+    if (!s.bbox && s.points) {
+      s.bbox = (Ink.computeStrokeBbox || computeStrokeBbox)(s.points, s.base_width);
+    }
+    if (s.bbox) {
+      const sWorldMinX = pl.x + s.bbox[0];
+      const sWorldMinY = pl.y + s.bbox[1];
+      const sWorldMaxX = pl.x + s.bbox[2];
+      const sWorldMaxY = pl.y + s.bbox[3];
+      if (sWorldMaxX < qMinX || sWorldMinX > qMaxX || sWorldMaxY < qMinY || sWorldMinY > qMaxY) {
+        continue;
+      }
+    }
     for (const pt of s.points) {
       const sx = pl.x + pt.x;
       const sy = pl.y + pt.y;
@@ -1057,10 +1089,14 @@ function cutSelection() {
 
 function deleteSelection() {
   const deletedStrokes = [];
+  const invoke = getInvoke();
   for (const s of (state.selectedStrokes || [])) {
     if (!s.deleted) {
       s.deleted = true;
       deletedStrokes.push(s);
+      if (invoke && s.id) {
+        invoke('delete_stroke', { strokeIdStr: String(s.id) }).catch(() => {});
+      }
     }
   }
 
@@ -1083,6 +1119,7 @@ function deleteSelection() {
     state.selectedImages = [];
     clearWet();
     redrawAll();
+    if (typeof updateUndoRedoUI === 'function') updateUndoRedoUI();
   }
 }
 
@@ -1094,6 +1131,7 @@ function duplicateSelection() {
   const offset = 18;
   const newStrokes = [];
   const newImages = [];
+  const invoke = getInvoke();
 
   for (const s of strokes) {
     const clone = JSON.parse(JSON.stringify(s));
@@ -1104,6 +1142,19 @@ function duplicateSelection() {
     }
     state.strokes.push(clone);
     newStrokes.push(clone);
+
+    if (invoke) {
+      const samplesPayload = (clone.points || []).map(pt => ({
+        x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+      }));
+      invoke('commit_stroke', {
+        sheet: clone.sheet || 0,
+        tool: clone.kind || 'pen',
+        rgb: clone.rgb || [0.08, 0.09, 0.14],
+        baseWidth: clone.base_width || 1.6,
+        samples: samplesPayload,
+      }).catch(() => {});
+    }
   }
 
   for (const img of images) {
@@ -1132,6 +1183,7 @@ function duplicateSelection() {
   clearWet();
   redrawAll();
   drawLassoOverlay();
+  if (typeof updateUndoRedoUI === 'function') updateUndoRedoUI();
   showToast('Duplicated selection', 'info');
 }
 
@@ -1144,6 +1196,7 @@ function pasteClipboard() {
   const offset = 16;
   const newStrokes = [];
   const newImages = [];
+  const invoke = getInvoke();
 
   for (const s of (state.clipboard.strokes || [])) {
     const clone = JSON.parse(JSON.stringify(s));
@@ -1155,6 +1208,19 @@ function pasteClipboard() {
     }
     state.strokes.push(clone);
     newStrokes.push(clone);
+
+    if (invoke) {
+      const samplesPayload = (clone.points || []).map(pt => ({
+        x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+      }));
+      invoke('commit_stroke', {
+        sheet: clone.sheet || 0,
+        tool: clone.kind || 'pen',
+        rgb: clone.rgb || [0.08, 0.09, 0.14],
+        baseWidth: clone.base_width || 1.6,
+        samples: samplesPayload,
+      }).catch(() => {});
+    }
   }
 
   for (const img of (state.clipboard.images || [])) {
@@ -1184,6 +1250,7 @@ function pasteClipboard() {
   clearWet();
   redrawAll();
   drawLassoOverlay();
+  if (typeof updateUndoRedoUI === 'function') updateUndoRedoUI();
   showToast(`Pasted ${newStrokes.length + newImages.length} objects`, 'success');
   return true;
 }
@@ -1613,6 +1680,11 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
 
 // ---- Pointer handlers ----
 function onDown(e) {
+  if (e.pointerType === 'touch') {
+    if (viewport.isStylusActive || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
+      return;
+    }
+  }
   if (e.button !== 0 && e.pointerType !== 'pen') return;
   updateStageRect();
   try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1983,6 +2055,10 @@ async function onUp(e) {
   if (state.activeTool === 'lasso') {
     if (wetCanvas) wetCanvas.style.cursor = 'default';
     if (state.transformMode) {
+      for (const s of state.selectedStrokes || []) {
+        s._cachedPath2D = null;
+        s.bbox = (Ink.computeStrokeBbox || computeStrokeBbox)(s.points, s.base_width);
+      }
       state.undoStack.push({
         type: 'transform_objects',
         initialStrokes: state.transformInitialStrokes,
@@ -2014,12 +2090,32 @@ async function onUp(e) {
     if (state.lassoPath) {
       if (state.lassoPath.length >= 3) {
         const polygon = state.lassoPath;
+        let polyMinX = Infinity, polyMinY = Infinity, polyMaxX = -Infinity, polyMaxY = -Infinity;
+        for (const pt of polygon) {
+          if (pt[0] < polyMinX) polyMinX = pt[0];
+          if (pt[1] < polyMinY) polyMinY = pt[1];
+          if (pt[0] > polyMaxX) polyMaxX = pt[0];
+          if (pt[1] > polyMaxY) polyMaxY = pt[1];
+        }
+
         const matchedStrokes = [];
         const matchedImages = [];
 
         for (const s of state.strokes) {
           if (s.deleted) continue;
           const pl = viewport.getPageLayout(s.sheet);
+          if (!s.bbox && s.points) {
+            s.bbox = (Ink.computeStrokeBbox || computeStrokeBbox)(s.points, s.base_width);
+          }
+          if (s.bbox) {
+            const sWorldMinX = pl.x + s.bbox[0];
+            const sWorldMinY = pl.y + s.bbox[1];
+            const sWorldMaxX = pl.x + s.bbox[2];
+            const sWorldMaxY = pl.y + s.bbox[3];
+            if (sWorldMaxX < polyMinX || sWorldMinX > polyMaxX || sWorldMaxY < polyMinY || sWorldMinY > polyMaxY) {
+              continue;
+            }
+          }
           const hasPointInside = s.points.some(pt => pointInPolygon(pl.x + pt.x, pl.y + pt.y, polygon));
           if (hasPointInside) matchedStrokes.push(s);
         }
@@ -2028,9 +2124,16 @@ async function onUp(e) {
           for (const img of state.images) {
             if (img.deleted) continue;
             const pl = viewport.getPageLayout(img.sheet);
-            const cx = pl.x + img.x + img.width / 2;
-            const cy = pl.y + img.y + img.height / 2;
-            if (pointInPolygon(cx, cy, polygon) || pointInPolygon(pl.x + img.x, pl.y + img.y, polygon)) {
+            const imgMinX = pl.x + img.x;
+            const imgMinY = pl.y + img.y;
+            const imgMaxX = imgMinX + img.width;
+            const imgMaxY = imgMinY + img.height;
+            if (imgMaxX < polyMinX || imgMinX > polyMaxX || imgMaxY < polyMinY || imgMinY > polyMaxY) {
+              continue;
+            }
+            const cx = imgMinX + img.width / 2;
+            const cy = imgMinY + img.height / 2;
+            if (pointInPolygon(cx, cy, polygon) || pointInPolygon(imgMinX, imgMinY, polygon)) {
               matchedImages.push(img);
             }
           }
@@ -2063,10 +2166,14 @@ async function onUp(e) {
         const rulerStroke = new Ink.Stroke({ kind: 'pen', rgb: state.color, baseWidth: state.baseWidth });
         rulerStroke.push(localAx, localAy, 0.7, 0);
         rulerStroke.push(localBx, localBy, 0.7, 50);
+        const strokeBbox = (Ink.computeStrokeBbox || computeStrokeBbox)(rulerStroke.points, rulerStroke.base_width);
         const finishedStroke = {
           id: rulerStroke.id, kind: rulerStroke.kind, rgb: rulerStroke.rgb,
           base_width: rulerStroke.base_width, points: rulerStroke.points.slice(),
           sheet: pageCoord.sheet, deleted: false,
+          bbox: strokeBbox,
+          cssColor: rulerStroke.cssColor || `rgb(${rulerStroke.rgb.map(v => Math.round(v * 255)).join(',')})`,
+          _cachedPath2D: typeof Ink.getPath2D === 'function' ? Ink.getPath2D(rulerStroke) : null,
         };
         state.strokes.push(finishedStroke);
         state.undoStack.push({ type: 'add', stroke: finishedStroke });
@@ -2105,11 +2212,14 @@ async function onUp(e) {
     t: p.t,
   }));
 
+  const strokeBbox = (Ink.computeStrokeBbox || computeStrokeBbox)(localPoints, finishedStroke.base_width);
   const strokeRec = {
     id: finishedStroke.id, kind: finishedStroke.kind, rgb: finishedStroke.rgb,
     base_width: finishedStroke.base_width, points: localPoints,
     sheet: pageCoord.sheet, deleted: false,
+    cssColor: finishedStroke.cssColor || `rgb(${finishedStroke.rgb.map(v => Math.round(v * 255)).join(',')})`,
     _cachedPath2D: null,
+    bbox: strokeBbox,
   };
   if (typeof Ink.getPath2D === 'function') {
     strokeRec._cachedPath2D = Ink.getPath2D(strokeRec);
@@ -2136,7 +2246,22 @@ async function onUp(e) {
 
   drawCommittedStroke(strokeRec);
   state.cur = null;
-  clearWet();
+
+  // Clear dirty damage bounding rect or clear full wet layer
+  if (wctx && strokeBbox) {
+    wctx.save();
+    wctx.setTransform(1, 0, 0, 1, 0, 0);
+    wctx.scale(state.dpr, state.dpr);
+    clipToPane(wctx, state.drawingPane);
+    const [sx0, sy0] = viewport.worldToScreen(pl.x + strokeBbox[0] - 8, pl.y + strokeBbox[1] - 8, state.drawingPane);
+    const [sx1, sy1] = viewport.worldToScreen(pl.x + strokeBbox[2] + 8, pl.y + strokeBbox[3] + 8, state.drawingPane);
+    wctx.clearRect(Math.min(sx0, sx1) - 4, Math.min(sy0, sy1) - 4, Math.abs(sx1 - sx0) + 8, Math.abs(sy1 - sy0) + 8);
+    wctx.restore();
+  } else {
+    clearWet();
+  }
+
+  updateStats(e.pointerType);
   try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
 }
 
@@ -2151,11 +2276,14 @@ function clearLaser() {
 }
 
 function updateStats(pointerType) {
-  $('inputStats').innerHTML = `
-    <div>Pointer: ${pointerType || 'pen'}</div>
-    <div>Samples: ${state.samplesCount}</div>
-    <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
-  `;
+  const el = $('inputStats');
+  if (el) {
+    el.innerHTML = `
+      <div>Pointer: ${escapeHtml(pointerType || 'pen')}</div>
+      <div>Samples: ${state.samplesCount}</div>
+      <div>Strokes: ${state.strokes.filter(s => !s.deleted).length}</div>
+    `;
+  }
 }
 
 // ---- Tool selection ----
@@ -2243,18 +2371,56 @@ function setTool(tool) {
 function undo() {
   if (!state.undoStack.length) return;
   const op = state.undoStack.pop();
+  const invoke = getInvoke();
+
   if (op.type === 'add') {
     op.stroke.deleted = true;
+    if (invoke && op.stroke.id) {
+      invoke('delete_stroke', { strokeIdStr: String(op.stroke.id) }).catch(() => {});
+    }
     state.redoStack.push(op);
   } else if (op.type === 'erase') {
-    for (const s of op.strokes) s.deleted = false;
+    for (const s of op.strokes) {
+      s.deleted = false;
+      if (invoke) {
+        const samplesPayload = (s.points || []).map(pt => ({
+          x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+        }));
+        invoke('commit_stroke', {
+          sheet: s.sheet || 0,
+          tool: s.kind || 'pen',
+          rgb: s.rgb || [0.08, 0.09, 0.14],
+          baseWidth: s.base_width || 1.6,
+          samples: samplesPayload,
+        }).catch(() => {});
+      }
+    }
     state.redoStack.push(op);
   } else if (op.type === 'delete_objects') {
-    for (const s of (op.strokes || [])) s.deleted = false;
+    for (const s of (op.strokes || [])) {
+      s.deleted = false;
+      if (invoke) {
+        const samplesPayload = (s.points || []).map(pt => ({
+          x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+        }));
+        invoke('commit_stroke', {
+          sheet: s.sheet || 0,
+          tool: s.kind || 'pen',
+          rgb: s.rgb || [0.08, 0.09, 0.14],
+          baseWidth: s.base_width || 1.6,
+          samples: samplesPayload,
+        }).catch(() => {});
+      }
+    }
     for (const img of (op.images || [])) img.deleted = false;
     state.redoStack.push(op);
   } else if (op.type === 'add_objects') {
-    for (const s of (op.strokes || [])) s.deleted = true;
+    for (const s of (op.strokes || [])) {
+      s.deleted = true;
+      if (invoke && s.id) {
+        invoke('delete_stroke', { strokeIdStr: String(s.id) }).catch(() => {});
+      }
+    }
     for (const img of (op.images || [])) img.deleted = true;
     state.redoStack.push(op);
   } else if (op.type === 'add_image') {
@@ -2279,23 +2445,62 @@ function undo() {
   }
   clearWet();
   redrawAll();
+  if (typeof updateUndoRedoUI === 'function') updateUndoRedoUI();
 }
 
 function redo() {
   if (!state.redoStack.length) return;
   const op = state.redoStack.pop();
+  const invoke = getInvoke();
+
   if (op.type === 'add') {
     op.stroke.deleted = false;
+    if (invoke) {
+      const samplesPayload = (op.stroke.points || []).map(pt => ({
+        x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+      }));
+      invoke('commit_stroke', {
+        sheet: op.stroke.sheet || 0,
+        tool: op.stroke.kind || 'pen',
+        rgb: op.stroke.rgb || [0.08, 0.09, 0.14],
+        baseWidth: op.stroke.base_width || 1.6,
+        samples: samplesPayload,
+      }).catch(() => {});
+    }
     state.undoStack.push(op);
   } else if (op.type === 'erase') {
-    for (const s of op.strokes) s.deleted = true;
+    for (const s of op.strokes) {
+      s.deleted = true;
+      if (invoke && s.id) {
+        invoke('delete_stroke', { strokeIdStr: String(s.id) }).catch(() => {});
+      }
+    }
     state.undoStack.push(op);
   } else if (op.type === 'delete_objects') {
-    for (const s of (op.strokes || [])) s.deleted = true;
+    for (const s of (op.strokes || [])) {
+      s.deleted = true;
+      if (invoke && s.id) {
+        invoke('delete_stroke', { strokeIdStr: String(s.id) }).catch(() => {});
+      }
+    }
     for (const img of (op.images || [])) img.deleted = true;
     state.undoStack.push(op);
   } else if (op.type === 'add_objects') {
-    for (const s of (op.strokes || [])) s.deleted = false;
+    for (const s of (op.strokes || [])) {
+      s.deleted = false;
+      if (invoke) {
+        const samplesPayload = (s.points || []).map(pt => ({
+          x: pt.x, y: pt.y, pressure: pt.p || 0.5, t_ms: pt.t || 0,
+        }));
+        invoke('commit_stroke', {
+          sheet: s.sheet || 0,
+          tool: s.kind || 'pen',
+          rgb: s.rgb || [0.08, 0.09, 0.14],
+          baseWidth: s.base_width || 1.6,
+          samples: samplesPayload,
+        }).catch(() => {});
+      }
+    }
     for (const img of (op.images || [])) img.deleted = false;
     state.undoStack.push(op);
   } else if (op.type === 'add_image') {
@@ -2320,6 +2525,20 @@ function redo() {
   }
   clearWet();
   redrawAll();
+  if (typeof updateUndoRedoUI === 'function') updateUndoRedoUI();
+}
+
+function updateUndoRedoUI() {
+  const btnUndo = $('btnUndo') || document.querySelector('[data-action="undo"]');
+  const btnRedo = $('btnRedo') || document.querySelector('[data-action="redo"]');
+  if (btnUndo) {
+    btnUndo.disabled = !state.undoStack.length;
+    btnUndo.classList.toggle('disabled', !state.undoStack.length);
+  }
+  if (btnRedo) {
+    btnRedo.disabled = !state.redoStack.length;
+    btnRedo.classList.toggle('disabled', !state.redoStack.length);
+  }
 }
 
 // ---- Out-of-bounds check ----
@@ -3007,6 +3226,19 @@ const thumbQueue = [];
 let activeThumbFetches = 0;
 const MAX_CONCURRENT_THUMBS = 2;
 
+let sharedThumbOffscreenCanvas = null;
+function getSharedThumbOffscreenCanvas(w, h) {
+  if (!sharedThumbOffscreenCanvas) {
+    sharedThumbOffscreenCanvas = document.createElement('canvas');
+  }
+  sharedThumbOffscreenCanvas.width = w;
+  sharedThumbOffscreenCanvas.height = h;
+  return sharedThumbOffscreenCanvas;
+}
+
+let thumbScrollListenerAttached = false;
+let thumbScrollRaf = null;
+
 function pumpThumbQueue() {
   while (activeThumbFetches < MAX_CONCURRENT_THUMBS && thumbQueue.length > 0) {
     const task = thumbQueue.shift();
@@ -3021,110 +3253,152 @@ function pumpThumbQueue() {
 
 async function renderThumbnails() {
   const grid = $('thumbnailGrid');
+  const drawer = $('drawerThumbnails');
   if (!grid) return;
   if (!state.pageInfos || !state.pageInfos.length) {
     grid.innerHTML = '<div class="thumb-empty">No pages available</div>';
+    grid.style.height = 'auto';
     return;
   }
 
-  if (thumbObserver) {
-    thumbObserver.disconnect();
+  const pageCount = state.pageInfos.length;
+  const ROW_HEIGHT = 220;
+  const totalRows = Math.ceil(pageCount / 2);
+  const totalHeight = totalRows * ROW_HEIGHT;
+  grid.style.position = 'relative';
+  grid.style.height = `${totalHeight}px`;
+
+  // Index strokes by sheet to avoid O(N) scanning across full document
+  const strokesBySheet = new Map();
+  for (const s of state.strokes) {
+    if (s.deleted) continue;
+    let list = strokesBySheet.get(s.sheet);
+    if (!list) {
+      list = [];
+      strokesBySheet.set(s.sheet, list);
+    }
+    list.push(s);
   }
+
+  function renderSingleThumbnail(i) {
+    if (renderedThumbnails.has(i)) return;
+    renderedThumbnails.add(i);
+
+    thumbQueue.push(async () => {
+      const pi = state.pageInfos[i];
+      if (!pi) return;
+      const canvas = $(`thumbCanvas_${i}`);
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      try {
+        const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
+        if (tile && tile.data) {
+          const offscreen = getSharedThumbOffscreenCanvas(tile.data.width, tile.data.height);
+          offscreen.getContext('2d').putImageData(tile.data, 0, 0);
+          ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+        }
+      } catch (e) {
+        console.warn('thumb render error for page', i, e);
+      }
+
+      const pageStrokes = strokesBySheet.get(i) || [];
+      if (pageStrokes.length) {
+        ctx.save();
+        const scaleX = canvas.width / pi.width_pt;
+        const scaleY = canvas.height / pi.height_pt;
+        ctx.scale(scaleX, scaleY);
+        for (const stroke of pageStrokes) {
+          ctx.strokeStyle = stroke.cssColor || `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+          ctx.lineWidth = Math.max(1, stroke.base_width);
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          if (stroke.kind === 'highlighter') {
+            ctx.globalAlpha = 0.42;
+          } else {
+            ctx.globalAlpha = 1.0;
+          }
+          if (stroke.points && stroke.points.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+            for (let p = 1; p < stroke.points.length; p++) {
+              ctx.lineTo(stroke.points[p].x, stroke.points[p].y);
+            }
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+    });
+    pumpThumbQueue();
+  }
+
+  function updateVisibleThumbnails() {
+    if (!drawer || !grid) return;
+    const scrollTop = drawer.scrollTop || 0;
+    const clientH = drawer.clientHeight || 600;
+
+    const startRow = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 1);
+    const endRow = Math.min(totalRows - 1, Math.ceil((scrollTop + clientH) / ROW_HEIGHT) + 1);
+
+    const startIndex = Math.max(0, startRow * 2 - 4);
+    const endIndex = Math.min(pageCount - 1, (endRow + 1) * 2 + 4);
+
+    const cardsHtml = [];
+    for (let i = startIndex; i <= endIndex; i++) {
+      const pi = state.pageInfos[i];
+      if (!pi) continue;
+      const active = (i === state.leftSheet) ? ' active' : '';
+      const aspect = (pi.height_pt && pi.width_pt) ? (pi.height_pt / pi.width_pt) : 1.414;
+      const row = Math.floor(i / 2);
+      const col = i % 2;
+      const topPx = row * ROW_HEIGHT;
+      const leftVal = col === 0 ? '0' : 'calc(50% + 6px)';
+      const widthVal = 'calc(50% - 6px)';
+
+      cardsHtml.push(`
+        <div class="thumb-card${active}" data-page="${i}" style="position:absolute; top:${topPx}px; left:${leftVal}; width:${widthVal};">
+          <div class="thumb-preview-wrap" style="aspect-ratio: 1 / ${aspect.toFixed(3)};">
+            <canvas class="thumb-canvas" id="thumbCanvas_${i}" width="140" height="${Math.round(140 * aspect)}"></canvas>
+          </div>
+          <span class="thumb-page-num">Page ${i + 1}</span>
+        </div>
+      `);
+    }
+
+    grid.innerHTML = cardsHtml.join('');
+
+    grid.querySelectorAll('.thumb-card').forEach(el => {
+      el.addEventListener('click', () => {
+        const i = parseInt(el.getAttribute('data-page'), 10);
+        if (!isNaN(i)) goToPage(i, 'left');
+      });
+    });
+
+    for (let i = startIndex; i <= endIndex; i++) {
+      renderSingleThumbnail(i);
+    }
+  }
+
   renderedThumbnails.clear();
   thumbQueue.length = 0;
 
-  grid.innerHTML = state.pageInfos.map((pi, i) => {
-    const active = (i === state.leftSheet) ? ' active' : '';
-    const aspect = (pi.height_pt && pi.width_pt) ? (pi.height_pt / pi.width_pt) : 1.414;
-    return `
-      <div class="thumb-card${active}" data-page="${i}">
-        <div class="thumb-preview-wrap" style="aspect-ratio: 1 / ${aspect.toFixed(3)};">
-          <canvas class="thumb-canvas" id="thumbCanvas_${i}" width="140" height="${Math.round(140 * aspect)}"></canvas>
-        </div>
-        <span class="thumb-page-num">Page ${i + 1}</span>
-      </div>
-    `;
-  }).join('');
+  updateVisibleThumbnails();
 
-  grid.querySelectorAll('.thumb-card').forEach(el => {
-    el.addEventListener('click', () => {
-      const i = parseInt(el.getAttribute('data-page'), 10);
-      if (!isNaN(i)) goToPage(i, 'left');
-    });
-  });
-
-  // Lazy render thumbnails via IntersectionObserver
-  thumbObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (!entry.isIntersecting) return;
-      const card = entry.target;
-      const i = parseInt(card.getAttribute('data-page'), 10);
-      if (isNaN(i) || renderedThumbnails.has(i)) return;
-      renderedThumbnails.add(i);
-
-      thumbQueue.push(async () => {
-        const pi = state.pageInfos[i];
-        if (!pi) return;
-        const canvas = $(`thumbCanvas_${i}`);
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        try {
-          const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
-          if (tile && tile.data) {
-            const offscreen = document.createElement('canvas');
-            offscreen.width = tile.data.width;
-            offscreen.height = tile.data.height;
-            offscreen.getContext('2d').putImageData(tile.data, 0, 0);
-            ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
-          }
-        } catch (e) {
-          console.warn('thumb render error for page', i, e);
-        }
-
-        const pageStrokes = state.strokes.filter(s => !s.deleted && s.sheet === i);
-        if (pageStrokes.length) {
-          ctx.save();
-          const scaleX = canvas.width / pi.width_pt;
-          const scaleY = canvas.height / pi.height_pt;
-          ctx.scale(scaleX, scaleY);
-          for (const stroke of pageStrokes) {
-            ctx.strokeStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
-            ctx.lineWidth = Math.max(1, stroke.base_width);
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            if (stroke.kind === 'highlighter') {
-              ctx.globalAlpha = 0.42;
-            } else {
-              ctx.globalAlpha = 1.0;
-            }
-            if (stroke.points && stroke.points.length > 1) {
-              ctx.beginPath();
-              ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-              for (let p = 1; p < stroke.points.length; p++) {
-                ctx.lineTo(stroke.points[p].x, stroke.points[p].y);
-              }
-              ctx.stroke();
-            }
-          }
-          ctx.restore();
-        }
+  if (drawer && !thumbScrollListenerAttached) {
+    thumbScrollListenerAttached = true;
+    drawer.addEventListener('scroll', () => {
+      if (thumbScrollRaf) return;
+      thumbScrollRaf = requestAnimationFrame(() => {
+        thumbScrollRaf = null;
+        updateVisibleThumbnails();
       });
-      pumpThumbQueue();
-    });
-  }, {
-    root: $('sidebarDrawer'),
-    rootMargin: '100px',
-    threshold: 0.01,
-  });
-
-  grid.querySelectorAll('.thumb-card').forEach(el => {
-    thumbObserver.observe(el);
-  });
+    }, { passive: true });
+  }
 }
 
 function updateDocInfo() {
@@ -3474,7 +3748,8 @@ function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedS
       }
     } else {
       const cur = state.tabs.find(t => t.id === state.activeTabId);
-      if (cur) {
+      if (cur && (!cur.pathStr && (!cur.strokes || cur.strokes.length === 0) && (!cur.pageInfos || cur.pageInfos.length === 0))) {
+        // Reuse initial empty placeholder tab
         cur.title = title;
         cur.pathStr = selectedPath;
         cur.pageInfos = infos;
@@ -3489,6 +3764,7 @@ function handlePdfLoadSuccess(title, selectedPath, infos, recovered = 0, loadedS
         cur.rightSheet = 0;
         switchTab(cur.id);
       } else {
+        // Open new document in a separate tab
         const tab = createTab(title, selectedPath, infos);
         if (tab) {
           tab.strokes = formattedStrokes;
@@ -3801,6 +4077,19 @@ window.addEventListener('keydown', e => {
       return;
     }
     return;
+  }
+
+  if (e.key === 'Escape') {
+    const exportModal = $('exportModal');
+    if (exportModal && !exportModal.classList.contains('hidden')) {
+      exportModal.classList.add('hidden');
+      return;
+    }
+    const sideDrawer = $('sideDrawer');
+    if (sideDrawer && !sideDrawer.classList.contains('hidden')) {
+      sideDrawer.classList.add('hidden');
+      return;
+    }
   }
 
   // If user is currently typing in an input or textarea, don't hijack editing keys

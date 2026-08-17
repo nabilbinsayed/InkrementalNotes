@@ -249,6 +249,9 @@ pub async fn create_blank_document(
     let doc_title = title.unwrap_or_else(|| "Untitled Whiteboard.pdf".to_string());
     let w = width_pt.unwrap_or(841.89);
     let h = height_pt.unwrap_or(595.28);
+    if !w.is_finite() || !h.is_finite() || w < 72.0 || h < 72.0 || w > 14400.0 || h > 14400.0 {
+        return Err(format!("Invalid whiteboard dimensions: {w} x {h} pt (must be between 72 and 14400)"));
+    }
 
     let pdf_bytes = {
         let pdfium_guard = state.pdfium.lock().unwrap();
@@ -363,104 +366,119 @@ pub async fn render_tile(
     let arc_bytes = state
         .pdf_bytes
         .lock()
-        .unwrap()
+        .map_err(|e| format!("Lock error: {e}"))?
         .clone()
         .ok_or("No PDF loaded")?;
 
     let (bgra_bytes, bitmap_w, bitmap_h) = {
-        let pdfium_guard = state.pdfium.lock().unwrap();
-        let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-            "PDFium is not available (pdfium.dll was not found at startup). \
-             PDF tiles cannot be rendered.".to_string()
-        })?;
+        let mut cache_hit = None;
+        if let Ok(cache_guard) = state.page_bitmap_cache.lock() {
+            // If target dimensions can be queried from cached entries for this page:
+            if let Some(entry) = cache_guard.entries.iter().find(|e| e.page == page && (e.target_w as f64 - rw * scale).abs() < 2.0) {
+                cache_hit = Some((entry.bgra_bytes.clone(), entry.bitmap_w, entry.bitmap_h));
+            }
+        }
 
-        let doc = pdfium
-            .load_pdf_from_byte_slice(&arc_bytes, None)
-            .map_err(|e| format!("PDFium load error: {e:?}"))?;
-
-        let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
-        let page_w = page_obj.width().value as f64;
-        let page_h = page_obj.height().value as f64;
-
-        let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
-        let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
-
-        let mut cache_guard = state.page_bitmap_cache.lock().unwrap();
-        if let Some(cached) = cache_guard.get(page, target_w, target_h) {
-            cached
+        if let Some(hit) = cache_hit {
+            hit
         } else {
-            let config = PdfRenderConfig::new()
-                .set_target_width(target_w)
-                .set_maximum_height(target_h)
-                .set_clear_color(PdfColor::WHITE);
-
-            let bitmap = page_obj.render_with_config(&config).map_err(|e| {
-                format!("PDFium failed to render page {page}: {e:?}")
+            let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+                "PDFium is not available (pdfium.dll was not found at startup). \
+                 PDF tiles cannot be rendered.".to_string()
             })?;
 
-            let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
-            let bw = bitmap.width() as u32;
-            let bh = bitmap.height() as u32;
+            let doc = pdfium
+                .load_pdf_from_byte_slice(&arc_bytes, None)
+                .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
-            cache_guard.put(CachedPageBitmap {
-                page,
-                target_w,
-                target_h,
-                bgra_bytes: bgra.clone(),
-                bitmap_w: bw,
-                bitmap_h: bh,
-            });
+            let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+            let page_w = page_obj.width().value as f64;
+            let page_h = page_obj.height().value as f64;
 
-            (bgra, bw, bh)
+            let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
+            let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
+
+            let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+            if let Some(cached) = cache_guard.get(page, target_w, target_h) {
+                cached
+            } else {
+                let config = PdfRenderConfig::new()
+                    .set_target_width(target_w)
+                    .set_maximum_height(target_h)
+                    .set_clear_color(PdfColor::WHITE);
+
+                let bitmap = page_obj.render_with_config(&config).map_err(|e| {
+                    format!("PDFium failed to render page {page}: {e:?}")
+                })?;
+
+                let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
+                let bw = bitmap.width() as u32;
+                let bh = bitmap.height() as u32;
+
+                cache_guard.put(CachedPageBitmap {
+                    page,
+                    target_w,
+                    target_h,
+                    bgra_bytes: bgra.clone(),
+                    bitmap_w: bw,
+                    bitmap_h: bh,
+                });
+
+                (bgra, bw, bh)
+            }
         }
     };
 
+    // Offload the pixel cropping and alpha swizzling to a worker thread
+    tauri::async_runtime::spawn_blocking(move || {
+        let out_w = (rw * scale).round().max(1.0) as u32;
+        let out_h = (rh * scale).round().max(1.0) as u32;
 
-    // Crop the tile rect from the page bitmap
-    let out_w = (rw * scale).round().max(1.0) as u32;
-    let out_h = (rh * scale).round().max(1.0) as u32;
+        let x0 = (rect[0] * scale).round().max(0.0) as u32;
+        let y0 = (rect[1] * scale).round().max(0.0) as u32;
 
-    let x0 = (rect[0] * scale).round().max(0.0) as u32;
-    let y0 = (rect[1] * scale).round().max(0.0) as u32;
+        let mut rgba_data = vec![255u8; (out_w * out_h * 4) as usize];
+        if x0 < bitmap_w && y0 < bitmap_h {
+            let crop_w = out_w.min(bitmap_w.saturating_sub(x0));
+            let crop_h = out_h.min(bitmap_h.saturating_sub(y0));
 
-    let mut rgba_data = vec![255u8; (out_w * out_h * 4) as usize];
-    if x0 < bitmap_w && y0 < bitmap_h {
-        let crop_w = out_w.min(bitmap_w.saturating_sub(x0));
-        let crop_h = out_h.min(bitmap_h.saturating_sub(y0));
+            for y in 0..crop_h {
+                for x in 0..crop_w {
+                    let src_idx = ((y0 + y) * bitmap_w + (x0 + x)) as usize * 4;
+                    let dst_idx = (y * out_w + x) as usize * 4;
 
-        for y in 0..crop_h {
-            for x in 0..crop_w {
-                let src_idx = ((y0 + y) * bitmap_w + (x0 + x)) as usize * 4;
-                let dst_idx = (y * out_w + x) as usize * 4;
+                    if src_idx + 3 < bgra_bytes.len() {
+                        let b = bgra_bytes[src_idx];
+                        let g = bgra_bytes[src_idx + 1];
+                        let r = bgra_bytes[src_idx + 2];
+                        let a = bgra_bytes[src_idx + 3] as u32;
 
-                if src_idx + 3 < bgra_bytes.len() {
-                    let b = bgra_bytes[src_idx];
-                    let g = bgra_bytes[src_idx + 1];
-                    let r = bgra_bytes[src_idx + 2];
-                    let a = bgra_bytes[src_idx + 3] as u32;
+                        let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
+                        let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;
+                        let blended_b = ((b as u32 * a + 255 * (255 - a)) / 255) as u8;
 
-                    let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
-                    let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;
-                    let blended_b = ((b as u32 * a + 255 * (255 - a)) / 255) as u8;
-
-                    rgba_data[dst_idx] = blended_r;
-                    rgba_data[dst_idx + 1] = blended_g;
-                    rgba_data[dst_idx + 2] = blended_b;
-                    rgba_data[dst_idx + 3] = 255;
+                        rgba_data[dst_idx] = blended_r;
+                        rgba_data[dst_idx + 1] = blended_g;
+                        rgba_data[dst_idx + 2] = blended_b;
+                        rgba_data[dst_idx + 3] = 255;
+                    }
                 }
             }
         }
-    }
 
-    let expected_len = (out_w as usize) * (out_h as usize) * 4;
-    if rgba_data.len() != expected_len {
-        return Err(format!(
-            "PDFium returned an invalid tile buffer for page {page}: expected {expected_len} RGBA bytes ({out_w}x{out_h}), got {}",
-            rgba_data.len()
-        ));
-    }
+        let expected_len = (out_w as usize) * (out_h as usize) * 4;
+        if rgba_data.len() != expected_len {
+            return Err(format!(
+                "PDFium returned an invalid tile buffer for page {page}: expected {expected_len} RGBA bytes ({out_w}x{out_h}), got {}",
+                rgba_data.len()
+            ));
+        }
 
-    Ok(rgba_data)
+        Ok(rgba_data)
+    })
+    .await
+    .map_err(|e| format!("Tile worker task failed: {e}"))?
 }
 
 
@@ -543,9 +561,25 @@ pub async fn save_pdf(
     let input_bytes = bytes_guard.as_ref().ok_or("No PDF loaded")?;
 
     let target_path = if let Some(p) = out_path_str {
-        PathBuf::from(p)
+        let path = PathBuf::from(&p);
+        if p.contains("..") || path.components().any(|c| c == std::path::Component::ParentDir) {
+            return Err("Path traversal components (..) are not permitted in save path".to_string());
+        }
+        let is_pdf = path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if !is_pdf {
+            return Err("Invalid save path: destination file must have a .pdf extension".to_string());
+        }
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                return Err(format!("Parent directory does not exist: {parent:?}"));
+            }
+        }
+        path
     } else {
-        state.pdf_path.lock().unwrap().clone().ok_or("No target file path")?
+        state.pdf_path.lock().map_err(|e| format!("Lock error: {e}"))?.clone().ok_or("No target file path")?
     };
 
     // 1. If images were provided, embed them into the base PDF using PDFium
@@ -686,6 +720,10 @@ pub async fn insert_blank_page(
     height_pt: f64,
     state: State<'_, AppState>,
 ) -> Result<PageInfo, String> {
+    if !width_pt.is_finite() || !height_pt.is_finite() || width_pt < 72.0 || height_pt < 72.0 || width_pt > 14400.0 || height_pt > 14400.0 {
+        return Err(format!("Invalid page dimensions: {width_pt} x {height_pt} pt (must be between 72 and 14400)"));
+    }
+
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
@@ -765,22 +803,29 @@ pub async fn search_pdf(
 
     for i in 0..n_pages {
         if let Some(text) = inkwell_pdf::extract_text(&doc, i as u32) {
-            let text_lower = text.to_lowercase();
-            if let Some(idx) = text_lower.find(&q_lower) {
-                let start = idx.saturating_sub(40);
-                let end = (idx + query_trimmed.len() + 40).min(text.len());
-                let snippet = format!(
-                    "{}{}{}",
-                    if start > 0 { "…" } else { "" },
-                    text[start..end].replace('\n', " "),
-                    if end < text.len() { "…" } else { "" }
-                );
-                let match_count = text_lower.matches(&q_lower).count();
-                results.push(SearchResultItem {
-                    page_index: i,
-                    snippet,
-                    match_count,
-                });
+            let text_chars: Vec<char> = text.chars().collect();
+            let text_lower: String = text_chars.iter().collect::<String>().to_lowercase();
+            let text_lower_chars: Vec<char> = text_lower.chars().collect();
+            let q_chars: Vec<char> = q_lower.chars().collect();
+
+            if !q_chars.is_empty() {
+                if let Some(char_idx) = text_lower_chars.windows(q_chars.len()).position(|w| w == q_chars.as_slice()) {
+                    let start = char_idx.saturating_sub(40).min(text_chars.len());
+                    let end = (char_idx + q_chars.len() + 40).min(text_chars.len()).max(start);
+                    let snippet_str: String = text_chars[start..end].iter().collect();
+                    let snippet = format!(
+                        "{}{}{}",
+                        if start > 0 { "…" } else { "" },
+                        snippet_str.replace('\n', " "),
+                        if end < text_chars.len() { "…" } else { "" }
+                    );
+                    let match_count = text_lower_chars.windows(q_chars.len()).filter(|w| *w == q_chars.as_slice()).count();
+                    results.push(SearchResultItem {
+                        page_index: i,
+                        snippet,
+                        match_count,
+                    });
+                }
             }
         }
     }

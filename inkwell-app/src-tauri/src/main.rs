@@ -38,6 +38,17 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                use tauri::Manager;
+                let state: tauri::State<'_, AppState> = window.state();
+                if let Ok(mut wal_guard) = state.wal.lock() {
+                    if let Some(tx) = wal_guard.take() {
+                        let _ = tx.send(crate::state::WalOp::Close);
+                    }
+                };
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::open_pdf,
             commands::open_pdf_dialog,

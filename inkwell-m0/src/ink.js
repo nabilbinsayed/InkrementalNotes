@@ -20,7 +20,7 @@ class LowPass {
 }
 
 class OneEuro {
-  constructor(minCutoff = 1.7, beta = 0.02, dCutoff = 1.0) {
+  constructor(minCutoff = 1.1, beta = 0.006, dCutoff = 1.0) {
     this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
     this.x = new LowPass(); this.dx = new LowPass(); this.tPrev = null;
   }
@@ -48,10 +48,11 @@ class Stroke {
     this.kind = 'pen';
     this.rgb = opts.rgb;
     this.base_width = opts.baseWidth;
+    this.cssColor = `rgb(${this.rgb.map(v => Math.round(v * 255)).join(',')})`;
     this.samples = [];
     this._pts = [];            // {x, y, w} in CSS px, post-filter
-    this._fx = new OneEuro(opts.minCutoff, opts.beta);
-    this._fy = new OneEuro(opts.minCutoff, opts.beta);
+    this._fx = new OneEuro(opts.minCutoff !== undefined ? opts.minCutoff : 1.1, opts.beta !== undefined ? opts.beta : 0.006);
+    this._fy = new OneEuro(opts.minCutoff !== undefined ? opts.minCutoff : 1.1, opts.beta !== undefined ? opts.beta : 0.006);
     this._p = null;
     this._gamma = opts.gamma;
     this._smoothing = opts.smoothing;
@@ -80,7 +81,7 @@ class Stroke {
 
     const pt = { x: fx, y: fy, w: this.widthFor(this._p) };
     this._pts.push(pt);
-    this.samples.push([+fx.toFixed(3), +fy.toFixed(3), +this._p.toFixed(4), +tMs.toFixed(1)]);
+    this.samples.push([fx, fy, this._p, tMs]);
     return pt;
   }
 
@@ -119,7 +120,7 @@ function drawDot(ctx, p) {
 function drawStroke(ctx, stroke) {
   const pts = stroke.points;
   if (!pts.length) return;
-  ctx.fillStyle = `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
+  ctx.fillStyle = stroke.cssColor || `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
   if (pts.length === 1) { drawDot(ctx, pts[0]); return; }
   drawDot(ctx, pts[0]);
   for (let i = 1; i < pts.length; i++) drawSegment(ctx, pts[i - 1], pts[i]);

@@ -108,7 +108,7 @@ pub fn skip_value(d: &[u8], i: usize) -> usize {
                     j += 1;
                 }
             }
-            j
+            j.min(d.len())
         }
         b'<' => {
             // hex string
@@ -116,14 +116,19 @@ pub fn skip_value(d: &[u8], i: usize) -> usize {
             while j < d.len() && d[j] != b'>' {
                 j += 1;
             }
-            j + 1
+            (j + 1).min(d.len())
         }
         b'(' => {
             let mut j = i + 1;
             let mut depth = 1;
             while j < d.len() && depth > 0 {
                 match d[j] {
-                    b'\\' => j += 2,
+                    b'\\' => {
+                        j += 1;
+                        if j < d.len() {
+                            j += 1;
+                        }
+                    }
                     b'(' => {
                         depth += 1;
                         j += 1;
@@ -135,7 +140,7 @@ pub fn skip_value(d: &[u8], i: usize) -> usize {
                     _ => j += 1,
                 }
             }
-            j
+            j.min(d.len())
         }
         b'[' => {
             let mut j = i + 1;
@@ -154,14 +159,14 @@ pub fn skip_value(d: &[u8], i: usize) -> usize {
                     _ => j += 1,
                 }
             }
-            j
+            j.min(d.len())
         }
         b'/' => {
             let mut j = i + 1;
             while j < d.len() && !is_ws(d[j]) && !is_delim(d[j]) {
                 j += 1;
             }
-            j
+            j.min(d.len())
         }
         _ => {
             // number, keyword, or an indirect reference "N G R"
@@ -183,12 +188,12 @@ pub fn skip_value(d: &[u8], i: usize) -> usize {
                     if d.get(k3) == Some(&b'R')
                         && d.get(k3 + 1).is_none_or(|c| is_ws(*c) || is_delim(*c))
                     {
-                        return k3 + 1;
+                        return (k3 + 1).min(d.len());
                     }
                 }
                 j = save;
             }
-            j
+            j.min(d.len())
         }
     }
 }
