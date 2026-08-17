@@ -109,7 +109,7 @@ class ViewportManager {
     return { sheet: last.sheet, px: wx - last.x, py: wy - last.y };
   }
 
-  getVisiblePages(pane = 'left', margin = 40) {
+  getVisiblePages(pane = 'left', margin = 300) {
     if (!this.pageLayouts || !this.pageLayouts.length) return [];
     if (!this.stageRect) this.updateStageRect();
     const stageH = this.stageRect ? this.stageRect.height : 600;
@@ -256,6 +256,17 @@ class ViewportManager {
     this.setZoom(fitZoom, null, pane);
     this.centerDocument(docW, firstH, pane);
   }
+  fitWidth(pageWidthPt, pane = 'left') {
+    const docW = this.maxDocWidth || pageWidthPt || 595.0;
+    if (!this.stageRect) this.updateStageRect();
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    const stageW = this.splitMode ? totalW / 2 : totalW;
+    const margin = 48;
+    const availW = Math.max(100, stageW - margin);
+    const fitZoom = Math.max(0.2, Math.min(6.0, availW / docW));
+    this.setZoom(fitZoom, null, pane);
+    this.centerDocument(docW, null, pane);
+  }
 
   scrollToPage(sheetIndex, pane = 'left') {
     const layout = this.getPageLayout(sheetIndex);
@@ -291,7 +302,7 @@ class ViewportManager {
   }
 
   attachListeners(element) {
-    this.element = element;
+    this.stageElement = element;
     this.updateStageRect();
     window.addEventListener('resize', () => this.updateStageRect());
     window.addEventListener('scroll', () => this.updateStageRect(), { passive: true });
@@ -299,9 +310,14 @@ class ViewportManager {
       new ResizeObserver(() => this.updateStageRect()).observe(element);
     }
 
-    element.addEventListener('wheel', e => {
+    const onWheel = e => {
+      // Allow native scroll inside explicit scrollable dialogs/drawers
+      if (e.target && e.target.closest && e.target.closest('.drawer-body, .settings-modal-body, .cmd-palette-list, .zoom-menu-options, .recent-files-list, #outlineList, #searchResultList, #bookmarksList')) {
+        return;
+      }
+
       if (!this.stageRect) this.updateStageRect();
-      const stageRect = this.stageRect;
+      const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
       const relX = e.clientX - stageRect.left;
       const relY = e.clientY - stageRect.top;
       const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
@@ -309,18 +325,39 @@ class ViewportManager {
       if (typeof window !== 'undefined' && window.state) {
         window.state.activePane = pane;
       }
+
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.08 : 0.92;
+        // Continuous smooth exponential zoom for touchpad pinch & Ctrl+wheel
+        let delta = -e.deltaY;
+        if (e.deltaMode === 1) delta *= 24; // lines mode
+        else if (e.deltaMode === 2) delta *= 300; // pages mode
+        const zoomFactor = Math.pow(1.0025, delta);
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
-        this.setZoom(curZoom * factor, [relX, relY], pane);
+        const newZoom = Math.max(0.15, Math.min(10.0, curZoom * zoomFactor));
+        this.setZoom(newZoom, [relX, relY], pane);
       } else {
         e.preventDefault();
+        let dx = e.deltaX;
+        let dy = e.deltaY;
+        if (e.shiftKey && !dx && dy) {
+          dx = dy;
+          dy = 0;
+        }
+        if (e.deltaMode === 1) { // DOM_DELTA_LINE on standard mouse wheel (e.g. 3 lines -> 120px)
+          dx *= 40;
+          dy *= 40;
+        } else if (e.deltaMode === 2) { // DOM_DELTA_PAGE
+          dx *= 600;
+          dy *= 600;
+        }
         const curPanX = pane === 'right' ? this.rightPanX : this.panX;
         const curPanY = pane === 'right' ? this.rightPanY : this.panY;
-        this.setPan(curPanX - e.deltaX, curPanY - e.deltaY, pane);
+        this.setPan(curPanX - dx, curPanY - dy, pane);
       }
-    }, { passive: false });
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: false });
 
     element.addEventListener('pointerdown', e => {
       if (!this.stageRect) this.updateStageRect();
@@ -339,7 +376,11 @@ class ViewportManager {
         this.touchStartTimes = this.touchStartTimes || new Map();
         this.touchStartTimes.set(e.pointerId, { t: Date.now(), x: e.clientX, y: e.clientY });
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (this.activeTouches.size === 2) {
+        if (this.activeTouches.size >= 2) {
+          // Cancel any single-finger stroke that might have started
+          if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
+            window.cancelPendingTouchStroke();
+          }
           const pts = Array.from(this.activeTouches.values());
           const dx = pts[1].x - pts[0].x;
           const dy = pts[1].y - pts[0].y;

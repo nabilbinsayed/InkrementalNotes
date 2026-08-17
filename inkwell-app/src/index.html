@@ -245,14 +245,8 @@
 
       <!-- Document Multi-Tab Strip -->
       <div id="tabBar" class="tab-bar">
-        <div id="tabList" class="tab-list">
-          <div class="doc-tab active" data-tab-id="default">
-            <svg class="tab-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
-            <span class="tab-title" id="activeTabTitle">Untitled.pdf</span>
-            <button class="tab-close" title="Close document">✕</button>
-          </div>
-        </div>
-        <button id="btnNewTab" class="tab-add-btn" title="Open new document / tab" aria-label="New tab">+</button>
+        <div id="tabList" class="tab-list"></div>
+        <button id="btnNewTab" class="tab-add-btn" title="Open new document / tab (Ctrl+N)" aria-label="New tab">+</button>
       </div>
 
       <!-- Center: First-Class Page Navigation Suite -->
@@ -299,14 +293,20 @@
         </div>
       </div>
 
-      <!-- Right Header Actions (Upload/Share & Document Status) -->
+      <!-- Right Action Tools -->
       <div class="header-right">
-        <button id="btnExportShare" class="btn-share-pill" title="Save Document (Ctrl+S)" aria-label="Save PDF">
-          <svg class="export-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-          <div class="btn-spinner hidden"></div>
-          <span class="export-text">Save PDF</span>
+        <button id="btnHeaderSave" class="header-icon-btn" title="Save Document (Ctrl+S)" aria-label="Save PDF">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         </button>
-
+        <button id="btnHeaderExport" class="header-icon-btn" title="Export & Share PDF" aria-label="Export PDF">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+        </button>
+        <button id="btnHeaderFind" class="header-icon-btn" title="Search Text in Document (Ctrl+F)" aria-label="Search text">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </button>
+        <button id="btnHeaderSettings" class="header-icon-btn" title="Preferences (Ctrl+,)" aria-label="Preferences">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
         <div id="docStatusBadge" class="doc-status-badge" title="Vector Engine & WAL Journal Active">
           <span class="status-indicator-dot"></span>
           <span id="docStatusText">Vector Ready</span>
@@ -319,21 +319,30 @@
       <!-- Welcome / Dropzone CTA Overlay -->
       <div id="welcomeDropzone" class="welcome-dropzone">
         <div class="welcome-card">
-          <div class="welcome-icon">🖋️</div>
-          <h2>Welcome to Inkwell</h2>
-          <p>Create a fresh blank whiteboard or open an existing PDF to annotate with ultra-low latency vector ink.</p>
+          <div class="welcome-brand-badge">
+            <div class="welcome-icon">🖋️</div>
+            <span class="welcome-version-tag">InkWell Studio</span>
+          </div>
+          <h2>Welcome to InkWell</h2>
+          <p>High-fidelity vector PDF annotation, ultra-low latency stylus inking, and infinite digital whiteboarding.</p>
           <div class="welcome-buttons-row">
-            <button id="btnWelcomeNewNote" class="btn-primary-accent btn-hero" aria-label="Start Blank Whiteboard">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-              <span>New Whiteboard</span>
-            </button>
-            <button id="btnWelcomeOpen" class="btn-secondary-pill btn-hero" aria-label="Open PDF Document">
+            <button id="btnWelcomeOpen" class="btn-primary-accent btn-hero" aria-label="Open PDF Document">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
-              <span>Browse PDF Files</span>
+              <span>Open PDF (Ctrl+O)</span>
+            </button>
+            <button id="btnWelcomeNewNote" class="btn-secondary-pill btn-hero" aria-label="Start Blank Whiteboard">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+              <span>New Whiteboard (Ctrl+N)</span>
             </button>
           </div>
+          <div class="welcome-drop-hint">
+            <span class="drop-hint-text">or drag and drop any PDF file anywhere to open</span>
+          </div>
           <div id="recentFilesContainer" class="recent-files-section hidden">
-            <h4 class="recent-files-title">Recent Documents</h4>
+            <div class="recent-files-header-row">
+              <h4 class="recent-files-title">Recent Documents</h4>
+              <button id="btnClearRecents" class="btn-clear-recents" title="Clear document history">Clear History</button>
+            </div>
             <div id="recentFilesList" class="recent-files-list"></div>
           </div>
         </div>
@@ -433,15 +442,18 @@
 
       <!-- Floating Zoom Controls (bottom-right overlay) -->
       <div id="zoomControl" class="zoom-control-dock">
-        <button id="btnZoomOut" class="zoom-dock-btn" title="Zoom Out (-)" aria-label="Zoom out (-)">
+        <button id="btnZoomOut" class="zoom-dock-btn" title="Zoom Out (Ctrl -)" aria-label="Zoom out (-)">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
         </button>
-        <span id="zoomLevelDisplay" class="zoom-display">100%</span>
-        <button id="btnZoomIn" class="zoom-dock-btn" title="Zoom In (+)" aria-label="Zoom in (+)">
+        <button id="btnZoomMenu" class="zoom-display-btn" title="Zoom presets (Click for menu)" aria-label="Zoom presets menu">
+          <span id="zoomLevelDisplay">100%</span>
+          <span class="zoom-caret">▾</span>
+        </button>
+        <button id="btnZoomIn" class="zoom-dock-btn" title="Zoom In (Ctrl +)" aria-label="Zoom in (+)">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
         </button>
         <div class="zoom-divider"></div>
-        <button id="btnZoomFit" class="zoom-dock-btn" title="Fit Page (⤢)" aria-label="Fit page">
+        <button id="btnZoomFit" class="zoom-dock-btn" title="Fit Page (Ctrl 0)" aria-label="Fit page">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
         </button>
         <button id="btnZoomSplit" class="zoom-dock-btn" title="Toggle Split View (Dual Pane)" aria-label="Toggle split view">
@@ -450,6 +462,37 @@
         <button id="btnFullscreen" class="zoom-dock-btn" title="Toggle Fullscreen (F11)" aria-label="Toggle fullscreen">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
         </button>
+      </div>
+
+      <!-- Interactive Zoom Presets Popover Menu -->
+      <div id="zoomMenuPopover" class="zoom-menu-popover hidden" role="menu" aria-label="Zoom Level Presets">
+        <div class="zoom-menu-header">Zoom Level</div>
+        <div class="zoom-menu-options">
+          <button type="button" class="zoom-menu-item" data-zoom="fit-page">
+            <span>Fit to Page</span>
+            <kbd>Ctrl+0</kbd>
+          </button>
+          <button type="button" class="zoom-menu-item" data-zoom="fit-width">
+            <span>Fit to Width</span>
+            <kbd>Ctrl+2</kbd>
+          </button>
+          <div class="zoom-menu-divider"></div>
+          <button type="button" class="zoom-menu-item" data-zoom="0.5">50%</button>
+          <button type="button" class="zoom-menu-item" data-zoom="0.75">75%</button>
+          <button type="button" class="zoom-menu-item active" data-zoom="1.0">
+            <span>100% (Actual Size)</span>
+            <kbd>Ctrl+1</kbd>
+          </button>
+          <button type="button" class="zoom-menu-item" data-zoom="1.25">125%</button>
+          <button type="button" class="zoom-menu-item" data-zoom="1.5">150%</button>
+          <button type="button" class="zoom-menu-item" data-zoom="2.0">200%</button>
+          <button type="button" class="zoom-menu-item" data-zoom="3.0">300%</button>
+          <button type="button" class="zoom-menu-item" data-zoom="4.0">400%</button>
+        </div>
+        <div class="zoom-menu-custom">
+          <input type="number" id="inputCustomZoom" min="10" max="800" step="5" placeholder="Custom %" aria-label="Custom zoom percentage">
+          <button id="btnApplyCustomZoom" class="btn-custom-zoom-apply">Apply</button>
+        </div>
       </div>
 
       <!-- Floating Scroll Back to Top Button -->
@@ -1108,6 +1151,19 @@
           <div class="settings-tab-heading">Engine & Viewport Configuration</div>
 
           <div class="settings-group">
+            <div class="settings-card">
+              <label class="setting-toggle-row" for="cRestoreSession">
+                <div class="toggle-text">
+                  <span class="setting-title">Restore Previous Tabs on Startup</span>
+                  <span class="setting-desc">Automatically re-open previously active documents on launch instead of the Welcome Screen</span>
+                </div>
+                <div class="custom-toggle">
+                  <input type="checkbox" id="cRestoreSession">
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+            </div>
+
             <div class="settings-card">
               <div class="setting-toggle-row">
                 <div class="toggle-text">

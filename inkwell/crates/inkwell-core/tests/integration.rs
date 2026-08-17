@@ -578,6 +578,37 @@ fn atomic_write_leaves_no_temp_files_and_replaces_content() {
     assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
 }
 
+#[test]
+fn pdf_size_remains_compact_for_dense_strokes() {
+    let base = fixture();
+    let base_len = base.len();
+    let mut f = PdfFile::open(base).unwrap();
+    let mut doc = Document::for_pdf(1);
+    let mut ids = IdGen::seeded(0xC0FFEE);
+    for i in 0..100 {
+        let kind = if i == 0 { ToolKind::Highlighter } else { ToolKind::Pen };
+        let brush = Brush {
+            base_width: if kind == ToolKind::Highlighter { 14.0 } else { 2.6 },
+            gamma: 1.0,
+            ..Default::default()
+        };
+        let mut b = StrokeBuilder::new(ids.next_id(), kind, [0.1, 0.1, 0.3], brush, true);
+        for j in 0..260 {
+            let t = j as f64 / 259.0;
+            let x = 70.0 + t * 380.0;
+            let y = 700.0 - i as f64 * 6.0 + (t * 20.0).sin() * 5.0;
+            let p = 0.5 + 0.3 * (t * 10.0).sin();
+            b.push(x, y, p, j as f64 * 4.0);
+        }
+        doc.push_stroke(0, b.finish(0.4));
+    }
+    f.write_document(&doc, 64).unwrap();
+    let final_bytes = f.finish();
+    let added_bytes = final_bytes.len() - base_len;
+    println!("100 realistic handwritten strokes added only {} bytes ({:.2} KB)", added_bytes, added_bytes as f64 / 1024.0);
+    assert!(added_bytes < 75 * 1024, "PDF size inflated: {} bytes added (expected < 75 KB)", added_bytes);
+}
+
 // ===========================================================================
 // helpers
 // ===========================================================================

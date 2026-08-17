@@ -699,9 +699,13 @@ async function redrawTilesForPage(pane, pi, pl, drawEpoch) {
     }
 
     const result = await fetchTile(pl.sheet, tr, px);
-    if (!result || drawEpoch !== redrawTiles.epoch) return;
+    if (!result || !result.data) return;
 
-    await drawTileData(result.data, tr, pl, pane, pi);
+    // Check if the page is still in the visible viewport before drawing
+    const visibleNow = viewport.getVisiblePages(pane);
+    if (visibleNow.some(v => v.sheet === pl.sheet)) {
+      await drawTileData(result.data, tr, pl, pane, pi);
+    }
   });
 
   await Promise.all(promises);
@@ -1049,6 +1053,7 @@ function updatePageUI() {
 
   // Update thumbnail badge in nav rail
   updateToolBadges();
+  updateZoomUI();
 }
 
 function updateToolInspectorUI() {
@@ -3747,7 +3752,54 @@ function hideRadialMenu() {
   $('radialMenu') && $('radialMenu').classList.add('hidden');
 }
 
+// ---- Welcome Mode State Management ----
+function setWelcomeState(isWelcome) {
+  if (isWelcome) {
+    document.body.classList.add('welcome-active');
+    if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
+    renderRecentFiles();
+  } else {
+    document.body.classList.remove('welcome-active');
+    if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
+  }
+}
+
 // ---- Recent Documents Manager ----
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return '';
+  const now = Date.now();
+  const diffSec = Math.floor((now - timestamp) / 1000);
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  const date = new Date(timestamp);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function removeRecentFile(path, e) {
+  if (e) e.stopPropagation();
+  try {
+    const raw = localStorage.getItem('inkwell_recent_files');
+    let list = raw ? JSON.parse(raw) : [];
+    list = list.filter(item => item.path !== path);
+    localStorage.setItem('inkwell_recent_files', JSON.stringify(list));
+    renderRecentFiles();
+  } catch (_) {}
+}
+
+function clearRecentFiles() {
+  try {
+    localStorage.removeItem('inkwell_recent_files');
+    renderRecentFiles();
+    showToast('Recent documents history cleared', 'info');
+  } catch (_) {}
+}
+
 function addRecentFile(title, path) {
   if (!path) return;
   try {
@@ -3755,7 +3807,7 @@ function addRecentFile(title, path) {
     let list = raw ? JSON.parse(raw) : [];
     list = list.filter(item => item.path !== path);
     list.unshift({ title: title || path.split(/[\/\\]/).pop() || 'Document.pdf', path, time: Date.now() });
-    if (list.length > 6) list = list.slice(0, 6);
+    if (list.length > 8) list = list.slice(0, 8);
     localStorage.setItem('inkwell_recent_files', JSON.stringify(list));
     renderRecentFiles();
   } catch (_) {}
@@ -3769,31 +3821,47 @@ function renderRecentFiles() {
     const raw = localStorage.getItem('inkwell_recent_files');
     const list = raw ? JSON.parse(raw) : [];
     if (!list || !list.length) {
-      container.classList.add('hidden');
+      container.classList.remove('hidden');
+      listEl.innerHTML = '<div class="recent-files-empty">No recent documents</div>';
+      if ($('btnClearRecents')) $('btnClearRecents').style.display = 'none';
       return;
     }
+    if ($('btnClearRecents')) $('btnClearRecents').style.display = 'inline-block';
     container.classList.remove('hidden');
     listEl.innerHTML = list.map(item => `
-      <div class="recent-file-item" data-path="${item.path || ''}" data-title="${item.title || 'Document.pdf'}">
+      <div class="recent-file-item" data-path="${escapeHtml(item.path || '')}" data-title="${escapeHtml(item.title || 'Document.pdf')}">
         <div class="recent-file-icon">📄</div>
         <div class="recent-file-info">
-          <div class="recent-file-name">${escapeHtml(item.title || 'Document.pdf')}</div>
-          <div class="recent-file-path">${escapeHtml(item.path || '')}</div>
+          <div class="recent-file-name-row">
+            <span class="recent-file-name">${escapeHtml(item.title || 'Document.pdf')}</span>
+            <span class="recent-file-time">${escapeHtml(formatRelativeTime(item.time))}</span>
+          </div>
+          <div class="recent-file-path" title="${escapeHtml(item.path || '')}">${escapeHtml(item.path || '')}</div>
         </div>
+        <button class="recent-file-remove-btn" title="Remove from recent files" aria-label="Remove recent file">✕</button>
       </div>
     `).join('');
 
     listEl.querySelectorAll('.recent-file-item').forEach(el => {
-      el.addEventListener('click', async () => {
-        const path = el.getAttribute('data-path');
+      const path = el.getAttribute('data-path');
+      const title = el.getAttribute('data-title');
+
+      const removeBtn = el.querySelector('.recent-file-remove-btn');
+      if (removeBtn) {
+        removeBtn.addEventListener('click', (ev) => {
+          removeRecentFile(path, ev);
+        });
+      }
+
+      el.addEventListener('click', async (ev) => {
+        if (ev.target.closest('.recent-file-remove-btn')) return;
         if (path) {
           const invoke = getInvoke();
           if (invoke) {
             try {
               const res = await invoke('open_pdf', { pathStr: path });
               if (res && res.page_infos) {
-                const title = path.split(/[\/\\]/).pop() || 'Document.pdf';
-                handlePdfLoadSuccess(title, path, res.page_infos, res.recovered_strokes || 0, res.loaded_strokes || [], res.outline || []);
+                handlePdfLoadSuccess(title || 'Document.pdf', path, res.page_infos, res.recovered_strokes || 0, res.loaded_strokes || [], res.outline || []);
                 showToast(`Opened ${title}`, 'success');
               }
             } catch (err) {
@@ -3835,6 +3903,7 @@ function createTab(title = 'Untitled.pdf', pathStr = null, pageInfos = []) {
     panY: 0
   };
   state.tabs.push(newTab);
+  setWelcomeState(false);
   renderTabsDOM();
   switchTab(tabId);
   return newTab;
@@ -4003,9 +4072,8 @@ function executeCloseTab(tabId) {
     updateDocInfo();
     renderOutline();
     renderBookmarks();
-    renderRecentFiles();
 
-    if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
+    setWelcomeState(true);
     if ($('activeTabTitle')) $('activeTabTitle').textContent = 'InkWell';
     showToast('Document closed', 'info');
   } else {
@@ -5544,30 +5612,92 @@ function bindUI() {
   $('btnSplit') && $('btnSplit').addEventListener('click', toggleSplitView);
   $('btnZoomSplit') && $('btnZoomSplit').addEventListener('click', toggleSplitView);
 
-  $('btnZoomIn') && $('btnZoomIn').addEventListener('click', () => {
-    const pane = viewport.activePane || 'left';
-    const curZoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
-    const center = [tilesCanvas.width / (2 * state.dpr), tilesCanvas.height / (2 * state.dpr)];
-    viewport.setZoom(curZoom * 1.25, center, pane);
+  $('btnZoomIn') && $('btnZoomIn').addEventListener('click', zoomIn);
+  $('btnZoomOut') && $('btnZoomOut').addEventListener('click', zoomOut);
+  $('btnZoomFit') && $('btnZoomFit').addEventListener('click', zoomFit);
+  $('btnFullscreen') && $('btnFullscreen').addEventListener('click', toggleFullscreen);
+
+  // Zoom presets menu popover
+  $('btnZoomMenu') && $('btnZoomMenu').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = $('zoomMenuPopover');
+    if (pop) pop.classList.toggle('hidden');
   });
 
-  $('btnZoomOut') && $('btnZoomOut').addEventListener('click', () => {
-    const pane = viewport.activePane || 'left';
-    const curZoom = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
-    const center = [tilesCanvas.width / (2 * state.dpr), tilesCanvas.height / (2 * state.dpr)];
-    viewport.setZoom(curZoom / 1.25, center, pane);
+  const zoomPop = $('zoomMenuPopover');
+  if (zoomPop) {
+    ['pointerdown', 'pointermove', 'pointerup', 'mousedown', 'mousemove', 'mouseup', 'click', 'touchstart', 'touchmove', 'touchend', 'wheel'].forEach(evt => {
+      zoomPop.addEventListener(evt, e => e.stopPropagation());
+    });
+  }
+
+  document.querySelectorAll('.zoom-menu-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const zoomVal = btn.getAttribute('data-zoom');
+      if (zoomVal === 'fit-page') {
+        zoomFit();
+      } else if (zoomVal === 'fit-width') {
+        zoomFitWidth();
+      } else {
+        const factor = parseFloat(zoomVal);
+        if (!isNaN(factor) && viewport) {
+          const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+          const stageRect = viewport.stageRect || $('stage').getBoundingClientRect();
+          const center = [stageRect.width / 2, stageRect.height / 2];
+          viewport.setZoom(factor, center, pane);
+          updateZoomUI();
+        }
+      }
+      $('zoomMenuPopover') && $('zoomMenuPopover').classList.add('hidden');
+    });
   });
 
-  $('btnZoomFit') && $('btnZoomFit').addEventListener('click', () => {
-    const pi = state.pageInfos[state.leftSheet];
-    if (pi) {
-      fitPageInPanes(pi);
-      scheduleRedrawTiles();
-      redrawAll();
+  $('btnApplyCustomZoom') && $('btnApplyCustomZoom').addEventListener('click', () => {
+    const input = $('inputCustomZoom');
+    if (input && input.value && viewport) {
+      const pct = parseFloat(input.value);
+      if (!isNaN(pct) && pct >= 10 && pct <= 800) {
+        const factor = pct / 100.0;
+        const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+        const stageRect = viewport.stageRect || $('stage').getBoundingClientRect();
+        const center = [stageRect.width / 2, stageRect.height / 2];
+        viewport.setZoom(factor, center, pane);
+        updateZoomUI();
+        input.value = '';
+      }
+    }
+    $('zoomMenuPopover') && $('zoomMenuPopover').classList.add('hidden');
+  });
+
+  $('inputCustomZoom') && $('inputCustomZoom').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      $('btnApplyCustomZoom') && $('btnApplyCustomZoom').click();
     }
   });
 
-  $('btnFullscreen') && $('btnFullscreen').addEventListener('click', toggleFullscreen);
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#zoomMenuPopover') && !e.target.closest('#btnZoomMenu')) {
+      $('zoomMenuPopover') && $('zoomMenuPopover').classList.add('hidden');
+    }
+  });
+
+  // Top header quick actions
+  $('btnHeaderSave') && $('btnHeaderSave').addEventListener('click', () => saveDocument(false));
+  $('btnHeaderExport') && $('btnHeaderExport').addEventListener('click', () => $('exportModal') && $('exportModal').classList.remove('hidden'));
+  $('btnHeaderFind') && $('btnHeaderFind').addEventListener('click', () => toggleDrawer('search'));
+  $('btnHeaderSettings') && $('btnHeaderSettings').addEventListener('click', () => openSettingsModal());
+  $('btnClearRecents') && $('btnClearRecents').addEventListener('click', () => clearRecentFiles());
+
+  // Startup session restore checkbox in Settings modal
+  const cRestoreSession = $('cRestoreSession');
+  if (cRestoreSession) {
+    cRestoreSession.checked = localStorage.getItem('inkwell_restore_session_enabled') === 'true';
+    cRestoreSession.addEventListener('change', () => {
+      localStorage.setItem('inkwell_restore_session_enabled', cRestoreSession.checked ? 'true' : 'false');
+      showToast(cRestoreSession.checked ? 'Session auto-restore enabled on startup' : 'Clean Welcome Screen enabled on startup', 'info');
+    });
+  }
 
   $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', toggleSidebar);
   $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', toggleSidebar);
@@ -5993,15 +6123,11 @@ async function saveDocument(forceSaveAs = false, isAutosave = false) {
         data_url: img.dataUrl,
       }));
 
-    const templateBackgroundImages = (state.pageInfos || [])
-      .map((pi, idx) => (pi.template && pi.template !== 'blank' ? renderPageTemplateBackgroundToDataUrl(pi, idx) : null))
-      .filter(Boolean);
-
     const textImages = (state.textObjects || [])
       .filter(t => !t.deleted && t.text && t.text.trim())
       .map(renderTextObjectToDataUrl);
 
-    const allImages = [...templateBackgroundImages, ...nonDeletedImages, ...textImages];
+    const allImages = [...nonDeletedImages, ...textImages];
 
     const nonDeletedStrokes = (state.strokes || [])
       .filter(s => !s.deleted)
@@ -6210,6 +6336,90 @@ window.addEventListener('click', e => {
   }
 });
 
+// ---- Zoom Navigation Helpers & Presets ----
+function zoomIn() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const curZoom = pane === 'right' ? viewport.rightZoom : viewport.zoom;
+  const stageRect = viewport.stageRect || ($('stage') ? $('stage').getBoundingClientRect() : { width: 800, height: 600 });
+  const center = [stageRect.width / 2, stageRect.height / 2];
+  viewport.setZoom(Math.min(10.0, curZoom * 1.25), center, pane);
+  updateZoomUI();
+}
+
+function zoomOut() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const curZoom = pane === 'right' ? viewport.rightZoom : viewport.zoom;
+  const stageRect = viewport.stageRect || ($('stage') ? $('stage').getBoundingClientRect() : { width: 800, height: 600 });
+  const center = [stageRect.width / 2, stageRect.height / 2];
+  viewport.setZoom(Math.max(0.15, curZoom / 1.25), center, pane);
+  updateZoomUI();
+}
+
+function zoomFit() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const pi = state.pageInfos ? state.pageInfos[state.leftSheet] : null;
+  if (pi) {
+    fitPageInPanes(pi);
+  } else {
+    viewport.fitPage(595, 842, pane);
+  }
+  scheduleRedrawTiles();
+  redrawAll();
+  updateZoomUI();
+}
+
+function zoomActual() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const stageRect = viewport.stageRect || ($('stage') ? $('stage').getBoundingClientRect() : { width: 800, height: 600 });
+  const center = [stageRect.width / 2, stageRect.height / 2];
+  viewport.setZoom(1.0, center, pane);
+  updateZoomUI();
+}
+
+function zoomFitWidth() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const pi = state.pageInfos ? state.pageInfos[state.leftSheet] : null;
+  const w = pi ? (pi.width_pt || pi.width) : 595;
+  viewport.fitWidth(w, pane);
+  updateZoomUI();
+}
+
+function updateZoomUI() {
+  if (!viewport) return;
+  const pane = (viewport.splitMode && state.activePane === 'right') ? 'right' : 'left';
+  const curZoom = pane === 'right' ? viewport.rightZoom : viewport.zoom;
+  const pct = Math.round(curZoom * 100);
+  if ($('zoomLevelDisplay')) $('zoomLevelDisplay').textContent = `${pct}%`;
+  document.querySelectorAll('.zoom-menu-item').forEach(item => {
+    const dataZoom = item.getAttribute('data-zoom');
+    if (dataZoom && !isNaN(parseFloat(dataZoom))) {
+      const targetPct = Math.round(parseFloat(dataZoom) * 100);
+      item.classList.toggle('active', Math.abs(targetPct - pct) < 3);
+    }
+  });
+}
+
+// Touch gesture cancellation helper for multi-touch pinch/pan
+window.cancelPendingTouchStroke = () => {
+  if (state.cur) {
+    state.cur = null;
+    state.streamline = null;
+    clearWet();
+  }
+};
+
+window.addEventListener('click', e => {
+  if (!e.target.closest('#radialMenu')) hideRadialMenu();
+  if (!e.target.closest('#propPopover') && !e.target.closest('#btnProp') && !e.target.closest('#btnDockAddPreset')) {
+    $('propPopover') && $('propPopover').classList.add('hidden');
+  }
+});
+
 // Keyboard shortcuts
 window.addEventListener('keydown', e => {
   const modal = $('cmdPaletteModal');
@@ -6238,19 +6448,69 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  // Hierarchical Escape key handling
   if (e.key === 'Escape') {
-    closeSettingsModal();
-    closeInsertPageModal();
-    closeGoToPageModal();
-    closeShortcutsModal();
-    const exportModal = $('exportModal');
-    if (exportModal && !exportModal.classList.contains('hidden')) {
-      exportModal.classList.add('hidden');
+    // 1. Zoom menu popover
+    const zoomPopover = $('zoomMenuPopover');
+    if (zoomPopover && !zoomPopover.classList.contains('hidden')) {
+      zoomPopover.classList.add('hidden');
       return;
+    }
+    // 2. Properties popover
+    const propPopover = $('propPopover');
+    if (propPopover && !propPopover.classList.contains('hidden')) {
+      propPopover.classList.add('hidden');
+      return;
+    }
+    // 3. Radial menu
+    const radial = $('radialMenu');
+    if (radial && !radial.classList.contains('hidden')) {
+      radial.classList.add('hidden');
+      return;
+    }
+    // 4. Context menu
+    const ctxMenu = $('canvasContextMenu');
+    if (ctxMenu && !ctxMenu.classList.contains('hidden')) {
+      ctxMenu.classList.add('hidden');
+      return;
+    }
+    // 5. Text selection popover
+    const textSel = $('textSelectionPopover');
+    if (textSel && !textSel.classList.contains('hidden')) {
+      textSel.classList.add('hidden');
+      return;
+    }
+    // 6. Inline text editor
+    const inlineEditor = $('inlineTextEditor');
+    if (inlineEditor && !inlineEditor.classList.contains('hidden')) {
+      commitInlineTextEditor();
+      return;
+    }
+    // 7. Open Modals
+    const modals = [
+      $('settingsModal'),
+      $('exportModal'),
+      $('insertPageModal'),
+      $('goToPageModal'),
+      $('shortcutsModal'),
+      $('confirmCloseModal'),
+      $('cmdPaletteModal')
+    ];
+    for (const m of modals) {
+      if (m && !m.classList.contains('hidden')) {
+        m.classList.add('hidden');
+        return;
+      }
     }
     const sideDrawer = $('sideDrawer');
     if (sideDrawer && !sideDrawer.classList.contains('hidden')) {
       sideDrawer.classList.add('hidden');
+      return;
+    }
+    // 8. Clear Selection if any
+    if ((state.selectedStrokes && state.selectedStrokes.length) || (state.selectedImages && state.selectedImages.length)) {
+      clearSelection();
+      redrawAll();
       return;
     }
   }
@@ -6298,7 +6558,34 @@ window.addEventListener('keydown', e => {
     return;
   }
 
+  // Universal Ctrl / Cmd modified shortcuts
   if (e.ctrlKey || e.metaKey) {
+    // Zoom shortcuts
+    if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      zoomIn();
+      return;
+    }
+    if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      zoomOut();
+      return;
+    }
+    if (e.key === '0' || e.code === 'Numpad0') {
+      e.preventDefault();
+      zoomFit();
+      return;
+    }
+    if (e.key === '1' || e.code === 'Numpad1') {
+      e.preventDefault();
+      zoomActual();
+      return;
+    }
+    if (e.key === '2' || e.code === 'Numpad2') {
+      e.preventDefault();
+      zoomFitWidth();
+      return;
+    }
     if (e.key === 'Tab') {
       e.preventDefault();
       if (state.tabs && state.tabs.length > 1) {
@@ -6357,6 +6644,7 @@ window.addEventListener('keydown', e => {
     if (e.key === 'b') { e.preventDefault(); toggleSidebar(); return; }
     if (e.key === 'g' || e.key === 'G') { e.preventDefault(); openGoToPageModal(); return; }
     if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleDrawer('search'); return; }
+    if (e.key === ',') { e.preventDefault(); openSettingsModal(); return; }
     return;
   }
 
@@ -6395,29 +6683,9 @@ window.addEventListener('keydown', e => {
     $('propPopover') && $('propPopover').classList.toggle('hidden');
     return;
   }
-  if ((e.ctrlKey || e.metaKey) && e.key === ',') {
-    e.preventDefault();
-    openSettingsModal();
-    return;
-  }
   if (k === 's') {
     e.preventDefault();
     openSettingsModal();
-    return;
-  }
-  if (k === '+' || k === '=') {
-    e.preventDefault();
-    $('btnZoomIn') && $('btnZoomIn').click();
-    return;
-  }
-  if (k === '-' || k === '_') {
-    e.preventDefault();
-    $('btnZoomOut') && $('btnZoomOut').click();
-    return;
-  }
-  if (k === '0') {
-    e.preventDefault();
-    $('btnZoomFit') && $('btnZoomFit').click();
     return;
   }
 });
@@ -6442,27 +6710,47 @@ function attachPointerHandlers() {
 
 async function restoreSessionState() {
   try {
+    const isRestoreEnabled = localStorage.getItem('inkwell_restore_session_enabled') === 'true';
+    if (!isRestoreEnabled) {
+      setWelcomeState(true);
+      return;
+    }
     const raw = localStorage.getItem('inkwell_open_tabs');
-    if (!raw) return;
+    if (!raw) {
+      setWelcomeState(true);
+      return;
+    }
     const sessionData = JSON.parse(raw);
-    if (!sessionData || !Array.isArray(sessionData.tabs) || !sessionData.tabs.length) return;
+    if (!sessionData || !Array.isArray(sessionData.tabs) || !sessionData.tabs.length) {
+      setWelcomeState(true);
+      return;
+    }
     const invoke = getInvoke();
-    if (!invoke) return;
+    if (!invoke) {
+      setWelcomeState(true);
+      return;
+    }
 
+    let loadedAny = false;
     for (const t of sessionData.tabs) {
       if (t.pathStr) {
         try {
           const r = await invoke('open_pdf', { pathStr: t.pathStr });
           if (r && r.page_infos) {
-            handlePdfLoadSuccess(t.title || 'Document.pdf', t.pathStr, r);
+            handlePdfLoadSuccess(t.title || 'Document.pdf', t.pathStr, r.page_infos, r.recovered_strokes || 0, r.loaded_strokes || [], r.outline || []);
+            loadedAny = true;
           }
         } catch (e) {
           console.warn('[inkwell] Failed to restore session tab:', t.pathStr, e);
         }
       }
     }
+    if (!loadedAny) {
+      setWelcomeState(true);
+    }
   } catch (err) {
     console.warn('[inkwell] restoreSessionState error:', err);
+    setWelcomeState(true);
   }
 }
 
@@ -6475,20 +6763,16 @@ window.addEventListener('DOMContentLoaded', () => {
     syncActivePagesFromViewport();
     scheduleRedrawTiles();
     scheduleRedrawAll();
+    updateZoomUI();
+    updateDocScrollbar();
   });
   viewport.attachListeners($('stage'));
 
-  // Create the canvas backing stores + 2D contexts FIRST. Without this,
-  // createTab() -> switchTab() -> redrawAll() would call dctx.setTransform on
-  // an undefined context and throw, aborting the rest of startup so no event
-  // handlers were ever bound (buttons dead, PDFs never load).
+  // Create canvas backing stores and contexts
   resize();
 
-  // Initialize startup state
-  createTab('Untitled.pdf', null, []);
-  if (!state.pageInfos || state.pageInfos.length === 0) {
-    if ($('welcomeDropzone')) $('welcomeDropzone').classList.remove('hidden');
-  }
+  // Initialize in clean Welcome Mode
+  setWelcomeState(true);
   renderRecentFiles();
 
   attachPointerHandlers();
@@ -6527,6 +6811,11 @@ window.addEventListener('DOMContentLoaded', () => {
 
   window.undo = undo;
   window.redo = redo;
+  window.zoomIn = zoomIn;
+  window.zoomOut = zoomOut;
+  window.zoomFit = zoomFit;
+  window.zoomActual = zoomActual;
+  window.zoomFitWidth = zoomFitWidth;
   window.showToast = showToast;
   window.scheduleRedrawTiles = scheduleRedrawTiles;
   window.scheduleRedrawAll = scheduleRedrawAll;

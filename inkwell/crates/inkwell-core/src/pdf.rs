@@ -248,11 +248,25 @@ impl PdfFile {
         let mut content = Vec::new();
         let mut needs_multiply = false;
         for s in strokes {
-            let path = ribbon_path(s, 16);
+            let simplified_stroke;
+            let s_ref = if s.samples.len() > 3 {
+                simplified_stroke = Stroke {
+                    id: s.id,
+                    kind: s.kind,
+                    rgb: s.rgb,
+                    brush: s.brush,
+                    samples: crate::ink::simplify(&s.samples, 0.4),
+                };
+                &simplified_stroke
+            } else {
+                *s
+            };
+
+            let path = ribbon_path(s_ref, 16);
             if path.len() < 3 {
                 continue;
             }
-            let gs = match s.kind {
+            let gs = match s_ref.kind {
                 ToolKind::Highlighter => {
                     needs_multiply = true;
                     "/GSm"
@@ -261,28 +275,28 @@ impl PdfFile {
             };
             let _ = write!(
                 content,
-                "q\n{gs} gs\n{:.4} {:.4} {:.4} rg\n",
-                s.rgb[0], s.rgb[1], s.rgb[2]
+                "q\n{gs} gs\n{:.3} {:.3} {:.3} rg\n",
+                s_ref.rgb[0], s_ref.rgb[1], s_ref.rgb[2]
             );
             // Transform y_canvas -> y_pdf = page_height - y_canvas
             for cmd in &path {
                 match cmd {
                     PathCmd::MoveTo(p) => {
-                        let _ = writeln!(content, "{:.3} {:.3} m", p.0, page_height - p.1);
+                        let _ = writeln!(content, "{} {} m", fmt_coord(p.0), fmt_coord(page_height - p.1));
                     }
                     PathCmd::LineTo(p) => {
-                        let _ = writeln!(content, "{:.3} {:.3} l", p.0, page_height - p.1);
+                        let _ = writeln!(content, "{} {} l", fmt_coord(p.0), fmt_coord(page_height - p.1));
                     }
                     PathCmd::CurveTo(c) => {
                         let _ = writeln!(
                             content,
-                            "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} c",
-                            c[0].0,
-                            page_height - c[0].1,
-                            c[1].0,
-                            page_height - c[1].1,
-                            c[2].0,
-                            page_height - c[2].1
+                            "{} {} {} {} {} {} c",
+                            fmt_coord(c[0].0),
+                            fmt_coord(page_height - c[0].1),
+                            fmt_coord(c[1].0),
+                            fmt_coord(page_height - c[1].1),
+                            fmt_coord(c[2].0),
+                            fmt_coord(page_height - c[2].1)
                         );
                     }
                     PathCmd::Close => {
@@ -312,10 +326,22 @@ impl PdfFile {
         // /InkList: decimated centrelines converted to PDF user space (y_pdf = page_height - y_canvas)
         let mut inklist = String::new();
         for s in strokes {
+            let simplified = if s.samples.len() > 3 {
+                crate::ink::simplify(&s.samples, 0.5)
+            } else {
+                s.samples.clone()
+            };
+            let centreline: Vec<(f64, f64)> = simplified.iter().step_by(2).map(|sm| (sm.x, sm.y)).collect();
             inklist.push('[');
-            for (x, y) in s.centreline(3) {
+            for (x, y) in centreline {
                 let y_pdf = page_height - y;
-                inklist.push_str(&format!("{x:.2} {y_pdf:.2} "));
+                inklist.push_str(&fmt_coord(x));
+                inklist.push(' ');
+                inklist.push_str(&fmt_coord(y_pdf));
+                inklist.push(' ');
+            }
+            if inklist.ends_with(' ') {
+                inklist.pop();
             }
             inklist.push(']');
         }
@@ -323,7 +349,7 @@ impl PdfFile {
         let annot = self.add(
             format!(
                 "<< /Type /Annot /Subtype /Ink /F 4 /Rect [{}] \
-                 /InkList [{inklist}] /C [{:.4} {:.4} {:.4}] \
+                 /InkList [{inklist}] /C [{:.3} {:.3} {:.3}] \
                  /BS << /W {:.2} /S /S >> /T (Inkwell) /NM ({}) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({}) /Inkw_N {} >>",
                 fmt_rect(&bbox_pdf),
@@ -535,8 +561,18 @@ pub fn recover_truncated(data: &[u8]) -> Option<&[u8]> {
 // helpers
 // ---------------------------------------------------------------------------
 
+fn fmt_coord(v: f64) -> String {
+    let rounded = (v * 100.0).round() / 100.0;
+    if (rounded - rounded.round()).abs() < 1e-4 {
+        format!("{}", rounded.round() as i64)
+    } else {
+        let s = format!("{:.2}", rounded);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    }
+}
+
 fn fmt_rect(b: &[f64; 4]) -> String {
-    format!("{:.3} {:.3} {:.3} {:.3}", b[0], b[1], b[2], b[3])
+    format!("{} {} {} {}", fmt_coord(b[0]), fmt_coord(b[1]), fmt_coord(b[2]), fmt_coord(b[3]))
 }
 
 fn hex(b: &[u8]) -> String {

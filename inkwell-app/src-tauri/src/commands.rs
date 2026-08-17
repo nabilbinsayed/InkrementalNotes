@@ -479,63 +479,51 @@ pub async fn render_tile(
         .ok_or("No PDF loaded")?;
 
     let (bgra_bytes, bitmap_w, bitmap_h) = {
-        let mut cache_hit = None;
-        if let Ok(cache_guard) = state.page_bitmap_cache.lock() {
-            // If target dimensions can be queried from cached entries for this page:
-            if let Some(entry) = cache_guard.entries.iter().find(|e| e.page == page && (e.target_w as f64 - rw * scale).abs() < 2.0) {
-                cache_hit = Some((entry.bgra_bytes.clone(), entry.bitmap_w, entry.bitmap_h));
-            }
-        }
+        let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
+        let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+            "PDFium is not available (pdfium.dll was not found at startup). \
+             PDF tiles cannot be rendered.".to_string()
+        })?;
 
-        if let Some(hit) = cache_hit {
-            hit
+        let doc = pdfium
+            .load_pdf_from_byte_slice(&arc_bytes, None)
+            .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+        let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+        let page_w = page_obj.width().value as f64;
+        let page_h = page_obj.height().value as f64;
+
+        let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
+        let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
+
+        let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+        if let Some(cached) = cache_guard.get(page, target_w, target_h) {
+            cached
         } else {
-            let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
-            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-                "PDFium is not available (pdfium.dll was not found at startup). \
-                 PDF tiles cannot be rendered.".to_string()
+            let config = PdfRenderConfig::new()
+                .set_target_width(target_w)
+                .set_maximum_height(target_h)
+                .set_clear_color(PdfColor::WHITE)
+                .render_annotations(false);
+
+            let bitmap = page_obj.render_with_config(&config).map_err(|e| {
+                format!("PDFium failed to render page {page}: {e:?}")
             })?;
 
-            let doc = pdfium
-                .load_pdf_from_byte_slice(&arc_bytes, None)
-                .map_err(|e| format!("PDFium load error: {e:?}"))?;
+            let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
+            let bw = bitmap.width() as u32;
+            let bh = bitmap.height() as u32;
 
-            let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
-            let page_w = page_obj.width().value as f64;
-            let page_h = page_obj.height().value as f64;
+            cache_guard.put(CachedPageBitmap {
+                page,
+                target_w,
+                target_h,
+                bgra_bytes: bgra.clone(),
+                bitmap_w: bw,
+                bitmap_h: bh,
+            });
 
-            let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
-            let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
-
-            let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
-            if let Some(cached) = cache_guard.get(page, target_w, target_h) {
-                cached
-            } else {
-                let config = PdfRenderConfig::new()
-                    .set_target_width(target_w)
-                    .set_maximum_height(target_h)
-                    .set_clear_color(PdfColor::WHITE)
-                    .render_annotations(false);
-
-                let bitmap = page_obj.render_with_config(&config).map_err(|e| {
-                    format!("PDFium failed to render page {page}: {e:?}")
-                })?;
-
-                let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
-                let bw = bitmap.width() as u32;
-                let bh = bitmap.height() as u32;
-
-                cache_guard.put(CachedPageBitmap {
-                    page,
-                    target_w,
-                    target_h,
-                    bgra_bytes: bgra.clone(),
-                    bitmap_w: bw,
-                    bitmap_h: bh,
-                });
-
-                (bgra, bw, bh)
-            }
+            (bgra, bw, bh)
         }
     };
 
@@ -619,10 +607,16 @@ pub async fn commit_stroke(
         gamma: 1.0,
     };
 
-    let pts: Vec<Sample> = samples
+    let raw_pts: Vec<Sample> = samples
         .into_iter()
         .map(|s| Sample::new(s.x, s.y, s.pressure.clamp(0.0, 1.0), s.t_ms))
         .collect();
+
+    let pts = if raw_pts.len() > 3 {
+        inkwell_core::ink::simplify(&raw_pts, 0.4)
+    } else {
+        raw_pts
+    };
 
     let stroke = Stroke {
         id: stroke_id,
@@ -653,12 +647,18 @@ fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
         gamma: 1.0,
         min_ratio: if kind == ToolKind::Highlighter { 1.0 } else { 0.22 },
     };
-    let samples = fs.points.iter().map(|p| Sample {
+    let raw_samples: Vec<Sample> = fs.points.iter().map(|p| Sample {
         x: p.x,
         y: p.y,
         p: p.p,
         t: p.t,
     }).collect();
+
+    let samples = if raw_samples.len() > 3 {
+        inkwell_core::ink::simplify(&raw_samples, 0.4)
+    } else {
+        raw_samples
+    };
 
     Some(Stroke {
         id,
