@@ -15,7 +15,7 @@ results = []
 
 def check(name, cond, note=""):
     results.append(cond)
-    print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"   {note}" if note else ""))
+    print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"   {note}" if note else ""), flush=True)
 
 with sync_playwright() as pw:
     b = pw.chromium.launch(headless=True, args=["--force-device-scale-factor=1", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"])
@@ -27,7 +27,7 @@ with sync_playwright() as pw:
     pg.goto(URL)
     pg.wait_for_timeout(400)
 
-    print("\n=== T1  Boot ===")
+    print("\n=== T1  Boot ===", flush=True)
     check("page loads with no JS errors", not errors, str(errors[:2]))
     check("ink.js, hud.js, app.js all exported",
           pg.evaluate("!!(window.Ink && window.HUD && document.getElementById('wet'))"))
@@ -37,7 +37,7 @@ with sync_playwright() as pw:
           pg.evaluate("document.getElementById('evtName').textContent") == "pointerrawupdate",
           pg.evaluate("document.getElementById('evtName').textContent"))
 
-    print("\n=== T2  Pen input pipeline (synthetic pen via CDP) ===")
+    print("\n=== T2  Pen input pipeline (synthetic pen via CDP) ===", flush=True)
     cdp = ctx.new_cdp_session(pg)
     box = pg.locator("#wet").bounding_box()
     ox, oy = box["x"] + 60, box["y"] + 300
@@ -83,7 +83,7 @@ with sync_playwright() as pw:
           m["paintN"] > 5 and m["frameN"] > 5,
           f"{m['paintN']} paint samples, {m['frameN']} frames")
 
-    print("\n=== T3  Wet/dry split ===")
+    print("\n=== T3  Wet/dry split ===", flush=True)
     wet_clear = pg.evaluate("""() => {
         const c = document.getElementById('wet');
         const d = c.getContext('2d').getImageData(0,0,c.width,c.height).data;
@@ -98,14 +98,14 @@ with sync_playwright() as pw:
     check("dry layer holds the committed ink", dry_has_ink > 1500,   # ~1500px path @ ~2px avg width
           f"{dry_has_ink:,} inked pixels")
 
-    print("\n=== T4  The 'coalesced OFF' teaching toggle ===")
+    print("\n=== T4  The 'coalesced OFF' teaching toggle ===", flush=True)
     pg.evaluate("state.m.reset(); state.strokes=[]; redrawDry();")
     pg.uncheck("#cCoalesced")
     check("toggle flips app state", pg.evaluate("state.cfg.coalesced") is False)
     pg.check("#cCoalesced")
     check("toggle restores", pg.evaluate("state.cfg.coalesced") is True)
 
-    print("\n=== T5  Capture export schema matches the PDF writer ===")
+    print("\n=== T5  Capture export schema matches the PDF writer ===", flush=True)
     payload = pg.evaluate("""() => {
         const s = state.strokes[0]; if (!s) return null;
         return { id:s.id, kind:s.kind, rgb:s.rgb,
@@ -129,7 +129,7 @@ with sync_playwright() as pw:
           len(s["sample"]) == 4 and 0 <= s["sample"][2] <= 1,
           str([round(v, 3) for v in s["sample"]]))
 
-    print("\n=== T6  Console hygiene over the whole session ===")
+    print("\n=== T6  Console hygiene over the whole session ===", flush=True)
     check("zero console errors", not errors, str(errors[:3]))
     check("zero console warnings", not warnings, str(warnings[:3]))
 
@@ -137,5 +137,5 @@ with sync_playwright() as pw:
     pg.screenshot(path=str(ROOT / "screenshot.png"))
     b.close()
 
-print(f"\n{'='*62}\n  {sum(results)}/{len(results)} checks passed\n{'='*62}")
+print(f"\n{'='*62}\n  {sum(results)}/{len(results)} checks passed\n{'='*62}", flush=True)
 sys.exit(0 if all(results) else 1)

@@ -27,8 +27,15 @@ const KIND_ADD_LEGACY: u8 = 1;
 const KIND_REMOVE: u8 = 2;
 const KIND_ADD: u8 = 3;
 const KIND_PAGE_INSERT: u8 = 4;
+const KIND_PAGE_DELETE: u8 = 5;
+const KIND_PAGE_REORDER: u8 = 6;
+const KIND_PAGE_ROTATE: u8 = 7;
+const KIND_IMAGE_ADD: u8 = 8;
+const KIND_IMAGE_REMOVE: u8 = 9;
+const KIND_TEXT_UPSERT: u8 = 10;
+const KIND_TEXT_REMOVE: u8 = 11;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WalEntry {
     Added {
         sheet: usize,
@@ -39,6 +46,45 @@ pub enum WalEntry {
         index: usize,
         width_pt: f64,
         height_pt: f64,
+    },
+    PageDeleted {
+        index: usize,
+    },
+    PageReordered {
+        from_index: usize,
+        to_index: usize,
+    },
+    PageRotated {
+        index: usize,
+        clockwise: bool,
+    },
+    ImageAdded {
+        sheet: usize,
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        data_url: String,
+    },
+    ImageRemoved {
+        id: String,
+    },
+    TextUpsert {
+        sheet: usize,
+        id: String,
+        x: f64,
+        y: f64,
+        text: String,
+        font_size: f64,
+        color: String,
+        bold: bool,
+        italic: bool,
+        width: f64,
+        height: f64,
+    },
+    TextRemoved {
+        id: String,
     },
 }
 
@@ -92,6 +138,37 @@ impl Wal {
                 p.extend_from_slice(&width_pt.to_le_bytes());
                 p.extend_from_slice(&height_pt.to_le_bytes());
                 (KIND_PAGE_INSERT, p)
+            }
+            WalEntry::PageDeleted { index } => {
+                let mut p = Vec::with_capacity(4);
+                p.extend_from_slice(&(*index as u32).to_le_bytes());
+                (KIND_PAGE_DELETE, p)
+            }
+            WalEntry::PageReordered { from_index, to_index } => {
+                let mut p = Vec::with_capacity(8);
+                p.extend_from_slice(&(*from_index as u32).to_le_bytes());
+                p.extend_from_slice(&(*to_index as u32).to_le_bytes());
+                (KIND_PAGE_REORDER, p)
+            }
+            WalEntry::PageRotated { index, clockwise } => {
+                let mut p = Vec::with_capacity(5);
+                p.extend_from_slice(&(*index as u32).to_le_bytes());
+                p.push(if *clockwise { 1 } else { 0 });
+                (KIND_PAGE_ROTATE, p)
+            }
+            WalEntry::ImageAdded { .. }
+            | WalEntry::ImageRemoved { .. }
+            | WalEntry::TextUpsert { .. }
+            | WalEntry::TextRemoved { .. } => {
+                let kind = match entry {
+                    WalEntry::ImageAdded { .. } => KIND_IMAGE_ADD,
+                    WalEntry::ImageRemoved { .. } => KIND_IMAGE_REMOVE,
+                    WalEntry::TextUpsert { .. } => KIND_TEXT_UPSERT,
+                    WalEntry::TextRemoved { .. } => KIND_TEXT_REMOVE,
+                    _ => unreachable!(),
+                };
+                let json_bytes = serde_json::to_vec(entry).unwrap_or_default();
+                (kind, json_bytes)
             }
         };
         let mut rec = Vec::with_capacity(payload.len() + 9);
@@ -167,6 +244,25 @@ impl Wal {
                         payload[16], payload[17], payload[18], payload[19],
                     ]);
                     out.push(WalEntry::PageInserted { index, width_pt, height_pt });
+                }
+                KIND_PAGE_DELETE if len == 4 => {
+                    let index = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                    out.push(WalEntry::PageDeleted { index });
+                }
+                KIND_PAGE_REORDER if len == 8 => {
+                    let from_index = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                    let to_index = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]) as usize;
+                    out.push(WalEntry::PageReordered { from_index, to_index });
+                }
+                KIND_PAGE_ROTATE if len == 5 => {
+                    let index = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]) as usize;
+                    let clockwise = payload[4] != 0;
+                    out.push(WalEntry::PageRotated { index, clockwise });
+                }
+                KIND_IMAGE_ADD | KIND_IMAGE_REMOVE | KIND_TEXT_UPSERT | KIND_TEXT_REMOVE => {
+                    if let Ok(entry) = serde_json::from_slice::<WalEntry>(payload) {
+                        out.push(entry);
+                    }
                 }
                 _ => break,
             }

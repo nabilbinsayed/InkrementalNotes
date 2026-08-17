@@ -13,6 +13,7 @@
 
 ## Status
 
+- **Status**: DONE
 - **Priority**: P0
 - **Effort**: M
 - **Risk**: LOW

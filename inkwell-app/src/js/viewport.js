@@ -299,10 +299,6 @@ class ViewportManager {
       new ResizeObserver(() => this.updateStageRect()).observe(element);
     }
 
-    let wheelAccumX = 0;
-    let wheelAccumY = 0;
-    let wheelRaf = null;
-
     element.addEventListener('wheel', e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect;
@@ -310,6 +306,9 @@ class ViewportManager {
       const relY = e.clientY - stageRect.top;
       const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
       this.activePane = pane;
+      if (typeof window !== 'undefined' && window.state) {
+        window.state.activePane = pane;
+      }
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         const factor = e.deltaY < 0 ? 1.08 : 0.92;
@@ -317,22 +316,22 @@ class ViewportManager {
         this.setZoom(curZoom * factor, [relX, relY], pane);
       } else {
         e.preventDefault();
-        wheelAccumX -= e.deltaX;
-        wheelAccumY -= e.deltaY;
-        if (!wheelRaf) {
-          wheelRaf = requestAnimationFrame(() => {
-            wheelRaf = null;
-            const curPanX = pane === 'right' ? this.rightPanX : this.panX;
-            const curPanY = pane === 'right' ? this.rightPanY : this.panY;
-            this.setPan(curPanX + wheelAccumX, curPanY + wheelAccumY, pane);
-            wheelAccumX = 0;
-            wheelAccumY = 0;
-          });
-        }
+        const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+        const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+        this.setPan(curPanX - e.deltaX, curPanY - e.deltaY, pane);
       }
     }, { passive: false });
 
     element.addEventListener('pointerdown', e => {
+      if (!this.stageRect) this.updateStageRect();
+      const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
+      const relX = e.clientX - stageRect.left;
+      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+      this.activePane = pane;
+      if (typeof window !== 'undefined' && window.state) {
+        window.state.activePane = pane;
+      }
+
       if (e.pointerType === 'pen') {
         this.isStylusActive = true;
       }
@@ -346,22 +345,13 @@ class ViewportManager {
           const dy = pts[1].y - pts[0].y;
           this.pinchStartDist = Math.hypot(dx, dy) || 1;
           this.pinchStartMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
-          if (!this.stageRect) this.updateStageRect();
-          const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
-          const relX = this.pinchStartMid[0] - stageRect.left;
-          const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
-          this.activePane = pane;
           this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
         }
       }
       if (e.button === 1) { // middle button only
         e.preventDefault();
-        if (!this.stageRect) this.updateStageRect();
-        const stageRect = this.stageRect;
-        const relX = e.clientX - stageRect.left;
         this.isPanning = true;
         this.lastPanPt = [e.clientX, e.clientY];
-        this.activePane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
         try { element.setPointerCapture(e.pointerId); } catch (_) {}
       }
     });

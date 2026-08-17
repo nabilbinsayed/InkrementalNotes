@@ -449,6 +449,79 @@ fn wal_truncate_resets_after_a_successful_pdf_write() {
 }
 
 #[test]
+fn wal_replays_all_mutation_types_including_images_text_and_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("all_mutations.wal");
+    let mut w = Wal::open(&p).unwrap();
+
+    let stroke = synth(42, 300.0, 80, ToolKind::Highlighter);
+    w.append(&WalEntry::Added { sheet: 2, stroke: stroke.clone() }).unwrap();
+    w.append(&WalEntry::Removed(42)).unwrap();
+    w.append(&WalEntry::PageInserted { index: 1, width_pt: 612.0, height_pt: 792.0 }).unwrap();
+    w.append(&WalEntry::PageDeleted { index: 3 }).unwrap();
+    w.append(&WalEntry::PageReordered { from_index: 0, to_index: 2 }).unwrap();
+    w.append(&WalEntry::PageRotated { index: 1, clockwise: true }).unwrap();
+    w.append(&WalEntry::ImageAdded {
+        sheet: 0,
+        id: "img_test_1".to_string(),
+        x: 100.0,
+        y: 150.0,
+        width: 200.0,
+        height: 120.0,
+        data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==".to_string(),
+    }).unwrap();
+    w.append(&WalEntry::ImageRemoved { id: "img_test_1".to_string() }).unwrap();
+    w.append(&WalEntry::TextUpsert {
+        sheet: 1,
+        id: "txt_test_1".to_string(),
+        x: 50.0,
+        y: 60.0,
+        text: "Sample handwritten note".to_string(),
+        font_size: 14.0,
+        color: "#ff0000".to_string(),
+        bold: true,
+        italic: false,
+        width: 150.0,
+        height: 28.0,
+    }).unwrap();
+    w.append(&WalEntry::TextRemoved { id: "txt_test_1".to_string() }).unwrap();
+
+    let replayed = Wal::replay(&p).unwrap();
+    assert_eq!(replayed.len(), 10);
+    match &replayed[0] {
+        WalEntry::Added { sheet, stroke: s } => {
+            assert_eq!(*sheet, 2);
+            assert_eq!(s.id, 42);
+            assert_eq!(s.kind, ToolKind::Highlighter);
+        }
+        other => panic!("expected Added, got {other:?}"),
+    }
+    assert_eq!(replayed[1], WalEntry::Removed(42));
+    assert_eq!(replayed[2], WalEntry::PageInserted { index: 1, width_pt: 612.0, height_pt: 792.0 });
+    assert_eq!(replayed[3], WalEntry::PageDeleted { index: 3 });
+    assert_eq!(replayed[4], WalEntry::PageReordered { from_index: 0, to_index: 2 });
+    assert_eq!(replayed[5], WalEntry::PageRotated { index: 1, clockwise: true });
+    match &replayed[6] {
+        WalEntry::ImageAdded { id, sheet, x, .. } => {
+            assert_eq!(id, "img_test_1");
+            assert_eq!(*sheet, 0);
+            assert_eq!(*x, 100.0);
+        }
+        other => panic!("expected ImageAdded, got {other:?}"),
+    }
+    assert_eq!(replayed[7], WalEntry::ImageRemoved { id: "img_test_1".to_string() });
+    match &replayed[8] {
+        WalEntry::TextUpsert { id, text, bold, .. } => {
+            assert_eq!(id, "txt_test_1");
+            assert_eq!(text, "Sample handwritten note");
+            assert!(*bold);
+        }
+        other => panic!("expected TextUpsert, got {other:?}"),
+    }
+    assert_eq!(replayed[9], WalEntry::TextRemoved { id: "txt_test_1".to_string() });
+}
+
+#[test]
 fn missing_wal_is_not_an_error() {
     assert_eq!(Wal::replay("/nonexistent/path/x.wal").unwrap().len(), 0);
 }

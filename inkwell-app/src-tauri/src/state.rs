@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
 use std::collections::HashMap;
-use inkwell_core::{Document, tiles::TileCache, wal::WalEntry};
+use inkwell_core::{Document, wal::WalEntry};
 use std::path::PathBuf;
 use inkwell_pdf::Pdfium;
 
@@ -59,11 +59,10 @@ impl PageBitmapLruCache {
 }
 
 pub struct DocumentSession {
-    #[allow(dead_code)]
-    pub id: String,
     pub doc: Document,
     pub pdf_path: Option<PathBuf>,
     pub pdf_bytes: Option<Arc<Vec<u8>>>,
+    pub original_pdf_bytes: Option<Arc<Vec<u8>>>,
     pub wal: Option<Sender<WalOp>>,
     pub page_bitmap_cache: PageBitmapLruCache,
 }
@@ -72,8 +71,10 @@ pub struct AppState {
     pub doc: Mutex<Option<Document>>,
     pub pdf_path: Mutex<Option<PathBuf>>,
     pub pdf_bytes: Mutex<Option<Arc<Vec<u8>>>>,
-    #[allow(dead_code)]
-    pub tile_cache: Mutex<TileCache>,
+    /// Pristine bytes from the originally opened file. Never mutated by save
+    /// cycles. Used as the base for image embedding to prevent compounding
+    /// duplicate image objects across repeated saves.
+    pub original_pdf_bytes: Mutex<Option<Arc<Vec<u8>>>>,
     pub wal: Mutex<Option<Sender<WalOp>>>,
     /// Cached PDFium instance — initialized once at startup.
     /// All commands borrow this instead of calling init_pdfium() per call.
@@ -92,7 +93,7 @@ impl Default for AppState {
             doc: Mutex::new(None),
             pdf_path: Mutex::new(None),
             pdf_bytes: Mutex::new(None),
-            tile_cache: Mutex::new(TileCache::new(256 * 1024 * 1024)), // 256 MB budget
+            original_pdf_bytes: Mutex::new(None),
             wal: Mutex::new(None),
             pdfium: Mutex::new(None),
             page_bitmap_cache: Mutex::new(PageBitmapLruCache::new(8)),

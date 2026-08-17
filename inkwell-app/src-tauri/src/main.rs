@@ -72,6 +72,8 @@ fn main() {
             commands::duplicate_page,
             commands::rotate_page,
             commands::reorder_page,
+            commands::journal_image_mutation,
+            commands::journal_text_mutation,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

@@ -219,62 +219,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Settings Drawer View -->
-    <div id="drawerSettings" class="drawer-content hidden">
-      <div id="settingsPanel" class="settings-panel">
-        <div class="drawer-section-heading">Render & Calibration</div>
-
-        <!-- Coalesced Switch Card -->
-        <div class="settings-card">
-          <label class="setting-toggle-row" for="cCoalesced">
-            <div class="toggle-text">
-              <span class="setting-title">Pointer Coalescing</span>
-              <span class="setting-desc">Smooths stylus polling on high-refresh screens</span>
-            </div>
-            <div class="custom-toggle">
-              <input type="checkbox" id="cCoalesced" checked>
-              <span class="toggle-slider"></span>
-            </div>
-          </label>
-        </div>
-
-        <!-- Stroke Width Card -->
-        <div class="settings-card">
-          <div class="setting-header-row">
-            <span class="setting-title">Stroke Width</span>
-            <span id="widthVal" class="setting-value-badge">1.6 pt</span>
-          </div>
-          <div class="range-slider-wrap">
-            <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6" class="custom-range-slider">
-          </div>
-          <div class="slider-marks">
-            <span>0.5 pt</span>
-            <span>8 pt</span>
-            <span>16 pt</span>
-          </div>
-        </div>
-
-        <!-- Ink Color Card -->
-        <div class="settings-card">
-          <div class="setting-header-row">
-            <span class="setting-title">Ink Color Palette</span>
-            <label class="custom-color-btn" title="Pick custom HEX color">
-              <input type="color" id="colorPicker" value="#141724">
-              <span class="color-picker-icon">🎨</span>
-            </label>
-          </div>
-          <div class="setting-color-grid">
-            <button class="settings-color-swatch active" data-color="#141724" style="background:#141724;" title="Carbon Black"></button>
-            <button class="settings-color-swatch" data-color="#1e40af" style="background:#1e40af;" title="Oxford Blue"></button>
-            <button class="settings-color-swatch" data-color="#b91c1c" style="background:#b91c1c;" title="Crimson Red"></button>
-            <button class="settings-color-swatch" data-color="#047857" style="background:#047857;" title="Forest Green"></button>
-            <button class="settings-color-swatch" data-color="#7c3aed" style="background:#7c3aed;" title="Royal Purple"></button>
-            <button class="settings-color-swatch" data-color="#b45309" style="background:#b45309;" title="Amber Brown"></button>
-          </div>
-        </div>
-      </div>
-    </div>
   </aside>
 
   <!-- 3. Main Application Stage & Header Area -->
@@ -449,29 +393,6 @@
           </button>
         </div>
         <textarea id="inlineTextInput" class="inline-text-input" placeholder="Type text here..." rows="1"></textarea>
-      </div>
-
-      <!-- Split View Divider Overlay -->
-      <div id="splitDivider" class="split-divider hidden"></div>
-
-      <!-- Tool Property Popover -->
-      <div id="propPopover" class="popover hidden">
-        <div class="popover-title">Tool Properties</div>
-        <div class="popover-row">
-          <label for="popoverWidthSlider">Stroke Width</label>
-          <input type="range" id="popoverWidthSlider" min="0.5" max="16" step="0.1" value="1.6" aria-label="Stroke width slider">
-          <span id="popoverWidthVal">1.6 pt</span>
-        </div>
-        <div class="popover-row">
-          <label>Presets</label>
-          <div class="color-swatches">
-            <button class="swatch active" data-color="#141724" style="background:#141724" aria-label="Color black"></button>
-            <button class="swatch" data-color="#dc2626" style="background:#dc2626" aria-label="Color red"></button>
-            <button class="swatch" data-color="#2563eb" style="background:#2563eb" aria-label="Color blue"></button>
-            <button class="swatch" data-color="#16a34a" style="background:#16a34a" aria-label="Color green"></button>
-            <button class="swatch" data-color="#ca8a04" style="background:#ca8a04" aria-label="Color yellow"></button>
-          </div>
-        </div>
       </div>
 
       <!-- Page navigation hidden elements for test compatibility -->
@@ -665,10 +586,77 @@
           <span class="dock-shortcut">C</span>
         </button>
 
-        <button id="btnDockStylusOptions" class="dock-btn" title="Settings & Calibration Drawer (S)" aria-label="Settings drawer">
+        <button id="btnDockStylusOptions" class="dock-btn" title="Preferences & Settings (S / Ctrl+,)" aria-label="Preferences">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span class="dock-shortcut">S</span>
         </button>
+      </div>
+
+      <!-- Tool Property Popover (Studio Glassmorphic Inspector) -->
+      <div id="propPopover" class="popover tool-inspector-popover hidden" role="dialog" aria-label="Tool Properties">
+        <div class="inspector-header">
+          <div class="inspector-title-wrap">
+            <span id="popoverToolIcon" class="inspector-tool-badge">🖊️</span>
+            <span id="popoverToolTitle" class="inspector-title">Pen Properties</span>
+          </div>
+          <button id="btnClosePropPopover" class="inspector-close-btn" title="Close" aria-label="Close properties">✕</button>
+        </div>
+
+        <!-- Dynamic Live Stroke Preview Canvas -->
+        <div id="popoverStrokePreviewWrap" class="inspector-preview-wrap">
+          <canvas id="strokePreviewCanvas" width="260" height="32"></canvas>
+        </div>
+
+        <!-- Width Preset Pills & Precision Range Slider -->
+        <div class="inspector-section">
+          <div class="inspector-row-header">
+            <span class="inspector-label">Stroke Width</span>
+            <span id="popoverWidthVal" class="inspector-val-badge">1.6 pt</span>
+          </div>
+          <div class="width-presets-row">
+            <button type="button" class="btn-width-preset" data-width="1.0" title="Fine (1.0 pt)">
+              <span class="preset-dot" style="width: 4px; height: 4px;"></span>
+              <span>1.0 pt</span>
+            </button>
+            <button type="button" class="btn-width-preset active" data-width="1.6" title="Normal (1.6 pt)">
+              <span class="preset-dot" style="width: 6px; height: 6px;"></span>
+              <span>1.6 pt</span>
+            </button>
+            <button type="button" class="btn-width-preset" data-width="3.2" title="Medium (3.2 pt)">
+              <span class="preset-dot" style="width: 8px; height: 8px;"></span>
+              <span>3.2 pt</span>
+            </button>
+            <button type="button" class="btn-width-preset" data-width="6.0" title="Bold (6.0 pt)">
+              <span class="preset-dot" style="width: 11px; height: 11px;"></span>
+              <span>6.0 pt</span>
+            </button>
+          </div>
+          <div class="inspector-slider-wrap">
+            <input type="range" id="popoverWidthSlider" min="0.5" max="16" step="0.1" value="1.6" class="custom-range-slider" aria-label="Stroke width slider">
+          </div>
+        </div>
+
+        <!-- Color Palette (Clean 2x4 Grid with active indicators + Custom HEX Picker) -->
+        <div class="inspector-section" id="popoverColorSection">
+          <div class="inspector-row-header">
+            <span class="inspector-label">Color Palette</span>
+            <label class="custom-color-picker-label" title="Custom color picker">
+              <input type="color" id="popoverCustomColorPicker" value="#141724">
+              <span class="custom-picker-dot"></span>
+              <span>Custom</span>
+            </label>
+          </div>
+          <div class="color-swatches-grid">
+            <button type="button" class="swatch active" data-color="#141724" style="background:#141724;" title="Carbon Black" aria-label="Carbon Black"></button>
+            <button type="button" class="swatch" data-color="#1e40af" style="background:#1e40af;" title="Oxford Blue" aria-label="Oxford Blue"></button>
+            <button type="button" class="swatch" data-color="#dc2626" style="background:#dc2626;" title="Crimson Red" aria-label="Crimson Red"></button>
+            <button type="button" class="swatch" data-color="#16a34a" style="background:#16a34a;" title="Emerald Green" aria-label="Emerald Green"></button>
+            <button type="button" class="swatch" data-color="#7c3aed" style="background:#7c3aed;" title="Royal Purple" aria-label="Royal Purple"></button>
+            <button type="button" class="swatch" data-color="#d97706" style="background:#d97706;" title="Amber Gold" aria-label="Amber Gold"></button>
+            <button type="button" class="swatch" data-color="#e11d48" style="background:#e11d48;" title="Rose Pink" aria-label="Rose Pink"></button>
+            <button type="button" class="swatch" data-color="#0d9488" style="background:#0d9488;" title="Teal Cyan" aria-label="Teal Cyan"></button>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -969,6 +957,217 @@
       <span id="saveProgressMsg" class="save-progress-msg">Writing vector ink layers...</span>
     </div>
   </div>
+</div>
+
+<!-- Settings & Preferences Centered Window Modal -->
+<div id="settingsModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-label="Preferences">
+  <div class="settings-window">
+    <div class="settings-window-header">
+      <div class="settings-header-left">
+        <div class="settings-window-icon">⚙️</div>
+        <div class="settings-window-titles">
+          <h3 class="settings-window-title">Preferences</h3>
+          <span class="settings-window-subtitle">Inkwell Studio Configuration</span>
+        </div>
+      </div>
+      <button id="btnCloseSettingsModal" class="settings-close-btn" title="Close (Esc)" aria-label="Close settings">✕</button>
+    </div>
+
+    <div class="settings-window-body">
+      <!-- Left Tab Navigation Rail -->
+      <nav class="settings-nav-sidebar" aria-label="Settings categories">
+        <button type="button" class="settings-nav-item active" data-tab="tabInking">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18z"/></svg>
+          <span>Stylus & Inking</span>
+        </button>
+        <button type="button" class="settings-nav-item" data-tab="tabAutosave">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+          <span>Autosave & Durability</span>
+        </button>
+        <button type="button" class="settings-nav-item" data-tab="tabDefaults">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>Page Defaults</span>
+        </button>
+        <button type="button" class="settings-nav-item" data-tab="tabPerformance">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>Engine & View</span>
+        </button>
+        <button type="button" class="settings-nav-item" data-tab="tabShortcuts">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/></svg>
+          <span>Shortcuts & About</span>
+        </button>
+      </nav>
+
+      <!-- Right Content Panels -->
+      <div class="settings-content-area">
+        <!-- Tab 1: Stylus & Inking -->
+        <div id="tabInking" class="settings-tab-panel active">
+          <div class="settings-tab-heading">Stylus & Input Calibration</div>
+
+          <div class="settings-group">
+            <div class="settings-card">
+              <label class="setting-toggle-row" for="cCoalesced">
+                <div class="toggle-text">
+                  <span class="setting-title">Pointer Coalescing</span>
+                  <span class="setting-desc">Smooths stylus polling rate on 120Hz/144Hz displays for lowest input jitter</span>
+                </div>
+                <div class="custom-toggle">
+                  <input type="checkbox" id="cCoalesced" checked>
+                  <span class="toggle-slider"></span>
+                </div>
+              </label>
+            </div>
+
+            <div class="settings-card">
+              <div class="setting-toggle-row">
+                <div class="toggle-text">
+                  <span class="setting-title">Multi-Touch Gestures</span>
+                  <span class="setting-desc">2-finger tap for Undo • 3-finger tap for Redo • 2-finger pinch to Zoom</span>
+                </div>
+                <span class="diag-badge green">Enabled</span>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="setting-toggle-row">
+                <div class="toggle-text">
+                  <span class="setting-title">Stylus Hardware Filtering</span>
+                  <span class="setting-desc">1€ Filter + Warmup spike suppression active</span>
+                </div>
+                <span class="diag-badge green">Pure Vector</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Autosave & Durability -->
+        <div id="tabAutosave" class="settings-tab-panel hidden">
+          <div class="settings-tab-heading">Autosave & Crash Durability</div>
+
+          <div class="settings-group">
+            <div class="settings-card">
+              <div class="setting-header-row">
+                <div class="toggle-text">
+                  <span class="setting-title">Autosave After Delay</span>
+                  <span class="setting-desc">Automatically saves document changes to disk after drawing stops</span>
+                </div>
+              </div>
+              <div class="setting-select-wrap" style="margin-top: 10px;">
+                <select id="selectAutosaveDelay" class="custom-select settings-select">
+                  <option value="0" selected>Off (Manual Ctrl+S only)</option>
+                  <option value="500">After 500 ms</option>
+                  <option value="1000">After 1 second</option>
+                  <option value="2000">After 2 seconds</option>
+                  <option value="5000">After 5 seconds</option>
+                  <option value="10000">After 10 seconds</option>
+                  <option value="30000">After 30 seconds</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="diag-row" style="margin: 0; padding: 0;">
+                <div class="toggle-text">
+                  <span class="setting-title">WAL Crash Durability Engine</span>
+                  <span class="setting-desc">Every stroke is fsynced to the system temp directory immediately. Zero data loss on unexpected shutdown.</span>
+                </div>
+                <span class="diag-badge green">Fsynced (0ms)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Page Defaults -->
+        <div id="tabDefaults" class="settings-tab-panel hidden">
+          <div class="settings-tab-heading">Document Defaults & Templates</div>
+
+          <div class="settings-group">
+            <div class="settings-card">
+              <div class="setting-header-row">
+                <div class="toggle-text">
+                  <span class="setting-title">Default Template for New Pages</span>
+                  <span class="setting-desc">Pattern applied when inserting blank pages or opening whiteboard</span>
+                </div>
+              </div>
+              <div class="setting-select-wrap" style="margin-top: 10px;">
+                <select id="selectDefaultTemplate" class="custom-select settings-select">
+                  <option value="blank" selected>Blank White Paper</option>
+                  <option value="ruled">Ruled Lines (College Ruled)</option>
+                  <option value="grid">Engineering Grid (5mm)</option>
+                  <option value="dot">Dot Matrix (5mm Grid)</option>
+                  <option value="dark">Dark Slate Mode</option>
+                  <option value="cornell">Cornell Notes Layout</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Engine & Performance -->
+        <div id="tabPerformance" class="settings-tab-panel hidden">
+          <div class="settings-tab-heading">Engine & Viewport Configuration</div>
+
+          <div class="settings-group">
+            <div class="settings-card">
+              <div class="setting-toggle-row">
+                <div class="toggle-text">
+                  <span class="setting-title">PDF Rendering Backend</span>
+                  <span class="setting-desc">Vector on-demand LOD tile pyramid via PDFium GPU pipeline</span>
+                </div>
+                <span class="diag-badge green">PDFium Vector</span>
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="setting-toggle-row">
+                <div class="toggle-text">
+                  <span class="setting-title">Incremental Appending</span>
+                  <span class="setting-desc">Preserves original PDF bytes without compounding size inflation</span>
+                </div>
+                <span class="diag-badge green">Active</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 5: Shortcuts & About -->
+        <div id="tabShortcuts" class="settings-tab-panel hidden">
+          <div class="settings-tab-heading">Keyboard Shortcuts & Version</div>
+
+          <div class="settings-shortcuts-table-wrap">
+            <table class="settings-shortcuts-table">
+              <tbody>
+                <tr><td><kbd>P</kbd></td><td>Pen Tool</td><td><kbd>Ctrl</kbd> + <kbd>S</kbd></td><td>Save PDF</td></tr>
+                <tr><td><kbd>M</kbd></td><td>Highlighter Tool</td><td><kbd>Ctrl</kbd> + <kbd>Z</kbd></td><td>Undo</td></tr>
+                <tr><td><kbd>E</kbd></td><td>Eraser Tool</td><td><kbd>Ctrl</kbd> + <kbd>Y</kbd></td><td>Redo</td></tr>
+                <tr><td><kbd>H</kbd></td><td>Pan / Hand Tool</td><td><kbd>Ctrl</kbd> + <kbd>O</kbd></td><td>Open PDF</td></tr>
+                <tr><td><kbd>V</kbd></td><td>Lasso Select</td><td><kbd>Ctrl</kbd> + <kbd>N</kbd></td><td>New Note</td></tr>
+                <tr><td><kbd>T</kbd></td><td>Text Annotation</td><td><kbd>Ctrl</kbd> + <kbd>,</kbd></td><td>Preferences</td></tr>
+                <tr><td><kbd>U</kbd></td><td>Shape Tool</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>P</kbd></td><td>Command Palette</td></tr>
+                <tr><td><kbd>C</kbd></td><td>Tool Properties</td><td><kbd>F11</kbd></td><td>Fullscreen</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="settings-card" style="margin-top: 14px;">
+            <div class="setting-toggle-row">
+              <div class="toggle-text">
+                <span class="setting-title">Inkwell Desktop</span>
+                <span class="setting-desc">Version 0.1.0 • Pure Rust Core + Tauri v2 Desktop Host</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hidden compat elements for backward compatibility -->
+<div style="display:none;">
+  <input type="range" id="widthSlider" min="0.5" max="16" step="0.1" value="1.6">
+  <span id="widthVal">1.6 pt</span>
+  <input type="color" id="colorPicker" value="#141724">
 </div>
 
 <!-- Toast Container -->

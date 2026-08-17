@@ -29,15 +29,31 @@ fn init_wal_worker(wal: Wal) -> std::sync::mpsc::Sender<WalOp> {
     tx
 }
 
+fn hash_bytes_fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+fn parse_stroke_id(s: &str) -> u128 {
+    let s_clean = s.trim_start_matches("0x");
+    if s_clean.len() == 32 {
+        u128::from_str_radix(s_clean, 16).unwrap_or(0)
+    } else {
+        s.parse::<u128>().or_else(|_| u128::from_str_radix(s_clean, 16)).unwrap_or_else(|_| {
+            hash_bytes_fnv1a(s.as_bytes()) as u128
+        })
+    }
+}
+
 /// Derive a temp-dir WAL path for `doc_path` that stays out of the synced
 /// folder. Key = hex-encoded FNV-1a of the canonical path bytes.
 fn wal_path_for(doc_path: &Path) -> PathBuf {
     let s = doc_path.to_string_lossy();
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in s.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
+    let h = hash_bytes_fnv1a(s.as_bytes());
     std::env::temp_dir().join(format!("inkwell-wal-{:016x}.bin", h))
 }
 
@@ -68,12 +84,42 @@ pub struct FrontendStroke {
     pub deleted: bool,
 }
 
-/// Result of opening a PDF: page dimensions plus recovered/loaded strokes and outline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontendImage {
+    pub id: String,
+    pub sheet: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrontendText {
+    pub id: String,
+    pub sheet: usize,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    pub font_size: f64,
+    pub color: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Result of opening a PDF: page dimensions plus recovered/loaded strokes, images, texts and outline.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenPdfResult {
     pub page_infos: Vec<PageInfo>,
     pub recovered_strokes: usize,
+    pub recovered_images: usize,
+    pub recovered_texts: usize,
     pub loaded_strokes: Vec<FrontendStroke>,
+    pub loaded_images: Vec<FrontendImage>,
+    pub loaded_texts: Vec<FrontendText>,
     pub outline: Vec<inkwell_pdf::TocItem>,
 }
 
@@ -179,6 +225,71 @@ pub async fn open_pdf_dialog(window: tauri::Window, state: State<'_, AppState>) 
     }
 }
 
+fn replay_wal_journal(
+    path: &Path,
+    doc: &mut Document,
+) -> (usize, usize, usize, Vec<FrontendImage>, Vec<FrontendText>) {
+    let wp = wal_path_for(path);
+    let mut recovered_strokes = 0usize;
+    let mut recovered_images = 0usize;
+    let mut recovered_texts = 0usize;
+    let mut images_map: std::collections::HashMap<String, FrontendImage> = std::collections::HashMap::new();
+    let mut texts_map: std::collections::HashMap<String, FrontendText> = std::collections::HashMap::new();
+
+    if let Ok(entries) = Wal::replay(&wp) {
+        if !entries.is_empty() {
+            eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
+            for entry in entries {
+                match entry {
+                    WalEntry::Added { sheet, stroke } => {
+                        doc.push_stroke(sheet, stroke);
+                        recovered_strokes += 1;
+                    }
+                    WalEntry::Removed(id) => {
+                        doc.remove_stroke(id);
+                    }
+                    WalEntry::PageInserted { index, .. } => {
+                        doc.insert_sheet(index);
+                    }
+                    WalEntry::PageDeleted { index } => {
+                        if index < doc.sheets.len() && doc.sheets.len() > 1 {
+                            doc.sheets.remove(index);
+                        }
+                    }
+                    WalEntry::PageReordered { from_index, to_index } => {
+                        if from_index < doc.sheets.len() && to_index < doc.sheets.len() && from_index != to_index {
+                            let sheet = doc.sheets.remove(from_index);
+                            doc.sheets.insert(to_index, sheet);
+                        }
+                    }
+                    WalEntry::PageRotated { .. } => {}
+                    WalEntry::ImageAdded { sheet, id, x, y, width, height, data_url } => {
+                        images_map.insert(id.clone(), FrontendImage { id, sheet, x, y, width, height, data_url });
+                        recovered_images += 1;
+                    }
+                    WalEntry::ImageRemoved { id } => {
+                        images_map.remove(&id);
+                    }
+                    WalEntry::TextUpsert { sheet, id, x, y, text, font_size, color, bold, italic, width, height } => {
+                        texts_map.insert(id.clone(), FrontendText { id, sheet, x, y, text, font_size, color, bold, italic, width, height });
+                        recovered_texts += 1;
+                    }
+                    WalEntry::TextRemoved { id } => {
+                        texts_map.remove(&id);
+                    }
+                }
+            }
+        }
+    }
+    (
+        recovered_strokes,
+        recovered_images,
+        recovered_texts,
+        images_map.into_values().collect(),
+        texts_map.into_values().collect(),
+    )
+}
+
 #[tauri::command]
 pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<OpenPdfResult, String> {
     let path = PathBuf::from(&path_str);
@@ -201,29 +312,19 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     };
 
     // Replay WAL entries if journal exists from a previous crash
-    let wp = wal_path_for(&path);
-    let mut recovered_strokes = 0usize;
-    if let Ok(entries) = Wal::replay(&wp) {
-        if !entries.is_empty() {
-            eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
-            for entry in entries {
-                match entry {
-                    WalEntry::Added { sheet, stroke } => { doc.push_stroke(sheet, stroke); recovered_strokes += 1; }
-                    WalEntry::Removed(id) => { doc.remove_stroke(id); }
-                    WalEntry::PageInserted { index, .. } => { doc.insert_sheet(index); }
-                }
-            }
-        }
-    }
+    let (recovered_strokes, recovered_images, recovered_texts, loaded_images, loaded_texts) =
+        replay_wal_journal(&path, &mut doc);
 
     let loaded_strokes = extract_frontend_strokes(&doc);
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
-    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes.clone());
+    *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
     state.page_bitmap_cache.lock().unwrap().clear();
 
     // Open WAL in temp dir (not the synced folder).
+    let wp = wal_path_for(&path);
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
         let _ = old_tx.send(WalOp::Close);
     }
@@ -235,8 +336,17 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF: {:?} — {} pages, {} loaded strokes, {} outline nodes", path, n_pages, loaded_strokes.len(), outline.len());
-    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes, outline })
+    eprintln!("[inkwell] Opened PDF: {:?} — {} pages, {} loaded strokes, {} loaded images, {} loaded texts, {} outline nodes", path, n_pages, loaded_strokes.len(), loaded_images.len(), loaded_texts.len(), outline.len());
+    Ok(OpenPdfResult {
+        page_infos,
+        recovered_strokes,
+        recovered_images,
+        recovered_texts,
+        loaded_strokes,
+        loaded_images,
+        loaded_texts,
+        outline,
+    })
 }
 
 #[tauri::command]
@@ -278,8 +388,7 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     // Derive a stable temp-file name from the content so different PDFs that
     // happen to share a file name get distinct WAL journals (and re-opening the
     // same dropped file still recovers its crash journal).
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes.iter().take(8192) { h ^= *b as u64; h = h.wrapping_mul(0x0000_0100_0000_01b3); }
+    let h = hash_bytes_fnv1a(&bytes[..bytes.len().min(8192)]);
     let clean_name = Path::new(&name)
         .file_name()
         .and_then(|n| n.to_str())
@@ -305,28 +414,18 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         _ => Document::for_pdf(n_pages),
     };
 
-    let wp = wal_path_for(&path);
-    let mut recovered_strokes = 0usize;
-    if let Ok(entries) = Wal::replay(&wp) {
-        if !entries.is_empty() {
-            eprintln!("[inkwell] Replaying {} WAL entries for {:?}", entries.len(), path);
-            for entry in entries {
-                match entry {
-                    WalEntry::Added { sheet, stroke } => { doc.push_stroke(sheet, stroke); recovered_strokes += 1; }
-                    WalEntry::Removed(id) => { doc.remove_stroke(id); }
-                    WalEntry::PageInserted { index, .. } => { doc.insert_sheet(index); }
-                }
-            }
-        }
-    }
+    let (recovered_strokes, recovered_images, recovered_texts, loaded_images, loaded_texts) =
+        replay_wal_journal(&path, &mut doc);
 
     let loaded_strokes = extract_frontend_strokes(&doc);
 
     *state.doc.lock().unwrap() = Some(doc);
     *state.pdf_path.lock().unwrap() = Some(path.clone());
-    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes);
+    *state.pdf_bytes.lock().unwrap() = Some(arc_bytes.clone());
+    *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
     state.page_bitmap_cache.lock().unwrap().clear();
 
+    let wp = wal_path_for(&path);
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
         let _ = old_tx.send(WalOp::Close);
     }
@@ -338,8 +437,17 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         Err(e) => { eprintln!("[inkwell] WAL init failed ({wp:?}): {e}"); }
     }
 
-    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages, {} loaded strokes, {} outline nodes", name, n_pages, loaded_strokes.len(), outline.len());
-    Ok(OpenPdfResult { page_infos, recovered_strokes, loaded_strokes, outline })
+    eprintln!("[inkwell] Opened PDF bytes: {:?} — {} pages, {} loaded strokes, {} loaded images, {} loaded texts, {} outline nodes", name, n_pages, loaded_strokes.len(), loaded_images.len(), loaded_texts.len(), outline.len());
+    Ok(OpenPdfResult {
+        page_infos,
+        recovered_strokes,
+        recovered_images,
+        recovered_texts,
+        loaded_strokes,
+        loaded_images,
+        loaded_texts,
+        outline,
+    })
 }
 
 #[tauri::command]
@@ -535,18 +643,7 @@ pub async fn commit_stroke(
 }
 
 fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
-    let id = if fs.id.starts_with("0x") || fs.id.len() == 32 {
-        u128::from_str_radix(fs.id.trim_start_matches("0x"), 16).unwrap_or(0)
-    } else {
-        fs.id.parse::<u128>().or_else(|_| u128::from_str_radix(&fs.id, 16)).unwrap_or_else(|_| {
-            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            for b in fs.id.as_bytes() {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-            h as u128
-        })
-    };
+    let id = parse_stroke_id(&fs.id);
     let kind = match fs.kind.as_str() {
         "highlighter" => ToolKind::Highlighter,
         _ => ToolKind::Pen,
@@ -577,18 +674,7 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
-    let id = if stroke_id_str.starts_with("0x") || stroke_id_str.len() == 32 {
-        u128::from_str_radix(stroke_id_str.trim_start_matches("0x"), 16).unwrap_or(0)
-    } else {
-        stroke_id_str.parse::<u128>().or_else(|_| u128::from_str_radix(&stroke_id_str, 16)).unwrap_or_else(|_| {
-            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            for b in stroke_id_str.as_bytes() {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-            h as u128
-        })
-    };
+    let id = parse_stroke_id(&stroke_id_str);
     let removed = doc.remove_stroke(id);
     if removed {
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
@@ -596,6 +682,68 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
         }
     }
     Ok(removed)
+}
+
+#[tauri::command]
+pub async fn journal_image_mutation(
+    op: String,
+    image: Option<FrontendImage>,
+    image_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        if op == "add" || op == "upsert" {
+            if let Some(img) = image {
+                let _ = tx.send(WalOp::Append(WalEntry::ImageAdded {
+                    sheet: img.sheet,
+                    id: img.id,
+                    x: img.x,
+                    y: img.y,
+                    width: img.width,
+                    height: img.height,
+                    data_url: img.data_url,
+                }));
+            }
+        } else if op == "remove" || op == "delete" {
+            if let Some(id) = image_id {
+                let _ = tx.send(WalOp::Append(WalEntry::ImageRemoved { id }));
+            }
+        }
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn journal_text_mutation(
+    op: String,
+    text: Option<FrontendText>,
+    text_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        if op == "add" || op == "upsert" {
+            if let Some(t) = text {
+                let _ = tx.send(WalOp::Append(WalEntry::TextUpsert {
+                    sheet: t.sheet,
+                    id: t.id,
+                    x: t.x,
+                    y: t.y,
+                    text: t.text,
+                    font_size: t.font_size,
+                    color: t.color,
+                    bold: t.bold,
+                    italic: t.italic,
+                    width: t.width,
+                    height: t.height,
+                }));
+            }
+        } else if op == "remove" || op == "delete" {
+            if let Some(id) = text_id {
+                let _ = tx.send(WalOp::Append(WalEntry::TextRemoved { id }));
+            }
+        }
+    }
+    Ok(true)
 }
 
 #[tauri::command]
@@ -633,8 +781,10 @@ pub async fn save_pdf(
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
-    let bytes_guard = state.pdf_bytes.lock().unwrap();
-    let input_bytes = bytes_guard.as_ref().ok_or("No PDF loaded")?;
+    // Use the original pristine PDF bytes as the base for image embedding.
+    // This prevents compounding duplicate image objects across save cycles.
+    let orig_guard = state.original_pdf_bytes.lock().unwrap();
+    let original_bytes = orig_guard.as_ref().ok_or("No original PDF loaded")?;
 
     let target_path = if let Some(p) = out_path_str {
         let path = PathBuf::from(&p);
@@ -658,18 +808,20 @@ pub async fn save_pdf(
         state.pdf_path.lock().map_err(|e| format!("Lock error: {e}"))?.clone().ok_or("No target file path")?
     };
 
-    // 1. If images were provided, embed them into the base PDF using PDFium
+    // 1. If images were provided, embed them into the ORIGINAL base PDF using PDFium.
+    //    We always start from original_pdf_bytes to avoid re-embedding images
+    //    from previous save cycles.
     let base_with_images = if let Some(ref img_list) = images {
         if !img_list.is_empty() {
             let pdfium_guard = state.pdfium.lock().unwrap();
             let pdfium = pdfium_guard.as_ref().ok_or("PDFium is unavailable for image embedding")?;
-            inkwell_pdf::embed_images_in_pdf(pdfium, input_bytes, img_list)
+            inkwell_pdf::embed_images_in_pdf(pdfium, original_bytes, img_list)
                 .map_err(|e| format!("Failed to embed images in PDF: {e:?}"))?
         } else {
-            input_bytes.to_vec()
+            original_bytes.to_vec()
         }
     } else {
-        input_bytes.to_vec()
+        original_bytes.to_vec()
     };
 
     // 2. Open PDF and append vector ink layers
@@ -697,7 +849,7 @@ pub async fn save_pdf(
         .map_err(|e| format!("Failed atomic save to {:?}: {e}", target_path))?;
 
     // Update in-memory state with the written PDF bytes
-    drop(bytes_guard);
+    drop(orig_guard);
     drop(doc_guard);
     *state.pdf_bytes.lock().unwrap() = Some(Arc::new(final_bytes));
     *state.pdf_path.lock().unwrap() = Some(target_path.clone());
@@ -823,7 +975,8 @@ pub async fn insert_blank_page(
         ).map_err(|e| format!("PDFium create_page_at_index failed: {e:?}"))?;
         let new_bytes = pdf_doc.save_to_bytes()
             .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+        *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+        *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
@@ -967,6 +1120,7 @@ pub async fn switch_document_session(
             }
             session.pdf_path = state.pdf_path.lock().unwrap().clone();
             session.pdf_bytes = state.pdf_bytes.lock().unwrap().clone();
+            session.original_pdf_bytes = state.original_pdf_bytes.lock().unwrap().clone();
             session.wal = state.wal.lock().unwrap().take();
             std::mem::swap(&mut session.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
         }
@@ -976,6 +1130,7 @@ pub async fn switch_document_session(
         *state.doc.lock().unwrap() = Some(target.doc.clone());
         *state.pdf_path.lock().unwrap() = target.pdf_path.clone();
         *state.pdf_bytes.lock().unwrap() = target.pdf_bytes.clone();
+        *state.original_pdf_bytes.lock().unwrap() = target.original_pdf_bytes.clone();
         *state.wal.lock().unwrap() = target.wal.take();
         std::mem::swap(&mut target.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
         *active_id_guard = Some(session_id);
@@ -1047,11 +1202,17 @@ pub async fn delete_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
         }
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::PageDeleted { index }));
+    }
+
     Ok(true)
 }
 
@@ -1092,11 +1253,21 @@ pub async fn duplicate_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
         }
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::PageInserted {
+            index: target_idx,
+            width_pt: out_w,
+            height_pt: out_h,
+        }));
+    }
+
     Ok(PageInfo {
         page_index: target_idx,
         width_pt: out_w,
@@ -1132,11 +1303,17 @@ pub async fn rotate_page(
             }
             let new_bytes = pdf_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
         }
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::PageRotated { index, clockwise }));
+    }
+
     Ok(PageInfo {
         page_index: index,
         width_pt: out_w,
@@ -1183,11 +1360,17 @@ pub async fn reorder_page(
 
             let new_bytes = dest_doc.save_to_bytes()
                 .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
-            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes.clone()));
+            *state.original_pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
         }
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+
+    if let Some(tx) = state.wal.lock().unwrap().as_ref() {
+        let _ = tx.send(WalOp::Append(WalEntry::PageReordered { from_index, to_index }));
+    }
+
     Ok(true)
 }
 
