@@ -406,7 +406,8 @@ pub async fn render_tile(
                 let config = PdfRenderConfig::new()
                     .set_target_width(target_w)
                     .set_maximum_height(target_h)
-                    .set_clear_color(PdfColor::WHITE);
+                    .set_clear_color(PdfColor::WHITE)
+                    .render_annotations(false);
 
                 let bitmap = page_obj.render_with_config(&config).map_err(|e| {
                     format!("PDFium failed to render page {page}: {e:?}")
@@ -533,12 +534,61 @@ pub async fn commit_stroke(
     Ok(stroke_id.to_string())
 }
 
+fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
+    let id = if fs.id.starts_with("0x") || fs.id.len() == 32 {
+        u128::from_str_radix(fs.id.trim_start_matches("0x"), 16).unwrap_or(0)
+    } else {
+        fs.id.parse::<u128>().or_else(|_| u128::from_str_radix(&fs.id, 16)).unwrap_or_else(|_| {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in fs.id.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h as u128
+        })
+    };
+    let kind = match fs.kind.as_str() {
+        "highlighter" => ToolKind::Highlighter,
+        _ => ToolKind::Pen,
+    };
+    let brush = Brush {
+        base_width: fs.base_width,
+        gamma: 1.0,
+        min_ratio: if kind == ToolKind::Highlighter { 1.0 } else { 0.22 },
+    };
+    let samples = fs.points.iter().map(|p| Sample {
+        x: p.x,
+        y: p.y,
+        p: p.p,
+        t: p.t,
+    }).collect();
+
+    Some(Stroke {
+        id,
+        kind,
+        rgb: fs.rgb,
+        brush,
+        samples,
+    })
+}
+
 #[tauri::command]
 pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) -> Result<bool, String> {
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
 
-    let id = stroke_id_str.parse::<u128>().map_err(|e| e.to_string())?;
+    let id = if stroke_id_str.starts_with("0x") || stroke_id_str.len() == 32 {
+        u128::from_str_radix(stroke_id_str.trim_start_matches("0x"), 16).unwrap_or(0)
+    } else {
+        stroke_id_str.parse::<u128>().or_else(|_| u128::from_str_radix(&stroke_id_str, 16)).unwrap_or_else(|_| {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in stroke_id_str.as_bytes() {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h as u128
+        })
+    };
     let removed = doc.remove_stroke(id);
     if removed {
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
@@ -552,8 +602,34 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
 pub async fn save_pdf(
     out_path_str: Option<String>,
     images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
+    strokes: Option<Vec<FrontendStroke>>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    // If frontend provided the active stroke list, sync doc state completely
+    if let Some(ref stroke_list) = strokes {
+        let mut doc_guard = state.doc.lock().unwrap();
+        if let Some(doc) = doc_guard.as_mut() {
+            for sheet in &mut doc.sheets {
+                for layer in &mut sheet.layers {
+                    layer.strokes.clear();
+                }
+            }
+            for fs in stroke_list {
+                if !fs.deleted {
+                    if let Some(core_stroke) = frontend_stroke_to_core(fs) {
+                        while doc.sheets.len() <= fs.sheet {
+                            doc.sheets.push(inkwell_core::doc::Sheet::bounded(doc.sheets.len()));
+                        }
+                        if doc.sheets[fs.sheet].layers.is_empty() {
+                            doc.sheets[fs.sheet].layers.push(inkwell_core::doc::Layer::new("Ink"));
+                        }
+                        doc.sheets[fs.sheet].layers[0].strokes.push(core_stroke);
+                    }
+                }
+            }
+        }
+    }
+
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
@@ -636,6 +712,7 @@ pub async fn save_pdf(
 #[tauri::command]
 pub async fn save_pdf_dialog(
     images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
+    strokes: Option<Vec<FrontendStroke>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -652,7 +729,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), images, state).await
+        save_pdf(Some(path_str), images, strokes, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -834,6 +911,26 @@ pub async fn search_pdf(
 }
 
 #[tauri::command]
+pub async fn get_page_text_spans(
+    page_index: usize,
+    state: State<'_, AppState>,
+) -> Result<Vec<inkwell_pdf::TextSpan>, String> {
+    let bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    let Some(bytes) = bytes_opt else {
+        return Ok(Vec::new());
+    };
+
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available")?;
+
+    let doc = pdfium
+        .load_pdf_from_byte_slice(&bytes, None)
+        .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+    Ok(inkwell_pdf::extract_text_spans(&doc, page_index as u32))
+}
+
+#[tauri::command]
 pub async fn get_pdf_outline(state: State<'_, AppState>) -> Result<Vec<inkwell_pdf::TocItem>, String> {
     let bytes = state
         .pdf_bytes
@@ -851,3 +948,247 @@ pub async fn get_pdf_outline(state: State<'_, AppState>) -> Result<Vec<inkwell_p
 
     Ok(inkwell_pdf::extract_outline(&doc))
 }
+
+#[tauri::command]
+pub async fn switch_document_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let mut active_id_guard = state.active_session_id.lock().unwrap();
+    let mut sessions_guard = state.sessions.lock().unwrap();
+
+    if let Some(ref current_id) = *active_id_guard {
+        if current_id == &session_id {
+            return Ok(true);
+        }
+        if let Some(session) = sessions_guard.get_mut(current_id) {
+            if let Some(doc) = state.doc.lock().unwrap().take() {
+                session.doc = doc;
+            }
+            session.pdf_path = state.pdf_path.lock().unwrap().clone();
+            session.pdf_bytes = state.pdf_bytes.lock().unwrap().clone();
+            session.wal = state.wal.lock().unwrap().take();
+            std::mem::swap(&mut session.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
+        }
+    }
+
+    if let Some(target) = sessions_guard.get_mut(&session_id) {
+        *state.doc.lock().unwrap() = Some(target.doc.clone());
+        *state.pdf_path.lock().unwrap() = target.pdf_path.clone();
+        *state.pdf_bytes.lock().unwrap() = target.pdf_bytes.clone();
+        *state.wal.lock().unwrap() = target.wal.take();
+        std::mem::swap(&mut target.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
+        *active_id_guard = Some(session_id);
+        Ok(true)
+    } else {
+        *active_id_guard = Some(session_id);
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn close_document_session(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let mut sessions_guard = state.sessions.lock().unwrap();
+    if let Some(mut session) = sessions_guard.remove(&session_id) {
+        if let Some(tx) = session.wal.take() {
+            let _ = tx.send(crate::state::WalOp::Close);
+        }
+    }
+    let mut active_id_guard = state.active_session_id.lock().unwrap();
+    if active_id_guard.as_ref() == Some(&session_id) {
+        *active_id_guard = None;
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn delete_page(
+    index: usize,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    if doc.sheets.len() <= 1 {
+        return Err("Cannot delete the only remaining page in the document".to_string());
+    }
+    if index >= doc.sheets.len() {
+        return Err(format!("Page index {index} out of bounds"));
+    }
+    doc.sheets.remove(index);
+
+    let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    if let Some(bytes) = orig_bytes_opt {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+                .map_err(|e| format!("PDFium failed to load PDF for page deletion: {e:?}"))?;
+            let total_pages = src_doc.pages().len();
+            let mut dest_doc = pdfium.create_new_pdf()
+                .map_err(|e| format!("PDFium create_new_pdf failed: {e:?}"))?;
+            
+            if index > 0 {
+                dest_doc.pages_mut().copy_page_range_from_document(
+                    &src_doc,
+                    0..=(index as i32 - 1),
+                    0,
+                ).map_err(|e| format!("PDFium copy before failed: {e:?}"))?;
+            }
+            if (index as i32 + 1) < total_pages {
+                let dest_len = dest_doc.pages().len();
+                dest_doc.pages_mut().copy_page_range_from_document(
+                    &src_doc,
+                    (index as i32 + 1)..=(total_pages - 1),
+                    dest_len,
+                ).map_err(|e| format!("PDFium copy after failed: {e:?}"))?;
+            }
+
+            let new_bytes = dest_doc.save_to_bytes()
+                .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+        }
+    }
+
+    state.page_bitmap_cache.lock().unwrap().clear();
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn duplicate_page(
+    index: usize,
+    state: State<'_, AppState>,
+) -> Result<PageInfo, String> {
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    if index >= doc.sheets.len() {
+        return Err(format!("Page index {index} out of bounds"));
+    }
+    let cloned_sheet = doc.sheets[index].clone();
+    let target_idx = index + 1;
+    doc.sheets.insert(target_idx, cloned_sheet);
+
+    let mut out_w = 595.0;
+    let mut out_h = 842.0;
+
+    let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    if let Some(bytes) = orig_bytes_opt {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+                .map_err(|e| format!("PDFium failed to load src PDF for duplicate: {e:?}"))?;
+            if let Ok(src_page) = src_doc.pages().get(index as i32) {
+                out_w = src_page.width().value as f64;
+                out_h = src_page.height().value as f64;
+            }
+            let mut dest_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+                .map_err(|e| format!("PDFium failed to load dest PDF for duplicate: {e:?}"))?;
+            dest_doc.pages_mut().copy_page_from_document(
+                &src_doc,
+                index as i32,
+                target_idx as i32,
+            ).map_err(|e| format!("PDFium copy_page_from_document failed: {e:?}"))?;
+
+            let new_bytes = dest_doc.save_to_bytes()
+                .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+        }
+    }
+
+    state.page_bitmap_cache.lock().unwrap().clear();
+    Ok(PageInfo {
+        page_index: target_idx,
+        width_pt: out_w,
+        height_pt: out_h,
+    })
+}
+
+#[tauri::command]
+pub async fn rotate_page(
+    index: usize,
+    clockwise: bool,
+    state: State<'_, AppState>,
+) -> Result<PageInfo, String> {
+    let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    let mut out_w = 595.0;
+    let mut out_h = 842.0;
+
+    if let Some(bytes) = orig_bytes_opt {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            let mut pdf_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+                .map_err(|e| format!("PDFium failed to load PDF for rotation: {e:?}"))?;
+            if let Ok(mut page) = pdf_doc.pages_mut().get(index as i32) {
+                let orig_w = page.width().value as f64;
+                let orig_h = page.height().value as f64;
+                if clockwise {
+                    let _ = page.rotate_clockwise_degrees(90.0);
+                } else {
+                    let _ = page.rotate_counter_clockwise_degrees(90.0);
+                }
+                out_w = orig_h;
+                out_h = orig_w;
+            }
+            let new_bytes = pdf_doc.save_to_bytes()
+                .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+        }
+    }
+
+    state.page_bitmap_cache.lock().unwrap().clear();
+    Ok(PageInfo {
+        page_index: index,
+        width_pt: out_w,
+        height_pt: out_h,
+    })
+}
+
+#[tauri::command]
+pub async fn reorder_page(
+    from_index: usize,
+    to_index: usize,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let mut doc_guard = state.doc.lock().unwrap();
+    let doc = doc_guard.as_mut().ok_or("No document open")?;
+    if from_index >= doc.sheets.len() || to_index >= doc.sheets.len() {
+        return Err("Page indices out of bounds".to_string());
+    }
+    if from_index == to_index {
+        return Ok(true);
+    }
+    let sheet = doc.sheets.remove(from_index);
+    doc.sheets.insert(to_index, sheet);
+
+    let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    if let Some(bytes) = orig_bytes_opt {
+        let pdfium_guard = state.pdfium.lock().unwrap();
+        if let Some(pdfium) = pdfium_guard.as_ref() {
+            let src_doc = pdfium.load_pdf_from_byte_slice(&bytes, None)
+                .map_err(|e| format!("PDFium failed to load src PDF for reorder: {e:?}"))?;
+            let total_pages = src_doc.pages().len() as usize;
+            let mut page_indices: Vec<i32> = (0..total_pages as i32).collect();
+            let moved = page_indices.remove(from_index);
+            page_indices.insert(to_index, moved);
+
+            let mut dest_doc = pdfium.create_new_pdf()
+                .map_err(|e| format!("PDFium create_new_pdf failed: {e:?}"))?;
+            
+            for &idx in &page_indices {
+                let dest_len = dest_doc.pages().len();
+                dest_doc.pages_mut().copy_page_from_document(&src_doc, idx, dest_len)
+                    .map_err(|e| format!("PDFium copy failed during reorder: {e:?}"))?;
+            }
+
+            let new_bytes = dest_doc.save_to_bytes()
+                .map_err(|e| format!("PDFium save_to_bytes failed: {e:?}"))?;
+            *state.pdf_bytes.lock().unwrap() = Some(Arc::new(new_bytes));
+        }
+    }
+
+    state.page_bitmap_cache.lock().unwrap().clear();
+    Ok(true)
+}
+
+

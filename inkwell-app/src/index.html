@@ -388,14 +388,68 @@
               <span>Browse PDF Files</span>
             </button>
           </div>
+          <div id="recentFilesContainer" class="recent-files-section hidden">
+            <h4 class="recent-files-title">Recent Documents</h4>
+            <div id="recentFilesList" class="recent-files-list"></div>
+          </div>
         </div>
       </div>
 
       <span id="evtName" style="display:none">pointerrawupdate</span>
       <div id="hint" style="display:none"></div>
 
-      <!-- Interactive Text Notes Overlay Container -->
-      <div id="textNotesContainer" class="text-notes-container"></div>
+      <!-- Floating Text Selection Actions Toolbar (Drawboard style) -->
+      <div id="textSelectionPopover" class="text-selection-popover hidden">
+        <button id="btnTextCopy" class="sel-action-btn" title="Copy (Ctrl+C)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <span>Copy</span>
+        </button>
+        <div class="popover-divider"></div>
+        <button id="btnTextHighlight" class="sel-action-btn" title="Highlight Text">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
+          <span>Highlight</span>
+        </button>
+        <button id="btnTextUnderline" class="sel-action-btn" title="Underline Text">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg>
+          <span>Underline</span>
+        </button>
+        <button id="btnTextStrikethrough" class="sel-action-btn" title="Strikethrough">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
+          <span>Strike</span>
+        </button>
+        <div class="popover-divider"></div>
+        <button id="btnTextSearch" class="sel-action-btn" title="Search in Document">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <span>Search</span>
+        </button>
+      </div>
+
+      <!-- Direct In-Place Text Editor Overlay -->
+      <div id="inlineTextOverlay" class="inline-text-overlay hidden">
+        <div id="inlineTextToolbar" class="inline-text-toolbar">
+          <div class="text-size-stepper">
+            <button id="btnTextSizeDec" class="text-tb-btn" title="Decrease Size">-</button>
+            <span id="lblTextSize" class="text-size-display">16pt</span>
+            <button id="btnTextSizeInc" class="text-tb-btn" title="Increase Size">+</button>
+          </div>
+          <div class="popover-divider"></div>
+          <button id="btnTextBold" class="text-tb-btn" title="Bold (Ctrl+B)"><strong>B</strong></button>
+          <button id="btnTextItalic" class="text-tb-btn" title="Italic (Ctrl+I)"><em>I</em></button>
+          <div class="popover-divider"></div>
+          <div class="text-swatches">
+            <button class="text-color-swatch active" data-color="#141724" style="background:#141724"></button>
+            <button class="text-color-swatch" data-color="#dc2626" style="background:#dc2626"></button>
+            <button class="text-color-swatch" data-color="#2563eb" style="background:#2563eb"></button>
+            <button class="text-color-swatch" data-color="#16a34a" style="background:#16a34a"></button>
+            <button class="text-color-swatch" data-color="#ca8a04" style="background:#ca8a04"></button>
+          </div>
+          <div class="popover-divider"></div>
+          <button id="btnTextDeleteBox" class="text-tb-btn text-tb-delete" title="Delete Text Box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+        <textarea id="inlineTextInput" class="inline-text-input" placeholder="Type text here..." rows="1"></textarea>
+      </div>
 
       <!-- Split View Divider Overlay -->
       <div id="splitDivider" class="split-divider hidden"></div>
@@ -599,7 +653,7 @@
           <span class="dock-shortcut">U</span>
         </button>
 
-        <button id="btnDockText" class="dock-btn" title="Text Note (T)" aria-label="Text note tool">
+        <button id="btnDockText" class="dock-btn" title="Direct Text Tool (T)" aria-label="Direct text tool">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="12" y1="4" x2="12" y2="20"/><line x1="8" y1="20" x2="16" y2="20"/></svg>
           <span class="dock-shortcut">T</span>
         </button>
@@ -716,6 +770,194 @@
     <span class="radial-shortcut">⌘K</span>
     <span class="tip">Palette</span>
   </button>
+</div>
+
+<!-- Insert Blank Page Modal -->
+<div id="insertPageModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="insertPageTitle">
+  <div class="modal-card modal-card-wide">
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <h3 id="insertPageTitle" class="modal-title">Insert New Page</h3>
+        <p class="modal-subtitle">Customize position, dimensions, orientation, and paper template</p>
+      </div>
+      <button id="btnCloseInsertPageModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <form id="insertPageForm" class="modal-form">
+      <div class="modal-form-grid">
+        <!-- Position -->
+        <div class="form-group">
+          <label class="form-label" for="insertPositionSelect">Insertion Position</label>
+          <select id="insertPositionSelect" class="form-select">
+            <option value="after_current" selected>After Current Page</option>
+            <option value="before_current">Before Current Page</option>
+            <option value="document_end">At End of Document</option>
+            <option value="document_start">At Beginning of Document</option>
+          </select>
+        </div>
+
+        <!-- Paper Size Preset -->
+        <div class="form-group">
+          <label class="form-label" for="insertPaperSizeSelect">Paper Size</label>
+          <select id="insertPaperSizeSelect" class="form-select">
+            <option value="match_current" selected>Match Current Page</option>
+            <option value="a4">A4 (595 × 842 pt / 210 × 297 mm)</option>
+            <option value="letter">US Letter (612 × 792 pt / 8.5 × 11 in)</option>
+            <option value="a3">A3 (842 × 1191 pt)</option>
+            <option value="legal">US Legal (612 × 1008 pt)</option>
+            <option value="widescreen">16:9 Widescreen (960 × 540 pt)</option>
+            <option value="custom">Custom Dimensions...</option>
+          </select>
+        </div>
+
+        <!-- Custom Dimensions (Hidden by default) -->
+        <div id="customDimRow" class="form-group full-width hidden">
+          <div class="custom-dim-inputs">
+            <div>
+              <label class="form-sublabel" for="customPageWidth">Width (pt)</label>
+              <input type="number" id="customPageWidth" class="form-input" min="72" max="14400" value="595">
+            </div>
+            <div>
+              <label class="form-sublabel" for="customPageHeight">Height (pt)</label>
+              <input type="number" id="customPageHeight" class="form-input" min="72" max="14400" value="842">
+            </div>
+          </div>
+        </div>
+
+        <!-- Orientation -->
+        <div class="form-group">
+          <label class="form-label">Orientation</label>
+          <div class="segmented-control">
+            <label class="segmented-btn">
+              <input type="radio" name="pageOrientation" value="portrait" checked>
+              <span>Portrait</span>
+            </label>
+            <label class="segmented-btn">
+              <input type="radio" name="pageOrientation" value="landscape">
+              <span>Landscape</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Paper Template -->
+        <div class="form-group">
+          <label class="form-label" for="insertTemplateSelect">Paper Template</label>
+          <select id="insertTemplateSelect" class="form-select">
+            <option value="blank" selected>Plain White Paper</option>
+            <option value="ruled">College Ruled Lines</option>
+            <option value="grid">Engineering 5mm Grid</option>
+            <option value="dot">Bullet Dot Grid</option>
+            <option value="cornell">Cornell Study Notes</option>
+            <option value="dark">Dark Slate Chalkboard</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-actions-row">
+        <button type="button" id="btnCancelInsertPage" class="btn-modal-secondary">Cancel</button>
+        <button type="submit" id="btnConfirmInsertPage" class="btn-modal-primary">Insert Page</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Go to Page Modal -->
+<div id="goToPageModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="goToPageTitle">
+  <div class="modal-card modal-card-sm">
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <h3 id="goToPageTitle" class="modal-title">Go to Page</h3>
+      </div>
+      <button id="btnCloseGoToPageModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <form id="goToPageForm" class="modal-form">
+      <div class="goto-input-row">
+        <input type="number" id="goToPageInput" class="goto-input" min="1" max="1" value="1" autofocus autocomplete="off">
+        <span class="goto-total-label">/ <span id="goToPageTotalDisplay">1</span></span>
+      </div>
+      <div class="goto-quick-jumps">
+        <button type="button" id="btnJumpFirstPage" class="btn-jump-pill">First Page</button>
+        <button type="button" id="btnJumpLastPage" class="btn-jump-pill">Last Page</button>
+      </div>
+      <div class="modal-actions-row">
+        <button type="button" id="btnCancelGoToPage" class="btn-modal-secondary">Cancel</button>
+        <button type="submit" id="btnConfirmGoToPage" class="btn-modal-primary">Jump</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Keyboard Shortcuts Help Modal -->
+<div id="shortcutsModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="shortcutsModalTitle">
+  <div class="modal-card modal-card-wide">
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <h3 id="shortcutsModalTitle" class="modal-title">Keyboard Shortcuts</h3>
+        <p class="modal-subtitle">Fast productivity navigation and inking keybindings</p>
+      </div>
+      <button id="btnCloseShortcutsModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
+    </div>
+
+    <div class="shortcuts-grid">
+      <div class="shortcut-category">
+        <h4 class="shortcut-cat-title">Navigation & View</h4>
+        <div class="shortcut-row"><span class="shortcut-desc">Go to Page</span><kbd>Ctrl+G</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Next / Prev Page</span><kbd>→</kbd> / <kbd>←</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Zoom In / Out</span><kbd>Ctrl++</kbd> / <kbd>Ctrl+-</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Fit Page to Window</span><kbd>Ctrl+0</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Split View Dual Pane</span><kbd>Alt+S</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Fullscreen</span><kbd>F11</kbd></div>
+      </div>
+
+      <div class="shortcut-category">
+        <h4 class="shortcut-cat-title">Tools & Inking</h4>
+        <div class="shortcut-row"><span class="shortcut-desc">Pen Tool</span><kbd>P</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Highlighter Tool</span><kbd>H</kbd> / <kbd>M</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Eraser Tool</span><kbd>E</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Lasso Select</span><kbd>L</kbd> / <kbd>V</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Pan Tool (Hand)</span><kbd>Space</kbd> <i>(Hold)</i></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Laser Pointer</span><kbd>K</kbd></div>
+      </div>
+
+      <div class="shortcut-category">
+        <h4 class="shortcut-cat-title">Document & Tabs</h4>
+        <div class="shortcut-row"><span class="shortcut-desc">New Blank Whiteboard</span><kbd>Ctrl+N</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Open PDF</span><kbd>Ctrl+O</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Save PDF Document</span><kbd>Ctrl+S</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Insert Blank Page</span><kbd>Ctrl+Shift+N</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Close Tab</span><kbd>Ctrl+W</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Switch Tabs</span><kbd>Ctrl+Tab</kbd></div>
+      </div>
+
+      <div class="shortcut-category">
+        <h4 class="shortcut-cat-title">Edit & Gestures</h4>
+        <div class="shortcut-row"><span class="shortcut-desc">Undo</span><kbd>Ctrl+Z</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Redo</span><kbd>Ctrl+Y</kbd> / <kbd>Ctrl+Shift+Z</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Copy / Cut Selection</span><kbd>Ctrl+C</kbd> / <kbd>Ctrl+X</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Paste Clipboard</span><kbd>Ctrl+V</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Delete Selection</span><kbd>Delete</kbd> / <kbd>Backspace</kbd></div>
+        <div class="shortcut-row"><span class="shortcut-desc">Stylus Barrel Button</span><span>Temporary Eraser</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Close / Unsaved Changes Modal -->
+<div id="confirmCloseModal" class="modal-backdrop hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h3 id="confirmCloseTitle">Save changes before closing?</h3>
+    </div>
+    <div class="modal-body">
+      <p id="confirmCloseMsg" style="color: var(--text-dim); margin-bottom: 24px; font-size: 14px; line-height: 1.5;">Do you want to save the changes you made to this document?</p>
+    </div>
+    <div class="modal-actions" style="display: flex; gap: 10px; justify-content: flex-end;">
+      <button id="btnConfirmCloseCancel" class="btn-secondary" style="min-height: 38px; padding: 0 16px;">Cancel</button>
+      <button id="btnConfirmCloseDiscard" class="btn-secondary" style="min-height: 38px; padding: 0 16px; color: #ef4444; border-color: rgba(239, 68, 68, 0.35);">Don't Save</button>
+      <button id="btnConfirmCloseSave" class="btn-primary" style="min-height: 38px; padding: 0 18px;">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- Save Progress Overlay -->

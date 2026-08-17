@@ -64,7 +64,14 @@ fn main() {
             commands::get_document_info,
             commands::insert_blank_page,
             commands::search_pdf,
+            commands::get_page_text_spans,
             commands::get_pdf_outline,
+            commands::switch_document_session,
+            commands::close_document_session,
+            commands::delete_page,
+            commands::duplicate_page,
+            commands::rotate_page,
+            commands::reorder_page,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

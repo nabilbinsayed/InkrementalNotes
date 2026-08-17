@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
+use std::collections::HashMap;
 use inkwell_core::{Document, tiles::TileCache, wal::WalEntry};
 use std::path::PathBuf;
 use inkwell_pdf::Pdfium;
@@ -57,6 +58,16 @@ impl PageBitmapLruCache {
     }
 }
 
+pub struct DocumentSession {
+    #[allow(dead_code)]
+    pub id: String,
+    pub doc: Document,
+    pub pdf_path: Option<PathBuf>,
+    pub pdf_bytes: Option<Arc<Vec<u8>>>,
+    pub wal: Option<Sender<WalOp>>,
+    pub page_bitmap_cache: PageBitmapLruCache,
+}
+
 pub struct AppState {
     pub doc: Mutex<Option<Document>>,
     pub pdf_path: Mutex<Option<PathBuf>>,
@@ -70,6 +81,9 @@ pub struct AppState {
     /// Multi-page in-memory LRU cache for rendered full-page PDFium bitmaps
     /// to avoid redundant page rasterization across tiles on active/split/adjacent pages.
     pub page_bitmap_cache: Mutex<PageBitmapLruCache>,
+    /// Multi-document session map for tab switching and isolation
+    pub sessions: Mutex<HashMap<String, DocumentSession>>,
+    pub active_session_id: Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -82,9 +96,12 @@ impl Default for AppState {
             wal: Mutex::new(None),
             pdfium: Mutex::new(None),
             page_bitmap_cache: Mutex::new(PageBitmapLruCache::new(8)),
+            sessions: Mutex::new(HashMap::new()),
+            active_session_id: Mutex::new(None),
         }
     }
 }
+
 
 
 

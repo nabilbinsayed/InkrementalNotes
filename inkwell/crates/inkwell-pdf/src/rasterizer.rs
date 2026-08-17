@@ -39,7 +39,8 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
         let config = PdfRenderConfig::new()
             .set_target_width(target_w)
             .set_maximum_height(target_h)
-            .set_clear_color(PdfColor::WHITE);
+            .set_clear_color(PdfColor::WHITE)
+            .render_annotations(false);
             
         let bitmap = p.render_with_config(&config).map_err(|e| {
             eprintln!("PDFium failed to render page {page}: {e:?}");

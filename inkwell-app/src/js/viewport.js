@@ -159,13 +159,37 @@ class ViewportManager {
     return this.splitMode;
   }
 
+  clampPanY(y, pane = 'left') {
+    if (!this.totalDocHeight || !this.pageLayouts || !this.pageLayouts.length) return y;
+    if (!this.stageRect) this.updateStageRect();
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const isRight = pane === 'right' && this.splitMode;
+    const z = isRight ? this.rightZoom : this.zoom;
+    const totalH = this.totalDocHeight * z;
+    const topMargin = 40;
+    const bottomMargin = 80;
+
+    // Top boundary: Cannot pan below topMargin (first page top)
+    const maxPanY = topMargin;
+
+    // Bottom boundary:
+    // If total document height is smaller than stage: pin top at topMargin
+    // If document is taller than stage: bottom of last page cannot go above stageH - bottomMargin
+    const minPanY = totalH < stageH
+      ? topMargin
+      : stageH - totalH - bottomMargin;
+
+    return Math.max(minPanY, Math.min(maxPanY, y));
+  }
+
   setPan(x, y, pane = 'left') {
+    const clampedY = this.clampPanY(y, pane);
     if (pane === 'right' && this.splitMode) {
       this.rightPanX = x;
-      this.rightPanY = y;
+      this.rightPanY = clampedY;
     } else {
       this.panX = x;
-      this.panY = y;
+      this.panY = clampedY;
     }
     if (this.onChange) this.onChange();
   }
@@ -183,16 +207,21 @@ class ViewportManager {
       const newPanY = centerPx[1] - (centerPx[1] - curPanY) * scale;
       if (isRight) {
         this.rightPanX = newPanX;
-        this.rightPanY = newPanY;
+        this.rightPanY = this.clampPanY(newPanY, 'right');
         this.rightZoom = newZoom;
       } else {
         this.panX = newPanX;
-        this.panY = newPanY;
+        this.panY = this.clampPanY(newPanY, 'left');
         this.zoom = newZoom;
       }
     } else {
-      if (isRight) this.rightZoom = newZoom;
-      else this.zoom = newZoom;
+      if (isRight) {
+        this.rightZoom = newZoom;
+        this.rightPanY = this.clampPanY(this.rightPanY, 'right');
+      } else {
+        this.zoom = newZoom;
+        this.panY = this.clampPanY(this.panY, 'left');
+      }
     }
     if (this.onChange) this.onChange();
   }
@@ -270,6 +299,10 @@ class ViewportManager {
       new ResizeObserver(() => this.updateStageRect()).observe(element);
     }
 
+    let wheelAccumX = 0;
+    let wheelAccumY = 0;
+    let wheelRaf = null;
+
     element.addEventListener('wheel', e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect;
@@ -279,14 +312,23 @@ class ViewportManager {
       this.activePane = pane;
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const factor = e.deltaY < 0 ? 1.1 : 0.9;
+        const factor = e.deltaY < 0 ? 1.08 : 0.92;
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
         this.setZoom(curZoom * factor, [relX, relY], pane);
       } else {
         e.preventDefault();
-        const curPanX = pane === 'right' ? this.rightPanX : this.panX;
-        const curPanY = pane === 'right' ? this.rightPanY : this.panY;
-        this.setPan(curPanX - e.deltaX, curPanY - e.deltaY, pane);
+        wheelAccumX -= e.deltaX;
+        wheelAccumY -= e.deltaY;
+        if (!wheelRaf) {
+          wheelRaf = requestAnimationFrame(() => {
+            wheelRaf = null;
+            const curPanX = pane === 'right' ? this.rightPanX : this.panX;
+            const curPanY = pane === 'right' ? this.rightPanY : this.panY;
+            this.setPan(curPanX + wheelAccumX, curPanY + wheelAccumY, pane);
+            wheelAccumX = 0;
+            wheelAccumY = 0;
+          });
+        }
       }
     }, { passive: false });
 
@@ -295,6 +337,8 @@ class ViewportManager {
         this.isStylusActive = true;
       }
       if (e.pointerType === 'touch') {
+        this.touchStartTimes = this.touchStartTimes || new Map();
+        this.touchStartTimes.set(e.pointerId, { t: Date.now(), x: e.clientX, y: e.clientY });
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.activeTouches.size === 2) {
           const pts = Array.from(this.activeTouches.values());
@@ -367,6 +411,26 @@ class ViewportManager {
         this.isStylusActive = false;
       }
       if (e.pointerType === 'touch') {
+        const startInfo = this.touchStartTimes && this.touchStartTimes.get(e.pointerId);
+        if (startInfo) {
+          const dt = Date.now() - startInfo.t;
+          const dist = Math.hypot(e.clientX - startInfo.x, e.clientY - startInfo.y);
+          if (dt < 350 && dist < 15) {
+            this.recentTapCount = (this.recentTapCount || 0) + 1;
+            clearTimeout(this.tapTimer);
+            this.tapTimer = setTimeout(() => {
+              if (this.recentTapCount === 2) {
+                if (typeof window.undo === 'function') window.undo();
+                if (typeof window.showToast === 'function') window.showToast('Undo (2-finger tap)', 'info');
+              } else if (this.recentTapCount === 3) {
+                if (typeof window.redo === 'function') window.redo();
+                if (typeof window.showToast === 'function') window.showToast('Redo (3-finger tap)', 'info');
+              }
+              this.recentTapCount = 0;
+            }, 100);
+          }
+        }
+        if (this.touchStartTimes) this.touchStartTimes.delete(e.pointerId);
         this.activeTouches.delete(e.pointerId);
         if (this.activeTouches.size < 2) {
           this.pinchStartDist = null;

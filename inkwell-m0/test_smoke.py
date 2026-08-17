@@ -18,7 +18,7 @@ def check(name, cond, note=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"   {note}" if note else ""))
 
 with sync_playwright() as pw:
-    b = pw.chromium.launch(args=["--force-device-scale-factor=1"])
+    b = pw.chromium.launch(headless=True, args=["--force-device-scale-factor=1", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"])
     ctx = b.new_context(viewport={"width": 1360, "height": 860})
     pg = ctx.new_page()
     pg.on("console", lambda m: (errors if m.type == "error" else
