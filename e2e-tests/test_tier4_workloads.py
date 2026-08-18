@@ -11,7 +11,6 @@ import math
 import json
 import time
 import pathlib
-import pytest
 from typing import List, Dict, Any
 
 from harness import (

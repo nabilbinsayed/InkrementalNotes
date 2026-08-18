@@ -478,7 +478,7 @@ pub async fn render_tile(
         .clone()
         .ok_or("No PDF loaded")?;
 
-    let (bgra_bytes, bitmap_w, bitmap_h, is_bgra) = {
+    let (bgra_bytes, bitmap_w, bitmap_h) = {
         let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
         let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
             "PDFium is not available (pdfium.dll was not found at startup). \
@@ -510,10 +510,6 @@ pub async fn render_tile(
                 format!("PDFium failed to render page {page}: {e:?}")
             })?;
 
-            let is_bgra = matches!(
-                bitmap.format(),
-                Ok(PdfBitmapFormat::BGRA | PdfBitmapFormat::BGRx | PdfBitmapFormat::BGR)
-            );
             let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
             let bw = bitmap.width() as u32;
             let bh = bitmap.height() as u32;
@@ -525,14 +521,13 @@ pub async fn render_tile(
                 bgra_bytes: bgra.clone(),
                 bitmap_w: bw,
                 bitmap_h: bh,
-                is_bgra,
             });
 
-            (bgra, bw, bh, is_bgra)
+            (bgra, bw, bh)
         }
     };
 
-    // Offload the pixel cropping and alpha swizzling to a worker thread
+    // Offload the pixel cropping and alpha blending to a worker thread
     tauri::async_runtime::spawn_blocking(move || {
         let out_w = (rw * scale).round().max(1.0) as u32;
         let out_h = (rh * scale).round().max(1.0) as u32;
@@ -551,21 +546,10 @@ pub async fn render_tile(
                     let dst_idx = (y * out_w + x) as usize * 4;
 
                     if src_idx + 3 < bgra_bytes.len() {
-                        let (r, g, b, a) = if is_bgra {
-                            (
-                                bgra_bytes[src_idx + 2],
-                                bgra_bytes[src_idx + 1],
-                                bgra_bytes[src_idx],
-                                bgra_bytes[src_idx + 3] as u32,
-                            )
-                        } else {
-                            (
-                                bgra_bytes[src_idx],
-                                bgra_bytes[src_idx + 1],
-                                bgra_bytes[src_idx + 2],
-                                bgra_bytes[src_idx + 3] as u32,
-                            )
-                        };
+                        let r = bgra_bytes[src_idx];
+                        let g = bgra_bytes[src_idx + 1];
+                        let b = bgra_bytes[src_idx + 2];
+                        let a = bgra_bytes[src_idx + 3] as u32;
 
                         let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
                         let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;

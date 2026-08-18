@@ -2211,7 +2211,7 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
 // ---- Pointer handlers ----
 function onDown(e) {
   if (e.pointerType === 'touch') {
-    if (viewport.isStylusActive || viewport.isPinching || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
+    if (viewport.isStylusActive || viewport.isPinching || viewport.gestureOccurred || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
       return;
     }
   }
@@ -2407,7 +2407,7 @@ function onDown(e) {
 
 function onMove(e) {
   if (e.pointerType === 'touch') {
-    if (viewport.isPinching || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
+    if (viewport.isPinching || viewport.gestureOccurred || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
       return;
     }
   }
@@ -2645,6 +2645,13 @@ async function onUp(e) {
   $('toolbar') && $('toolbar').classList.remove('pen-down');
   $('pageNav') && $('pageNav').classList.remove('pen-down');
   $('zoomControl') && $('zoomControl').classList.remove('pen-down');
+
+  if (e.pointerType === 'touch' && (viewport.isPinching || viewport.gestureOccurred || (viewport.activeTouches && viewport.activeTouches.size >= 2))) {
+    if (typeof window.cancelPendingTouchStroke === 'function') {
+      window.cancelPendingTouchStroke();
+    }
+    return;
+  }
 
   if (state.activeTool === 'pan') {
     if (state.isSelectingText && state.selectedTextSpans && state.selectedTextSpans.length > 0) {

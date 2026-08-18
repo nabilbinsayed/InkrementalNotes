@@ -18,7 +18,6 @@ pub struct CachedPageBitmap {
     pub bgra_bytes: Arc<Vec<u8>>,
     pub bitmap_w: u32,
     pub bitmap_h: u32,
-    pub is_bgra: bool,
 }
 
 pub struct PageBitmapLruCache {
@@ -34,10 +33,10 @@ impl PageBitmapLruCache {
         }
     }
 
-    pub fn get(&mut self, page: u32, target_w: i32, target_h: i32) -> Option<(Arc<Vec<u8>>, u32, u32, bool)> {
+    pub fn get(&mut self, page: u32, target_w: i32, target_h: i32) -> Option<(Arc<Vec<u8>>, u32, u32)> {
         if let Some(pos) = self.entries.iter().position(|c| c.page == page && c.target_w == target_w && c.target_h == target_h) {
             let item = self.entries.remove(pos);
-            let res = (item.bgra_bytes.clone(), item.bitmap_w, item.bitmap_h, item.is_bgra);
+            let res = (item.bgra_bytes.clone(), item.bitmap_w, item.bitmap_h);
             self.entries.push(item);
             Some(res)
         } else {

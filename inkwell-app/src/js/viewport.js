@@ -19,8 +19,10 @@ class ViewportManager {
     this.lastPanPt = [0, 0];
     this.stageRect = null;
     this.element = null;
-    this.isStylusActive = false;
     this.activeTouches = new Map();
+    this.touchStartTimes = new Map();
+    this.isPinching = false;
+    this.gestureOccurred = false;
     this.pinchStartDist = null;
     this.pinchStartZoom = null;
     this.pinchStartMid = null;
@@ -206,13 +208,13 @@ class ViewportManager {
       const newPanX = centerPx[0] - (centerPx[0] - curPanX) * scale;
       const newPanY = centerPx[1] - (centerPx[1] - curPanY) * scale;
       if (isRight) {
+        this.rightZoom = newZoom;
         this.rightPanX = newPanX;
         this.rightPanY = this.clampPanY(newPanY, 'right');
-        this.rightZoom = newZoom;
       } else {
+        this.zoom = newZoom;
         this.panX = newPanX;
         this.panY = this.clampPanY(newPanY, 'left');
-        this.zoom = newZoom;
       }
     } else {
       if (isRight) {
@@ -365,99 +367,8 @@ class ViewportManager {
 
     window.addEventListener('wheel', onWheel, { passive: false });
 
-    // ---- Multi-touch gesture handling via Touch Events ----
-    const onTouchStart = e => {
-      if (e.touches && e.touches.length >= 2) {
-        e.preventDefault();
-        if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
-          window.cancelPendingTouchStroke();
-        }
-        const t0 = e.touches[0];
-        const t1 = e.touches[1];
-        const dx = t1.clientX - t0.clientX;
-        const dy = t1.clientY - t0.clientY;
-        const midX = (t0.clientX + t1.clientX) / 2;
-        const midY = (t0.clientY + t1.clientY) / 2;
-
-        if (!this.stageRect) this.updateStageRect();
-        const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
-        const relX = midX - stageRect.left;
-        const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
-        this.activePane = pane;
-        if (typeof window !== 'undefined' && window.state) {
-          window.state.activePane = pane;
-        }
-
-        this.isPinching = true;
-        this.pinchStartDist = Math.hypot(dx, dy) || 1;
-        this.pinchStartMid = [midX, midY];
-        this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
-        this.pinchStartPan = pane === 'right' ? [this.rightPanX, this.rightPanY] : [this.panX, this.panY];
-      }
-    };
-
-    const onTouchMove = e => {
-      if (e.touches && e.touches.length >= 2 && this.pinchStartDist && this.pinchStartMid && this.pinchStartPan) {
-        e.preventDefault();
-        const t0 = e.touches[0];
-        const t1 = e.touches[1];
-        const dx = t1.clientX - t0.clientX;
-        const dy = t1.clientY - t0.clientY;
-        const curDist = Math.hypot(dx, dy) || 1;
-        const curMid = [(t0.clientX + t1.clientX) / 2, (t0.clientY + t1.clientY) / 2];
-        const scale = curDist / this.pinchStartDist;
-        const newZoom = Math.max(0.15, Math.min(10.0, this.pinchStartZoom * scale));
-        const stageRect = this.stageRect || { left: 0, top: 0 };
-
-        const pane = this.activePane;
-        const startMidX = this.pinchStartMid[0] - stageRect.left;
-        const startMidY = this.pinchStartMid[1] - stageRect.top;
-        const curMidX = curMid[0] - stageRect.left;
-        const curMidY = curMid[1] - stageRect.top;
-
-        // World coordinate of initial touch midpoint
-        const worldX = (startMidX - this.pinchStartPan[0]) / this.pinchStartZoom;
-        const worldY = (startMidY - this.pinchStartPan[1]) / this.pinchStartZoom;
-
-        // Compute new pan so world point stays locked under curMid
-        const targetPanX = curMidX - worldX * newZoom;
-        const targetPanY = curMidY - worldY * newZoom;
-
-        if (pane === 'right' && this.splitMode) {
-          this.rightZoom = newZoom;
-          this.rightPanX = targetPanX;
-          this.rightPanY = this.clampPanY(targetPanY, 'right');
-        } else {
-          this.zoom = newZoom;
-          this.panX = targetPanX;
-          this.panY = this.clampPanY(targetPanY, 'left');
-        }
-        if (this.onChange) this.onChange();
-        if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
-        if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
-        if (typeof window.redrawAll === 'function') window.redrawAll();
-        if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
-        if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
-      }
-    };
-
-    const onTouchEnd = e => {
-      if (!e.touches || e.touches.length < 2) {
-        this.isPinching = false;
-        this.pinchStartDist = null;
-        this.pinchStartZoom = null;
-        this.pinchStartMid = null;
-        this.pinchStartPan = null;
-      }
-    };
-
-    window.addEventListener('touchstart', onTouchStart, { passive: false });
-    window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend', onTouchEnd, { passive: false });
-    window.addEventListener('touchcancel', onTouchEnd, { passive: false });
-
-    // ---- Multi-touch gesture handling via Pointer Events ----
-    element.addEventListener('pointerdown', e => {
+    // ---- Multi-touch gesture handling via unified Pointer Events ----
+    const onPointerDownGlobal = e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
       const relX = e.clientX - stageRect.left;
@@ -471,15 +382,15 @@ class ViewportManager {
         this.isStylusActive = true;
       }
       if (e.pointerType === 'touch') {
-        this.touchStartTimes = this.touchStartTimes || new Map();
         this.touchStartTimes.set(e.pointerId, { t: Date.now(), x: e.clientX, y: e.clientY });
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.activeTouches.size >= 2) {
+          this.isPinching = true;
+          this.gestureOccurred = true;
           // Cancel any single-finger stroke that might have started
           if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
             window.cancelPendingTouchStroke();
           }
-          this.isPinching = true;
           const pts = Array.from(this.activeTouches.values());
           const dx = pts[1].x - pts[0].x;
           const dy = pts[1].y - pts[0].y;
@@ -493,15 +404,19 @@ class ViewportManager {
         e.preventDefault();
         this.isPanning = true;
         this.lastPanPt = [e.clientX, e.clientY];
-        try { element.setPointerCapture(e.pointerId); } catch (_) {}
+        if (element) {
+          try { element.setPointerCapture(e.pointerId); } catch (_) {}
+        }
       }
-    });
+    };
 
     const onPointerMoveGlobal = e => {
       if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) {
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.activeTouches.size >= 2 && this.pinchStartDist && this.pinchStartMid && this.pinchStartPan) {
           e.preventDefault();
+          this.isPinching = true;
+          this.gestureOccurred = true;
           const pts = Array.from(this.activeTouches.values());
           const curDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
           const curMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
@@ -553,18 +468,14 @@ class ViewportManager {
       }
     };
 
-    window.addEventListener('pointermove', onPointerMoveGlobal);
-    if ('onpointerrawupdate' in window) {
-      window.addEventListener('pointerrawupdate', onPointerMoveGlobal);
-    }
-
     const onPointerEnd = e => {
       if (e.pointerType === 'pen') {
         this.isStylusActive = false;
       }
       if (e.pointerType === 'touch') {
-        const startInfo = this.touchStartTimes && this.touchStartTimes.get(e.pointerId);
-        if (startInfo) {
+        const startInfo = this.touchStartTimes.get(e.pointerId);
+        const wasPinching = this.gestureOccurred;
+        if (startInfo && !wasPinching) {
           const dt = Date.now() - startInfo.t;
           const dist = Math.hypot(e.clientX - startInfo.x, e.clientY - startInfo.y);
           if (dt < 350 && dist < 15) {
@@ -582,7 +493,7 @@ class ViewportManager {
             }, 100);
           }
         }
-        if (this.touchStartTimes) this.touchStartTimes.delete(e.pointerId);
+        this.touchStartTimes.delete(e.pointerId);
         this.activeTouches.delete(e.pointerId);
         if (this.activeTouches.size < 2) {
           this.isPinching = false;
@@ -591,12 +502,20 @@ class ViewportManager {
           this.pinchStartMid = null;
           this.pinchStartPan = null;
         }
+        if (this.activeTouches.size === 0) {
+          this.gestureOccurred = false;
+        }
       }
       if (e.button === 1) {
         this.isPanning = false;
-        try { element.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (element) {
+          try { element.releasePointerCapture(e.pointerId); } catch (_) {}
+        }
       }
     };
+
+    window.addEventListener('pointerdown', onPointerDownGlobal, { capture: true, passive: false });
+    window.addEventListener('pointermove', onPointerMoveGlobal, { passive: false });
     window.addEventListener('pointerup', onPointerEnd);
     window.addEventListener('pointercancel', onPointerEnd);
   }

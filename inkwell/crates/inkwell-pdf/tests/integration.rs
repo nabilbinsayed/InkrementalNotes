@@ -22,8 +22,11 @@ fn test_classic_xref_pdf_opens_with_pdf_file() {
     assert!(pdf.is_ok(), "Classic xref PDF should open cleanly in PdfFile::open");
 }
 
+static PDFIUM_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn test_pdfium_integration_or_graceful_skip() {
+    let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
     let path = get_fixture_path();
     let bytes = std::fs::read(&path).expect("read fixture");
     
@@ -83,6 +86,7 @@ fn test_pdfium_integration_or_graceful_skip() {
 
 #[test]
 fn test_extract_outline() {
+    let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
     let pdfium = match init_pdfium() {
         Ok(p) => p,
         Err(_) => return,
@@ -96,6 +100,7 @@ fn test_extract_outline() {
 
 #[test]
 fn test_insert_blank_page_draw_and_save_multi_page() {
+    let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
     let pdfium = match init_pdfium() {
         Ok(p) => p,
         Err(_) => return, // Gracefully skip if pdfium.dll not present
@@ -191,6 +196,85 @@ fn test_unicode_search_window_slicing_safety() {
         if end < text_chars.len() { "…" } else { "" }
     );
     assert!(snippet.contains("ত্রিকোণমিতি"));
+}
+
+#[test]
+fn test_color_fidelity() {
+    let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
+    let pdfium = match init_pdfium() {
+        Ok(p) => p,
+        Err(_) => return, // Gracefully skip if runtime environment lacks pdfium binary
+    };
+
+    // 1. Check direct PDFium render of vector shapes
+    let mut doc = pdfium.create_new_pdf().expect("create new pdf");
+    let mut page = doc.pages_mut().create_page_at_index(
+        pdfium_render::prelude::PdfPagePaperSize::Custom(
+            pdfium_render::prelude::PdfPoints::new(100.0),
+            pdfium_render::prelude::PdfPoints::new(100.0),
+        ),
+        0,
+    ).expect("create page");
+
+    // Add a solid blue rectangle using PDF page path object
+    use pdfium_render::prelude::*;
+    let path = PdfPagePathObject::new_rect(
+        &doc,
+        PdfRect::new(
+            PdfPoints::new(0.0),
+            PdfPoints::new(0.0),
+            PdfPoints::new(100.0),
+            PdfPoints::new(100.0),
+        ),
+        None,
+        None,
+        Some(PdfColor::new(15, 23, 42, 255)), // Fill color: R=15, G=23, B=42
+    ).expect("create rect path");
+    page.objects_mut().add_path_object(path).expect("add path");
+    let vector_pdf_bytes = doc.save_to_bytes().expect("save vector pdf");
+
+    // Render vector PDF
+    let doc_v = pdfium.load_pdf_from_byte_slice(&vector_pdf_bytes, None).expect("load vector pdf");
+    let page_v = doc_v.pages().get(0).expect("get page");
+    let config = PdfRenderConfig::new().set_target_width(50).set_maximum_height(50);
+    let bitmap_v = page_v.render_with_config(&config).expect("render vector page");
+    println!("Vector page bitmap format: {:?}", bitmap_v.format());
+    let raw_v = bitmap_v.as_raw_bytes();
+    println!("Vector page first 4 raw bytes: {:?}", &raw_v[0..4]);
+    // Format could be BGRA -> [B, G, R, A] or RGBA -> [R, G, B, A]
+
+    // 2. Check DynamicImage -> PdfPageImageObject embedding
+    let mut img_buf = image::RgbaImage::new(50, 50);
+    for pixel in img_buf.pixels_mut() {
+        *pixel = image::Rgba([15, 23, 42, 255]); // #0f172a (R=15, G=23, B=42)
+    }
+    let dyn_img = image::DynamicImage::ImageRgba8(img_buf);
+    let mut doc_img = pdfium.create_new_pdf().expect("create new pdf");
+    let mut page_img = doc_img.pages_mut().create_page_at_index(
+        PdfPagePaperSize::Custom(
+            PdfPoints::new(100.0),
+            PdfPoints::new(100.0),
+        ),
+        0,
+    ).expect("create page");
+    let mut img_obj = PdfPageImageObject::new(&doc_img, &dyn_img).expect("create image obj");
+    img_obj.scale(100.0, 100.0).expect("scale");
+    img_obj.translate(PdfPoints::new(0.0), PdfPoints::new(0.0)).expect("translate");
+    page_img.objects_mut().add_image_object(img_obj).expect("add img obj");
+    let img_pdf_bytes = doc_img.save_to_bytes().expect("save img pdf");
+
+    // 3. Test PdfiumRasterizer on the vector and image docs
+    let rasterizer_v = PdfiumRasterizer::new(doc_v);
+    let tile_v = rasterizer_v.rasterize(0, [0.0, 0.0, 100.0, 100.0], 50).expect("rasterize vector");
+    println!("Rasterized vector RGB: ({}, {}, {})", tile_v.data[0], tile_v.data[1], tile_v.data[2]);
+
+    let doc_i = pdfium.load_pdf_from_byte_slice(&img_pdf_bytes, None).expect("load img pdf");
+    let rasterizer_i = PdfiumRasterizer::new(doc_i);
+    let tile_i = rasterizer_i.rasterize(0, [0.0, 0.0, 100.0, 100.0], 50).expect("rasterize image");
+    println!("Rasterized image RGB: ({}, {}, {})", tile_i.data[0], tile_i.data[1], tile_i.data[2]);
+
+    assert_eq!((tile_v.data[0], tile_v.data[1], tile_v.data[2]), (15, 23, 42), "Vector fill color must be (15, 23, 42)");
+    assert_eq!((tile_i.data[0], tile_i.data[1], tile_i.data[2]), (15, 23, 42), "Image color must be (15, 23, 42)");
 }
 
 

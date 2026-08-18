@@ -46,6 +46,8 @@ def run_test_file(file_path: pathlib.Path) -> bool:
             pytest_exe = "pytest"
 
         res = subprocess.run([pytest_exe, str(file_path), "-q", "--no-header"], capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"Subprocess stdout:\n{res.stdout}\nSubprocess stderr:\n{res.stderr}")
         return (res.returncode == 0)
 
 # Type alias helper

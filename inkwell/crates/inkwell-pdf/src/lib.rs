@@ -25,8 +25,14 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     };
 
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            add_dir_and_subdirs(dir.to_path_buf());
+        let mut cur = exe.parent();
+        for _ in 0..6 {
+            if let Some(dir) = cur {
+                add_dir_and_subdirs(dir.to_path_buf());
+                cur = dir.parent();
+            } else {
+                break;
+            }
         }
     }
 
