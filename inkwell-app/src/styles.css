@@ -1230,6 +1230,7 @@ html, body {
   position: relative;
   overflow: hidden;
   background: var(--bg-stage);
+  touch-action: none;
 }
 
 #stage > canvas {

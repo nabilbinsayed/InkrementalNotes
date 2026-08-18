@@ -20,7 +20,6 @@ class ViewportManager {
     this.stageRect = null;
     this.element = null;
     this.activeTouches = new Map();
-    this.touchStartTimes = new Map();
     this.isPinching = false;
     this.gestureOccurred = false;
     this.pinchStartDist = null;
@@ -157,6 +156,7 @@ class ViewportManager {
       this.rightPanX = this.panX + halfW;
       this.rightPanY = this.panY;
     }
+    // toggleSplitMode is a discrete UI action — fire onChange immediately (not RAF-coalesced)
     if (this.onChange) this.onChange();
     return this.splitMode;
   }
@@ -184,13 +184,29 @@ class ViewportManager {
     return Math.max(minPanY, Math.min(maxPanY, y));
   }
 
+  clampPanX(x, pane = 'left') {
+    if (!this.maxDocWidth || !this.stageRect) return x;
+    const isRight = pane === 'right' && this.splitMode;
+    const z = isRight ? this.rightZoom : this.zoom;
+    const totalW = this.stageRect ? this.stageRect.width : 800;
+    const stageW = this.splitMode ? totalW / 2 : totalW;
+    const docW = this.maxDocWidth * z;
+    const hMargin = Math.max(80, stageW * 0.15);
+
+    // Allow panning up to hMargin past either edge of the document
+    const maxPanX = hMargin;
+    const minPanX = stageW - docW - hMargin;
+    return Math.max(minPanX, Math.min(maxPanX, x));
+  }
+
   setPan(x, y, pane = 'left') {
     const clampedY = this.clampPanY(y, pane);
+    const clampedX = this.clampPanX(x, pane);
     if (pane === 'right' && this.splitMode) {
-      this.rightPanX = x;
+      this.rightPanX = clampedX;
       this.rightPanY = clampedY;
     } else {
-      this.panX = x;
+      this.panX = clampedX;
       this.panY = clampedY;
     }
     if (this.onChange) this.onChange();
@@ -328,9 +344,11 @@ class ViewportManager {
         window.state.activePane = pane;
       }
 
+      // Chromium reports a precision-touchpad pinch as a Ctrl+wheel event;
+      // Command covers the equivalent gesture on macOS.
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        // Continuous smooth exponential zoom for touchpad pinch & Ctrl+wheel
+        // Continuous smooth exponential zoom for touchpad pinch & Ctrl+wheel.
         let delta = -e.deltaY;
         if (e.deltaMode === 1) delta *= 24; // lines mode
         else if (e.deltaMode === 2) delta *= 300; // pages mode
@@ -367,7 +385,7 @@ class ViewportManager {
 
     window.addEventListener('wheel', onWheel, { passive: false });
 
-    // ---- Multi-touch gesture handling via unified Pointer Events ----
+    // ---- Multi-touch gesture handling via Pointer Events ----
     const onPointerDownGlobal = e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
@@ -382,12 +400,10 @@ class ViewportManager {
         this.isStylusActive = true;
       }
       if (e.pointerType === 'touch') {
-        this.touchStartTimes.set(e.pointerId, { t: Date.now(), x: e.clientX, y: e.clientY });
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.activeTouches.size >= 2) {
           this.isPinching = true;
           this.gestureOccurred = true;
-          // Cancel any single-finger stroke that might have started
           if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
             window.cancelPendingTouchStroke();
           }
@@ -473,27 +489,6 @@ class ViewportManager {
         this.isStylusActive = false;
       }
       if (e.pointerType === 'touch') {
-        const startInfo = this.touchStartTimes.get(e.pointerId);
-        const wasPinching = this.gestureOccurred;
-        if (startInfo && !wasPinching) {
-          const dt = Date.now() - startInfo.t;
-          const dist = Math.hypot(e.clientX - startInfo.x, e.clientY - startInfo.y);
-          if (dt < 350 && dist < 15) {
-            this.recentTapCount = (this.recentTapCount || 0) + 1;
-            clearTimeout(this.tapTimer);
-            this.tapTimer = setTimeout(() => {
-              if (this.recentTapCount === 2) {
-                if (typeof window.undo === 'function') window.undo();
-                if (typeof window.showToast === 'function') window.showToast('Undo (2-finger tap)', 'info');
-              } else if (this.recentTapCount === 3) {
-                if (typeof window.redo === 'function') window.redo();
-                if (typeof window.showToast === 'function') window.showToast('Redo (3-finger tap)', 'info');
-              }
-              this.recentTapCount = 0;
-            }, 100);
-          }
-        }
-        this.touchStartTimes.delete(e.pointerId);
         this.activeTouches.delete(e.pointerId);
         if (this.activeTouches.size < 2) {
           this.isPinching = false;
@@ -515,9 +510,13 @@ class ViewportManager {
     };
 
     window.addEventListener('pointerdown', onPointerDownGlobal, { capture: true, passive: false });
-    window.addEventListener('pointermove', onPointerMoveGlobal, { passive: false });
+    // Capture the movement before the drawing canvas handles it. This is
+    // essential when the first finger began an ink stroke before the second
+    // finger turned the interaction into a pinch.
+    window.addEventListener('pointermove', onPointerMoveGlobal, { capture: true, passive: false });
     window.addEventListener('pointerup', onPointerEnd);
     window.addEventListener('pointercancel', onPointerEnd);
+
   }
 }
 

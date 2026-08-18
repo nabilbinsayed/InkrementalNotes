@@ -1989,7 +1989,7 @@ function initDocScrollbar() {
     const panDelta = (dy / scrollableTrack) * (docTotalH - stageH);
     viewport.setPan(viewport.panX, startPanY - panDelta, 'left');
     scheduleRedrawTiles();
-    redrawAll();
+    scheduleRedrawAll();
     updateDocScrollbar();
 
     const curPage = viewport.getActivePageInView('left');
@@ -2041,7 +2041,7 @@ function initContextMenu() {
   window.addEventListener('contextmenu', e => {
     if (!e.target.closest('#stage')) return;
     e.preventDefault();
-    // Do not open desktop context menu on touch gestures (2-finger tap is mapped to undo)
+    // Do not open desktop context menu on touch input
     if (e.pointerType === 'touch') return;
 
     const [wx, wy] = localXY(e, state.drawingPane);
