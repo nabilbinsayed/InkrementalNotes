@@ -2211,19 +2211,22 @@ async function commitShape(kind, wx0, wy0, wx1, wy1) {
 // ---- Pointer handlers ----
 function onDown(e) {
   if (e.pointerType === 'touch') {
-    if (viewport.isStylusActive || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
+    if (viewport.isStylusActive || viewport.isPinching || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
       return;
     }
   }
   if (e.button !== 0 && e.pointerType !== 'pen') return;
   updateStageRect();
-  try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  if (e.pointerType !== 'touch') {
+    try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  }
   $('toolbar') && $('toolbar').classList.add('pen-down');
   $('pageNav') && $('pageNav').classList.add('pen-down');
   $('zoomControl') && $('zoomControl').classList.add('pen-down');
 
   state.drawingPane = paneForEvent(e);
   viewport.activePane = state.drawingPane;
+  const [wx, wy] = localXY(e, state.drawingPane);
 
   // Stylus Hardware Barrel Button (buttons === 32 or secondary button)
   const isStylusBarrel = e.pointerType === 'pen' && (e.buttons === 32 || e.buttons === 2 || e.button === 2);
@@ -2247,8 +2250,6 @@ function onDown(e) {
     loadTextSpansForPage(state.currentSheet);
     return;
   }
-
-  const [wx, wy] = localXY(e, state.drawingPane);
 
   if (state.activeTool === 'laser') {
     state.isLaserDown = true;
@@ -2405,41 +2406,12 @@ function onDown(e) {
 }
 
 function onMove(e) {
-  const [wx, wy] = localXY(e, state.drawingPane);
-
-  // Hybrid Pan & Smart Text Selection (Drawboard style)
-  if (state.activeTool === 'pan' && state.handDownPt) {
-    const dist = Math.hypot(e.clientX - state.handDownPt[0], e.clientY - state.handDownPt[1]);
-    if (dist > 4 && state.handStartWorldPt) {
-      const targetSheet = state.currentSheet;
-      const spans = state.pageTextSpans[targetSheet] || [];
-      if (spans.length > 0) {
-        const startPage = viewport.worldToPage(state.handStartWorldPt[0], state.handStartWorldPt[1]);
-        const curPage = viewport.worldToPage(wx, wy);
-        if (startPage.sheet === targetSheet && curPage.sheet === targetSheet) {
-          const minX = Math.min(startPage.px, curPage.px);
-          const maxX = Math.max(startPage.px, curPage.px);
-          const minY = Math.min(startPage.py, curPage.py);
-          const maxY = Math.max(startPage.py, curPage.py);
-
-          // Find spans that intersect the drag box
-          const hits = spans.filter(s => {
-            const [sx0, sy0, sx1, sy1] = s.rect;
-            return !(sx1 < minX || sx0 > maxX || sy1 < minY || sy0 > maxY);
-          });
-
-          if (hits.length > 0) {
-            viewport.isPanning = false;
-            state.isSelectingText = true;
-            state.selectedTextSpans = hits;
-            clearWet();
-            drawTextSelectionHighlights();
-            return;
-          }
-        }
-      }
+  if (e.pointerType === 'touch') {
+    if (viewport.isPinching || (viewport.activeTouches && viewport.activeTouches.size >= 2)) {
+      return;
     }
   }
+  const [wx, wy] = localXY(e, state.drawingPane);
 
   if (viewport.isPanning) {
     const dx = e.clientX - viewport.lastPanPt[0];
@@ -4165,13 +4137,16 @@ async function duplicateCurrentPage(index) {
     }
   }
 
-  if (!newPageInfo) {
-    const src = state.pageInfos[index];
+  const src = state.pageInfos[index];
+  const srcTemplate = (src && src.template) ? src.template : 'blank';
+  if (newPageInfo) {
+    newPageInfo.template = srcTemplate;
+  } else {
     newPageInfo = {
       page_index: targetIdx,
       width_pt: src ? src.width_pt : 595.0,
       height_pt: src ? src.height_pt : 842.0,
-      template: src ? src.template : 'blank',
+      template: srcTemplate,
     };
   }
 
@@ -5250,13 +5225,15 @@ async function renderThumbnails() {
       ctx.fillStyle = (pi.template === 'dark') ? '#0f172a' : '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      try {
-        const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
-        if (tile && tile.data) {
-          ctx.drawImage(tile.data, 0, 0, canvas.width, canvas.height);
+      if (pi.template !== 'dark') {
+        try {
+          const tile = await fetchTile(i, [0, 0, pi.width_pt, pi.height_pt], 256);
+          if (tile && tile.data) {
+            ctx.drawImage(tile.data, 0, 0, canvas.width, canvas.height);
+          }
+        } catch (e) {
+          console.warn('thumb render error for page', i, e);
         }
-      } catch (e) {
-        console.warn('thumb render error for page', i, e);
       }
 
       // Draw template guidelines in thumbnail
@@ -6127,7 +6104,11 @@ async function saveDocument(forceSaveAs = false, isAutosave = false) {
       .filter(t => !t.deleted && t.text && t.text.trim())
       .map(renderTextObjectToDataUrl);
 
-    const allImages = [...nonDeletedImages, ...textImages];
+    const templateImages = (state.pageInfos || [])
+      .map((pi, idx) => (pi && pi.template && pi.template !== 'blank') ? renderPageTemplateBackgroundToDataUrl(pi, idx) : null)
+      .filter(Boolean);
+
+    const allImages = [...templateImages, ...nonDeletedImages, ...textImages];
 
     const nonDeletedStrokes = (state.strokes || [])
       .filter(s => !s.deleted)
@@ -6410,6 +6391,15 @@ window.cancelPendingTouchStroke = () => {
     state.cur = null;
     state.streamline = null;
     clearWet();
+  }
+  if (wetCanvas && typeof wetCanvas.hasPointerCapture === 'function' && viewport && viewport.activeTouches) {
+    for (const pid of viewport.activeTouches.keys()) {
+      try {
+        if (wetCanvas.hasPointerCapture(pid)) {
+          wetCanvas.releasePointerCapture(pid);
+        }
+      } catch (_) {}
+    }
   }
 };
 

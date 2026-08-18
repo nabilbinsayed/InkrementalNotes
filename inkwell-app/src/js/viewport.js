@@ -336,6 +336,12 @@ class ViewportManager {
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
         const newZoom = Math.max(0.15, Math.min(10.0, curZoom * zoomFactor));
         this.setZoom(newZoom, [relX, relY], pane);
+        if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
+        if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
+        if (typeof window.redrawAll === 'function') window.redrawAll();
+        if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
+        if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
+        return;
       } else {
         e.preventDefault();
         let dx = e.deltaX;
@@ -359,6 +365,98 @@ class ViewportManager {
 
     window.addEventListener('wheel', onWheel, { passive: false });
 
+    // ---- Multi-touch gesture handling via Touch Events ----
+    const onTouchStart = e => {
+      if (e.touches && e.touches.length >= 2) {
+        e.preventDefault();
+        if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
+          window.cancelPendingTouchStroke();
+        }
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dx = t1.clientX - t0.clientX;
+        const dy = t1.clientY - t0.clientY;
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+
+        if (!this.stageRect) this.updateStageRect();
+        const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
+        const relX = midX - stageRect.left;
+        const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+        this.activePane = pane;
+        if (typeof window !== 'undefined' && window.state) {
+          window.state.activePane = pane;
+        }
+
+        this.isPinching = true;
+        this.pinchStartDist = Math.hypot(dx, dy) || 1;
+        this.pinchStartMid = [midX, midY];
+        this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
+        this.pinchStartPan = pane === 'right' ? [this.rightPanX, this.rightPanY] : [this.panX, this.panY];
+      }
+    };
+
+    const onTouchMove = e => {
+      if (e.touches && e.touches.length >= 2 && this.pinchStartDist && this.pinchStartMid && this.pinchStartPan) {
+        e.preventDefault();
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dx = t1.clientX - t0.clientX;
+        const dy = t1.clientY - t0.clientY;
+        const curDist = Math.hypot(dx, dy) || 1;
+        const curMid = [(t0.clientX + t1.clientX) / 2, (t0.clientY + t1.clientY) / 2];
+        const scale = curDist / this.pinchStartDist;
+        const newZoom = Math.max(0.15, Math.min(10.0, this.pinchStartZoom * scale));
+        const stageRect = this.stageRect || { left: 0, top: 0 };
+
+        const pane = this.activePane;
+        const startMidX = this.pinchStartMid[0] - stageRect.left;
+        const startMidY = this.pinchStartMid[1] - stageRect.top;
+        const curMidX = curMid[0] - stageRect.left;
+        const curMidY = curMid[1] - stageRect.top;
+
+        // World coordinate of initial touch midpoint
+        const worldX = (startMidX - this.pinchStartPan[0]) / this.pinchStartZoom;
+        const worldY = (startMidY - this.pinchStartPan[1]) / this.pinchStartZoom;
+
+        // Compute new pan so world point stays locked under curMid
+        const targetPanX = curMidX - worldX * newZoom;
+        const targetPanY = curMidY - worldY * newZoom;
+
+        if (pane === 'right' && this.splitMode) {
+          this.rightZoom = newZoom;
+          this.rightPanX = targetPanX;
+          this.rightPanY = this.clampPanY(targetPanY, 'right');
+        } else {
+          this.zoom = newZoom;
+          this.panX = targetPanX;
+          this.panY = this.clampPanY(targetPanY, 'left');
+        }
+        if (this.onChange) this.onChange();
+        if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
+        if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
+        if (typeof window.redrawAll === 'function') window.redrawAll();
+        if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
+        if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
+      }
+    };
+
+    const onTouchEnd = e => {
+      if (!e.touches || e.touches.length < 2) {
+        this.isPinching = false;
+        this.pinchStartDist = null;
+        this.pinchStartZoom = null;
+        this.pinchStartMid = null;
+        this.pinchStartPan = null;
+      }
+    };
+
+    window.addEventListener('touchstart', onTouchStart, { passive: false });
+    window.addEventListener('touchmove', onTouchMove, { passive: false });
+    window.addEventListener('touchend', onTouchEnd, { passive: false });
+    window.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+    // ---- Multi-touch gesture handling via Pointer Events ----
     element.addEventListener('pointerdown', e => {
       if (!this.stageRect) this.updateStageRect();
       const stageRect = this.stageRect || { left: 0, top: 0, width: 1000 };
@@ -381,12 +479,14 @@ class ViewportManager {
           if (typeof window !== 'undefined' && typeof window.cancelPendingTouchStroke === 'function') {
             window.cancelPendingTouchStroke();
           }
+          this.isPinching = true;
           const pts = Array.from(this.activeTouches.values());
           const dx = pts[1].x - pts[0].x;
           const dy = pts[1].y - pts[0].y;
           this.pinchStartDist = Math.hypot(dx, dy) || 1;
           this.pinchStartMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
           this.pinchStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
+          this.pinchStartPan = pane === 'right' ? [this.rightPanX, this.rightPanY] : [this.panX, this.panY];
         }
       }
       if (e.button === 1) { // middle button only
@@ -397,31 +497,47 @@ class ViewportManager {
       }
     });
 
-    element.addEventListener('pointermove', e => {
+    const onPointerMoveGlobal = e => {
       if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) {
         this.activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (this.activeTouches.size === 2 && this.pinchStartDist && this.pinchStartMid) {
+        if (this.activeTouches.size >= 2 && this.pinchStartDist && this.pinchStartMid && this.pinchStartPan) {
           e.preventDefault();
           const pts = Array.from(this.activeTouches.values());
           const curDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
           const curMid = [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
           const scale = curDist / this.pinchStartDist;
-          const newZoom = this.pinchStartZoom * scale;
+          const newZoom = Math.max(0.15, Math.min(10.0, this.pinchStartZoom * scale));
           const stageRect = this.stageRect || { left: 0, top: 0 };
-          const pivot = [this.pinchStartMid[0] - stageRect.left, this.pinchStartMid[1] - stageRect.top];
-          this.setZoom(newZoom, pivot, this.activePane);
 
-          const dMidX = curMid[0] - this.pinchStartMid[0];
-          const dMidY = curMid[1] - this.pinchStartMid[1];
-          if (Math.hypot(dMidX, dMidY) > 2) {
-            const pane = this.activePane;
-            const curPanX = pane === 'right' ? this.rightPanX : this.panX;
-            const curPanY = pane === 'right' ? this.rightPanY : this.panY;
-            this.setPan(curPanX + dMidX * 0.5, curPanY + dMidY * 0.5, pane);
-            this.pinchStartMid = curMid;
+          const pane = this.activePane;
+          const startMidX = this.pinchStartMid[0] - stageRect.left;
+          const startMidY = this.pinchStartMid[1] - stageRect.top;
+          const curMidX = curMid[0] - stageRect.left;
+          const curMidY = curMid[1] - stageRect.top;
+
+          // World coordinate of initial touch midpoint
+          const worldX = (startMidX - this.pinchStartPan[0]) / this.pinchStartZoom;
+          const worldY = (startMidY - this.pinchStartPan[1]) / this.pinchStartZoom;
+
+          // Compute new pan so world point stays locked under curMid
+          const targetPanX = curMidX - worldX * newZoom;
+          const targetPanY = curMidY - worldY * newZoom;
+
+          if (pane === 'right' && this.splitMode) {
+            this.rightZoom = newZoom;
+            this.rightPanX = targetPanX;
+            this.rightPanY = this.clampPanY(targetPanY, 'right');
+          } else {
+            this.zoom = newZoom;
+            this.panX = targetPanX;
+            this.panY = this.clampPanY(targetPanY, 'left');
           }
+          if (this.onChange) this.onChange();
           if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
+          if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
           if (typeof window.redrawAll === 'function') window.redrawAll();
+          if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
+          if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
           return;
         }
       }
@@ -435,7 +551,12 @@ class ViewportManager {
         const curPanY = pane === 'right' ? this.rightPanY : this.panY;
         this.setPan(curPanX + dx, curPanY + dy, pane);
       }
-    });
+    };
+
+    window.addEventListener('pointermove', onPointerMoveGlobal);
+    if ('onpointerrawupdate' in window) {
+      window.addEventListener('pointerrawupdate', onPointerMoveGlobal);
+    }
 
     const onPointerEnd = e => {
       if (e.pointerType === 'pen') {
@@ -464,9 +585,11 @@ class ViewportManager {
         if (this.touchStartTimes) this.touchStartTimes.delete(e.pointerId);
         this.activeTouches.delete(e.pointerId);
         if (this.activeTouches.size < 2) {
+          this.isPinching = false;
           this.pinchStartDist = null;
           this.pinchStartZoom = null;
           this.pinchStartMid = null;
+          this.pinchStartPan = null;
         }
       }
       if (e.button === 1) {
@@ -474,8 +597,8 @@ class ViewportManager {
         try { element.releasePointerCapture(e.pointerId); } catch (_) {}
       }
     };
-    element.addEventListener('pointerup', onPointerEnd);
-    element.addEventListener('pointercancel', onPointerEnd);
+    window.addEventListener('pointerup', onPointerEnd);
+    window.addEventListener('pointercancel', onPointerEnd);
   }
 }
 

@@ -112,6 +112,43 @@ impl Document {
     pub fn insert_sheet(&mut self, index: usize) {
         let insert_at = index.min(self.sheets.len());
         self.sheets.insert(insert_at, Sheet::bounded(insert_at));
+        self.reindex_bounded_sheets();
+    }
+
+    pub fn duplicate_sheet(&mut self, index: usize) -> Option<usize> {
+        if index >= self.sheets.len() {
+            return None;
+        }
+        let cloned = self.sheets[index].clone();
+        let target_idx = index + 1;
+        self.sheets.insert(target_idx, cloned);
+        self.reindex_bounded_sheets();
+        Some(target_idx)
+    }
+
+    pub fn delete_sheet(&mut self, index: usize) -> bool {
+        if index >= self.sheets.len() || self.sheets.len() <= 1 {
+            return false;
+        }
+        self.sheets.remove(index);
+        self.reindex_bounded_sheets();
+        true
+    }
+
+    pub fn reorder_sheet(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.sheets.len() || to >= self.sheets.len() {
+            return false;
+        }
+        if from == to {
+            return true;
+        }
+        let sheet = self.sheets.remove(from);
+        self.sheets.insert(to, sheet);
+        self.reindex_bounded_sheets();
+        true
+    }
+
+    pub fn reindex_bounded_sheets(&mut self) {
         for (i, sheet) in self.sheets.iter_mut().enumerate() {
             if let SheetKind::BoundedPage { ref mut source_pdf_page } = sheet.kind {
                 *source_pdf_page = i;

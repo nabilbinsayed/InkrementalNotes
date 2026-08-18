@@ -478,7 +478,7 @@ pub async fn render_tile(
         .clone()
         .ok_or("No PDF loaded")?;
 
-    let (bgra_bytes, bitmap_w, bitmap_h) = {
+    let (bgra_bytes, bitmap_w, bitmap_h, is_bgra) = {
         let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
         let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
             "PDFium is not available (pdfium.dll was not found at startup). \
@@ -510,6 +510,10 @@ pub async fn render_tile(
                 format!("PDFium failed to render page {page}: {e:?}")
             })?;
 
+            let is_bgra = matches!(
+                bitmap.format(),
+                Ok(PdfBitmapFormat::BGRA | PdfBitmapFormat::BGRx | PdfBitmapFormat::BGR)
+            );
             let bgra = Arc::new(bitmap.as_raw_bytes().to_vec());
             let bw = bitmap.width() as u32;
             let bh = bitmap.height() as u32;
@@ -521,9 +525,10 @@ pub async fn render_tile(
                 bgra_bytes: bgra.clone(),
                 bitmap_w: bw,
                 bitmap_h: bh,
+                is_bgra,
             });
 
-            (bgra, bw, bh)
+            (bgra, bw, bh, is_bgra)
         }
     };
 
@@ -546,10 +551,21 @@ pub async fn render_tile(
                     let dst_idx = (y * out_w + x) as usize * 4;
 
                     if src_idx + 3 < bgra_bytes.len() {
-                        let b = bgra_bytes[src_idx];
-                        let g = bgra_bytes[src_idx + 1];
-                        let r = bgra_bytes[src_idx + 2];
-                        let a = bgra_bytes[src_idx + 3] as u32;
+                        let (r, g, b, a) = if is_bgra {
+                            (
+                                bgra_bytes[src_idx + 2],
+                                bgra_bytes[src_idx + 1],
+                                bgra_bytes[src_idx],
+                                bgra_bytes[src_idx + 3] as u32,
+                            )
+                        } else {
+                            (
+                                bgra_bytes[src_idx],
+                                bgra_bytes[src_idx + 1],
+                                bgra_bytes[src_idx + 2],
+                                bgra_bytes[src_idx + 3] as u32,
+                            )
+                        };
 
                         let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
                         let blended_g = ((g as u32 * a + 255 * (255 - a)) / 255) as u8;
@@ -775,6 +791,7 @@ pub async fn save_pdf(
                     }
                 }
             }
+            doc.reindex_bounded_sheets();
         }
     }
 
@@ -1166,13 +1183,9 @@ pub async fn delete_page(
 ) -> Result<bool, String> {
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
-    if doc.sheets.len() <= 1 {
-        return Err("Cannot delete the only remaining page in the document".to_string());
+    if !doc.delete_sheet(index) {
+        return Err(format!("Cannot delete page {index} (page out of bounds or only remaining page)"));
     }
-    if index >= doc.sheets.len() {
-        return Err(format!("Page index {index} out of bounds"));
-    }
-    doc.sheets.remove(index);
 
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
     if let Some(bytes) = orig_bytes_opt {
@@ -1223,12 +1236,7 @@ pub async fn duplicate_page(
 ) -> Result<PageInfo, String> {
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
-    if index >= doc.sheets.len() {
-        return Err(format!("Page index {index} out of bounds"));
-    }
-    let cloned_sheet = doc.sheets[index].clone();
-    let target_idx = index + 1;
-    doc.sheets.insert(target_idx, cloned_sheet);
+    let target_idx = doc.duplicate_sheet(index).ok_or_else(|| format!("Page index {index} out of bounds"))?;
 
     let mut out_w = 595.0;
     let mut out_h = 842.0;
@@ -1329,14 +1337,9 @@ pub async fn reorder_page(
 ) -> Result<bool, String> {
     let mut doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_mut().ok_or("No document open")?;
-    if from_index >= doc.sheets.len() || to_index >= doc.sheets.len() {
+    if !doc.reorder_sheet(from_index, to_index) {
         return Err("Page indices out of bounds".to_string());
     }
-    if from_index == to_index {
-        return Ok(true);
-    }
-    let sheet = doc.sheets.remove(from_index);
-    doc.sheets.insert(to_index, sheet);
 
     let orig_bytes_opt = state.pdf_bytes.lock().unwrap().clone();
     if let Some(bytes) = orig_bytes_opt {

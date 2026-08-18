@@ -46,6 +46,10 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
             eprintln!("PDFium failed to render page {page}: {e:?}");
             e
         }).ok()?;
+        let is_bgra = matches!(
+            bitmap.format(),
+            Ok(PdfBitmapFormat::BGRA | PdfBitmapFormat::BGRx | PdfBitmapFormat::BGR)
+        );
         let bgra_bytes = bitmap.as_raw_bytes();
         let bitmap_w = bitmap.width() as u32;
         let bitmap_h = bitmap.height() as u32;
@@ -72,10 +76,21 @@ impl<'a> PageRasterizer for PdfiumRasterizer<'a> {
                 let dst_idx = (y * out_w + x) as usize * 3;
                 
                 if src_idx + 3 < bgra_bytes.len() {
-                    let b = bgra_bytes[src_idx];
-                    let g = bgra_bytes[src_idx + 1];
-                    let r = bgra_bytes[src_idx + 2];
-                    let a = bgra_bytes[src_idx + 3] as u32;
+                    let (r, g, b, a) = if is_bgra {
+                        (
+                            bgra_bytes[src_idx + 2],
+                            bgra_bytes[src_idx + 1],
+                            bgra_bytes[src_idx],
+                            bgra_bytes[src_idx + 3] as u32,
+                        )
+                    } else {
+                        (
+                            bgra_bytes[src_idx],
+                            bgra_bytes[src_idx + 1],
+                            bgra_bytes[src_idx + 2],
+                            bgra_bytes[src_idx + 3] as u32,
+                        )
+                    };
                     
                     // Alpha-blend over white background
                     let blended_r = ((r as u32 * a + 255 * (255 - a)) / 255) as u8;
