@@ -49,12 +49,33 @@ fn parse_stroke_id(s: &str) -> u128 {
     }
 }
 
-/// Derive a temp-dir WAL path for `doc_path` that stays out of the synced
-/// folder. Key = hex-encoded FNV-1a of the canonical path bytes.
+/// Derive a safe WAL path for `doc_path` that stays out of the synced folder.
+/// Key = hex-encoded FNV-1a of the canonical path bytes.
+/// On Windows: uses %TEMP% directly.
+/// On Unix/Linux: uses $XDG_STATE_HOME/inkwell/wal (or ~/.local/state/inkwell/wal) to persist across reboots.
 fn wal_path_for(doc_path: &Path) -> PathBuf {
     let s = doc_path.to_string_lossy();
     let h = hash_bytes_fnv1a(s.as_bytes());
-    std::env::temp_dir().join(format!("inkwell-wal-{:016x}.bin", h))
+    let filename = format!("inkwell-wal-{:016x}.bin", h);
+
+    #[cfg(windows)]
+    {
+        std::env::temp_dir().join(filename)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+                home.join(".local").join("state")
+            })
+            .join("inkwell")
+            .join("wal");
+        let _ = std::fs::create_dir_all(&base);
+        base.join(filename)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -14,6 +14,18 @@ pub use text::{extract_text, extract_text_spans, TextSpan};
 pub use pdfium_render::prelude::{Pdfium, PdfiumError};
 
 
+#[cfg(target_os = "windows")]
+const PDFIUM_FILENAMES: &[&str] = &["pdfium.dll"];
+
+#[cfg(target_os = "linux")]
+const PDFIUM_FILENAMES: &[&str] = &["libpdfium.so", "libpdfium.so.1"];
+
+#[cfg(target_os = "macos")]
+const PDFIUM_FILENAMES: &[&str] = &["libpdfium.dylib"];
+
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+const PDFIUM_FILENAMES: &[&str] = &["pdfium.dll", "libpdfium.so", "libpdfium.dylib"];
+
 /// Initialize PDFium binding by checking absolute paths at executable directory, custom env var, or system library.
 pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     let mut candidate_paths = Vec::new();
@@ -42,18 +54,19 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     }
 
     for dir in candidate_paths {
-        let dll_path = dir.join("pdfium.dll");
-        if dll_path.exists() {
-            let lib_name = Pdfium::pdfium_platform_library_name_at_path(&dir);
-            match Pdfium::bind_to_library(&lib_name) {
-                Ok(bindings) => {
-                    eprintln!("Successfully loaded PDFium library from {:?}", dll_path);
-                    return Ok(Pdfium::new(bindings));
+        for filename in PDFIUM_FILENAMES {
+            let lib_path = dir.join(filename);
+            if lib_path.exists() {
+                match Pdfium::bind_to_library(&lib_path) {
+                    Ok(bindings) => {
+                        eprintln!("Successfully loaded PDFium library from {:?}", lib_path);
+                        return Ok(Pdfium::new(bindings));
+                    }
+                    Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+                        return Ok(Pdfium::default());
+                    }
+                    Err(error) => eprintln!("Failed to load PDFium from {lib_path:?}: {error:?}"),
                 }
-                Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
-                    return Ok(Pdfium::default());
-                }
-                Err(error) => eprintln!("Failed to load PDFium from {dll_path:?}: {error:?}"),
             }
         }
     }
