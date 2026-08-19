@@ -207,15 +207,27 @@
       <div class="diagnostics-card">
         <div class="diag-row">
           <span class="diag-key">Active Pointer</span>
-          <span id="diagPointerType" class="diag-badge">Stylus (Pen)</span>
+          <span id="diagPointerType" class="diag-badge">Mouse / Trackpad</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Pressure Source</span>
+          <span id="diagPressureSource" class="diag-badge">Fallback (0.5)</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Active Device</span>
+          <span id="diagActiveDevice" class="diag-badge" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Scanning...</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Live Pressure</span>
+          <span id="diagLivePressure" class="diag-badge green">0.00</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-key">Sample Age</span>
+          <span id="diagSampleAge" class="diag-badge">--</span>
         </div>
         <div class="diag-row">
           <span class="diag-key">Crash WAL Engine</span>
           <span class="diag-badge green">Healthy (Fsynced)</span>
-        </div>
-        <div class="diag-row">
-          <span class="diag-key">Sidecar Stream</span>
-          <span class="diag-badge">/Inkw_Doc Stream</span>
         </div>
       </div>
     </div>

@@ -81,7 +81,9 @@ function consumeSample(e, ptWorld, pane, viewport) {
   const pageCoord = viewport.worldToPage(ptWorld[0], ptWorld[1]);
   const px = pageCoord.px;
   const py = pageCoord.py;
-  let p = e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5;
+  let p = typeof window.resolvePressure === 'function'
+    ? window.resolvePressure(e)
+    : (e.pressure !== undefined && e.pressure > 0 ? e.pressure : 0.5);
   const t = e.timeStamp || performance.now();
 
   if (state.streamline) {

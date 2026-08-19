@@ -139,43 +139,88 @@ impl PdfFile {
         self.add(body)
     }
 
-    pub fn page_height(&self, page_num: u32) -> f64 {
-        if let Ok(dict) = self.obj_dict(page_num) {
-            let box_ref = po::dict_get(&self.base, dict, "/MediaBox")
-                .or_else(|| po::dict_get(&self.base, dict, "/CropBox"));
-            if let Some(r) = box_ref {
-                let slice = &self.base[r.0..r.1];
-                let s = String::from_utf8_lossy(slice);
-                let nums: Vec<f64> = s
-                    .trim_matches(|c| c == '[' || c == ']')
-                    .split_whitespace()
-                    .filter_map(|t| t.parse::<f64>().ok())
-                    .collect();
-                if nums.len() == 4 {
-                    let h = (nums[3] - nums[1]).abs();
-                    if h > 10.0 {
-                        return h;
+    fn resolve_rectangle(&self, r: (usize, usize)) -> Option<[f64; 4]> {
+        let raw = if let Some(ref_num) = po::as_ref_num(&self.base, r) {
+            let (obj_start, _) = po::find_object(&self.base, ref_num)?;
+            let end = po::skip_value(&self.base, obj_start);
+            &self.base[obj_start..end]
+        } else {
+            &self.base[r.0..r.1]
+        };
+
+        let s = String::from_utf8_lossy(raw);
+        let nums: Vec<f64> = s
+            .trim_matches(|c| c == '[' || c == ']')
+            .split_whitespace()
+            .filter_map(|t| t.parse::<f64>().ok())
+            .collect();
+        if nums.len() == 4 {
+            Some([nums[0], nums[1], nums[2], nums[3]])
+        } else {
+            None
+        }
+    }
+
+    pub fn page_box(&self, page_num: u32) -> [f64; 4] {
+        let mut cur_obj = page_num;
+        let mut depth = 0;
+
+        while depth < 32 {
+            if let Ok(dict) = self.obj_dict(cur_obj) {
+                // Check CropBox first, then MediaBox
+                let box_ref = po::dict_get(&self.base, dict, "/CropBox")
+                    .or_else(|| po::dict_get(&self.base, dict, "/MediaBox"));
+
+                if let Some(r) = box_ref {
+                    if let Some(nums) = self.resolve_rectangle(r) {
+                        return nums;
+                    }
+                }
+
+                // If not found on this node, follow /Parent up the page tree
+                if let Some(parent_ref) = po::dict_get(&self.base, dict, "/Parent") {
+                    if let Some(parent_num) = po::as_ref_num(&self.base, parent_ref) {
+                        cur_obj = parent_num;
+                        depth += 1;
+                        continue;
                     }
                 }
             }
+            break;
         }
-        842.0
+
+        [0.0, 0.0, 595.0, 842.0]
+    }
+
+    pub fn page_height(&self, page_num: u32) -> f64 {
+        let b = self.page_box(page_num);
+        (b[3] - b[1]).abs()
     }
 
     // -- the interesting part ---------------------------------------------
 
     /// Write `doc` into the file as a new incremental generation.
     pub fn write_document(&mut self, document: &Document, group: usize) -> Result<()> {
+        self.write_document_with_boxes(document, group, None)
+    }
+
+    /// Write `doc` into the file with optional authoritative explicit page boxes.
+    pub fn write_document_with_boxes(
+        &mut self,
+        document: &Document,
+        group: usize,
+        explicit_boxes: Option<&std::collections::HashMap<usize, [f64; 4]>>,
+    ) -> Result<()> {
         let group = group.max(1);
         let sidecar_raw = doc::encode_sidecar(document);
         let hash = Sha256::digest(&sidecar_raw);
 
         // ---- Layer 1 + 2, per sheet ------------------------------------
         for (sheet_idx, sheet) in document.sheets.iter().enumerate() {
-            let page_num = match sheet.kind {
+            let (page_num, pdf_page_idx) = match sheet.kind {
                 doc::SheetKind::BoundedPage { source_pdf_page } => {
                     match self.pages.get(source_pdf_page) {
-                        Some(n) => *n,
+                        Some(n) => (*n, source_pdf_page),
                         None => continue,
                     }
                 }
@@ -185,11 +230,16 @@ impl PdfFile {
             };
             let _ = sheet_idx;
 
-            let h = self.page_height(page_num);
+            let pbox = if let Some(boxes) = explicit_boxes {
+                boxes.get(&pdf_page_idx).copied().or_else(|| boxes.get(&sheet_idx).copied()).unwrap_or_else(|| self.page_box(page_num))
+            } else {
+                self.page_box(page_num)
+            };
+
             let strokes: Vec<&Stroke> = sheet.strokes().collect();
             let mut annots = Vec::new();
             for chunk in strokes.chunks(group) {
-                if let Some(a) = self.emit_group(chunk, h) {
+                if let Some(a) = self.emit_group(chunk, pbox) {
                     annots.push(a);
                 }
             }
@@ -220,29 +270,17 @@ impl PdfFile {
 
     /// One `/Ink` annotation covering `strokes`, with an `/AP` appearance stream
     /// holding their filled ribbons.
-    fn emit_group(&mut self, strokes: &[&Stroke], page_height: f64) -> Option<u32> {
-        let mut bbox_canvas = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-        let mut any = false;
-        for s in strokes {
-            if let Some(b) = s.bbox() {
-                bbox_canvas[0] = bbox_canvas[0].min(b[0]);
-                bbox_canvas[1] = bbox_canvas[1].min(b[1]);
-                bbox_canvas[2] = bbox_canvas[2].max(b[2]);
-                bbox_canvas[3] = bbox_canvas[3].max(b[3]);
-                any = true;
-            }
-        }
-        if !any {
+    fn emit_group(&mut self, strokes: &[&Stroke], page_box: [f64; 4]) -> Option<u32> {
+        let llx = page_box[0];
+        let lly = page_box[1];
+        let urx = page_box[2];
+        let ury = page_box[3];
+
+        if strokes.is_empty() {
             return None;
         }
-        let pad = 1.0;
-        // Transform canvas bounding box to PDF user space coordinate system (y_pdf = page_height - y_canvas)
-        let bbox_pdf = [
-            bbox_canvas[0] - pad,
-            page_height - bbox_canvas[3] - pad,
-            bbox_canvas[2] + pad,
-            page_height - bbox_canvas[1] + pad,
-        ];
+
+        let page_rect = [llx, lly, urx, ury];
 
         // appearance content: one fill per stroke
         let mut content = Vec::new();
@@ -278,25 +316,25 @@ impl PdfFile {
                 "q\n{gs} gs\n{:.3} {:.3} {:.3} rg\n",
                 s_ref.rgb[0], s_ref.rgb[1], s_ref.rgb[2]
             );
-            // Transform y_canvas -> y_pdf = page_height - y_canvas
+            // Transform y_canvas -> y_pdf = ury - y_canvas, x_canvas -> x_pdf = llx + x_canvas
             for cmd in &path {
                 match cmd {
                     PathCmd::MoveTo(p) => {
-                        let _ = writeln!(content, "{} {} m", fmt_coord(p.0), fmt_coord(page_height - p.1));
+                        let _ = writeln!(content, "{} {} m", fmt_coord(llx + p.0), fmt_coord(ury - p.1));
                     }
                     PathCmd::LineTo(p) => {
-                        let _ = writeln!(content, "{} {} l", fmt_coord(p.0), fmt_coord(page_height - p.1));
+                        let _ = writeln!(content, "{} {} l", fmt_coord(llx + p.0), fmt_coord(ury - p.1));
                     }
                     PathCmd::CurveTo(c) => {
                         let _ = writeln!(
                             content,
                             "{} {} {} {} {} {} c",
-                            fmt_coord(c[0].0),
-                            fmt_coord(page_height - c[0].1),
-                            fmt_coord(c[1].0),
-                            fmt_coord(page_height - c[1].1),
-                            fmt_coord(c[2].0),
-                            fmt_coord(page_height - c[2].1)
+                            fmt_coord(llx + c[0].0),
+                            fmt_coord(ury - c[0].1),
+                            fmt_coord(llx + c[1].0),
+                            fmt_coord(ury - c[1].1),
+                            fmt_coord(llx + c[2].0),
+                            fmt_coord(ury - c[2].1)
                         );
                     }
                     PathCmd::Close => {
@@ -317,13 +355,13 @@ impl PdfFile {
         let ap = self.add_stream(
             &format!(
                 "/Type /XObject /Subtype /Form /BBox [{}] /Resources << /ExtGState << {gstates} >> >>",
-                fmt_rect(&bbox_pdf)
+                fmt_rect(&page_rect)
             ),
             &content,
             true,
         );
 
-        // /InkList: decimated centrelines converted to PDF user space (y_pdf = page_height - y_canvas)
+        // /InkList: decimated centrelines converted to PDF user space (x_pdf = llx + x_canvas, y_pdf = ury - y_canvas)
         let mut inklist = String::new();
         for s in strokes {
             let simplified = if s.samples.len() > 3 {
@@ -334,8 +372,9 @@ impl PdfFile {
             let centreline: Vec<(f64, f64)> = simplified.iter().step_by(2).map(|sm| (sm.x, sm.y)).collect();
             inklist.push('[');
             for (x, y) in centreline {
-                let y_pdf = page_height - y;
-                inklist.push_str(&fmt_coord(x));
+                let x_pdf = llx + x;
+                let y_pdf = ury - y;
+                inklist.push_str(&fmt_coord(x_pdf));
                 inklist.push(' ');
                 inklist.push_str(&fmt_coord(y_pdf));
                 inklist.push(' ');
@@ -352,7 +391,7 @@ impl PdfFile {
                  /InkList [{inklist}] /C [{:.3} {:.3} {:.3}] \
                  /BS << /W {:.2} /S /S >> /T (Inkwell) /NM ({}) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({}) /Inkw_N {} >>",
-                fmt_rect(&bbox_pdf),
+                fmt_rect(&page_rect),
                 head.rgb[0],
                 head.rgb[1],
                 head.rgb[2],

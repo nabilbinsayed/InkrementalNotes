@@ -4,6 +4,7 @@
 
 mod commands;
 mod state;
+mod stylus_linux;
 
 use state::AppState;
 
@@ -74,6 +75,7 @@ fn main() {
             commands::reorder_page,
             commands::journal_image_mutation,
             commands::journal_text_mutation,
+            commands::start_stylus_stream,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

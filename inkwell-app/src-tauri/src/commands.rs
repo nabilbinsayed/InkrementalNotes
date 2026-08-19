@@ -1382,4 +1382,14 @@ pub async fn reorder_page(
     Ok(true)
 }
 
+#[tauri::command]
+pub async fn start_stylus_stream(
+    channel: tauri::ipc::Channel<crate::stylus_linux::StylusMessage>,
+) -> Result<(), String> {
+    let is_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    crate::stylus_linux::spawn_stylus_worker(channel, is_running);
+    Ok(())
+}
+
+
 

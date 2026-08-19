@@ -65,6 +65,10 @@ const state = {
   penWidth: 1.6,
   highlighterWidth: 16.0,
   baseWidth: 1.6,         // Fine elegant line width matching Xournal++ / Excalidraw
+  pressureSource: 'fallback', // 'native' | 'browser' | 'fallback'
+  lastPointerType: 'mouse',   // 'pen' | 'eraser' | 'mouse'
+  nativeDeviceInfo: 'None',
+  nativeSampleAge: null,
   strokes: [],           // {id, kind, rgb, base_width, points[], deleted, sheet}
   selectedStrokes: [],
   images: [],            // [{id, sheet, x, y, width, height, dataUrl, _el, deleted}]
@@ -1193,6 +1197,122 @@ function eraseStrokesAt(e) {
   }
 }
 
+// ---- Native Linux Evdev Hardware Stylus Engine ----
+let liveNativePressure = 0.0;
+let liveNativeDown = false;
+let liveNativeTool = 'pen';
+const activeStylusDevice = {
+  name: 'Scanning...',
+  path: '',
+  minPressure: 0,
+  maxPressure: 65535,
+};
+
+// Initialize native stylus stream channel
+function initNativeStylusStream() {
+  if (typeof window.__TAURI__ === 'undefined' || !window.__TAURI__.core || !window.__TAURI__.core.invoke) {
+    return;
+  }
+
+  try {
+    const channel = new window.__TAURI__.core.Channel();
+    channel.onmessage = (msg) => {
+      if (!msg) return;
+      if (msg.type === 'handshake') {
+        const payload = msg.payload;
+        if (payload) {
+          activeStylusDevice.name = payload.device_name || 'Native Tablet';
+          activeStylusDevice.path = payload.device_path || '';
+          activeStylusDevice.minPressure = payload.pressure_min || 0;
+          activeStylusDevice.maxPressure = payload.pressure_max || 65535;
+          if ($('diagActiveDevice')) {
+            $('diagActiveDevice').textContent = `${activeStylusDevice.name} (${activeStylusDevice.path})`;
+            $('diagActiveDevice').title = `${activeStylusDevice.name} at ${activeStylusDevice.path}`;
+          }
+        }
+      } else if (msg.type === 'sample') {
+        const s = msg.payload;
+        if (!s) return;
+        liveNativePressure = s.pressure;
+        liveNativeDown = s.down;
+        liveNativeTool = s.tool === 2 ? 'eraser' : 'pen';
+      }
+    };
+
+    window.__TAURI__.core.invoke('start_stylus_stream', { channel })
+      .catch(err => console.warn('[inkwell/stylus] Native stylus stream start error:', err));
+  } catch (e) {
+    console.warn('[inkwell/stylus] Native stream init failed:', e);
+  }
+}
+
+// Zero-overhead deterministic pressure resolver (< 0.001ms)
+function resolvePressure(e) {
+  if (liveNativeDown && liveNativePressure > 0.001) {
+    state.pressureSource = 'native';
+    state.lastPointerType = liveNativeTool;
+    state.nativeDeviceInfo = `${activeStylusDevice.name} (${activeStylusDevice.path})`;
+    const p = Math.max(0.05, Math.min(1.0, liveNativePressure));
+    updateHardwareDiagnostics(p);
+    return p;
+  }
+
+  if (e && e.pointerType === 'pen' && e.pressure > 0) {
+    state.pressureSource = 'browser';
+    state.lastPointerType = 'pen';
+    updateHardwareDiagnostics(e.pressure);
+    return e.pressure;
+  }
+
+  state.pressureSource = 'fallback';
+  state.lastPointerType = (e && e.pointerType) ? e.pointerType : 'mouse';
+  updateHardwareDiagnostics(0.5);
+  return 0.5;
+}
+
+window.resolvePressure = resolvePressure;
+
+let diagUpdateScheduled = false;
+let pendingDiagPressure = 0.5;
+
+function updateHardwareDiagnostics(currentP = 0.5) {
+  pendingDiagPressure = currentP;
+  if (diagUpdateScheduled) return;
+  diagUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    diagUpdateScheduled = false;
+    renderHardwareDiagnosticsUI(pendingDiagPressure);
+  });
+}
+
+function renderHardwareDiagnosticsUI(currentP = 0.5) {
+  if ($('diagPointerType')) {
+    $('diagPointerType').textContent = state.lastPointerType === 'pen'
+      ? 'Stylus Pen'
+      : (state.lastPointerType === 'eraser' ? 'Stylus Eraser' : 'Mouse / Trackpad');
+  }
+  if ($('diagPressureSource')) {
+    if (state.pressureSource === 'native') {
+      $('diagPressureSource').textContent = 'Native Linux (evdev)';
+      $('diagPressureSource').className = 'diag-badge green';
+    } else if (state.pressureSource === 'browser') {
+      $('diagPressureSource').textContent = 'Browser (PointerEvent)';
+      $('diagPressureSource').className = 'diag-badge';
+    } else {
+      $('diagPressureSource').textContent = 'Fallback (0.5)';
+      $('diagPressureSource').className = 'diag-badge';
+    }
+  }
+  if ($('diagLivePressure')) {
+    $('diagLivePressure').textContent = currentP.toFixed(2);
+  }
+  if ($('diagSampleAge')) {
+    $('diagSampleAge').textContent = state.pressureSource === 'native' && state.nativeSampleAge != null
+      ? `${state.nativeSampleAge.toFixed(1)} ms`
+      : '--';
+  }
+}
+
 // ---- consume (wet layer drawing) ----
 function consume(e) {
   if (!wctx) return;
@@ -1204,7 +1324,7 @@ function consume(e) {
   }
   if (!state.cur) return;
   const [x, y] = localXY(e, state.drawingPane);
-  const p = e.pressure > 0 ? e.pressure : 0.5;
+  const p = resolvePressure(e);
   const smoothed = state.streamline.filter(x, y, p);
   const prev = state.cur.last;
   const pt = state.cur.push(smoothed.x, smoothed.y, smoothed.p, e.timeStamp);
@@ -5306,7 +5426,7 @@ function updateDocInfo() {
   if ($('docStatStrokes')) $('docStatStrokes').textContent = `${nStrokes}`;
   if ($('docStatCurrentPage')) $('docStatCurrentPage').textContent = `Page ${curPage} of ${nPages || 1}`;
   if ($('docStatDimensions')) $('docStatDimensions').textContent = dimStr;
-  if ($('diagPointerType')) $('diagPointerType').textContent = state.lastPointerType === 'pen' ? 'Stylus Pen (Pressure Active)' : 'Mouse / Trackpad';
+  updateHardwareDiagnostics();
 }
 
 function updateToolBadges() {
@@ -6772,6 +6892,7 @@ window.addEventListener('DOMContentLoaded', () => {
   setWelcomeState(true);
   renderRecentFiles();
 
+  initNativeStylusStream();
   attachPointerHandlers();
   bindUI();
   attachOpenListeners();
