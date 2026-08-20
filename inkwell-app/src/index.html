@@ -634,16 +634,16 @@
           <span class="dock-shortcut">T</span>
         </button>
 
+        <button id="btnDockTextSelect" class="dock-btn" title="Text Selection Tool (S)" aria-label="Text selection tool">
+          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 4V2h10v2M12 2v20M7 22v-2h10v2M9 9h6M9 15h6"/></svg>
+          <span class="dock-shortcut">S</span>
+        </button>
+
         <div class="dock-divider"></div>
 
         <button id="btnDockAddPreset" class="dock-btn" title="Ink Color & Width Palette (C)" aria-label="Ink properties palette">
           <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.5 17.5 2 12 2z"/></svg>
           <span class="dock-shortcut">C</span>
-        </button>
-
-        <button id="btnDockStylusOptions" class="dock-btn" title="Preferences & Settings (S / Ctrl+,)" aria-label="Preferences">
-          <svg class="dock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          <span class="dock-shortcut">S</span>
         </button>
       </div>
 
@@ -666,50 +666,65 @@
         <div class="inspector-section">
           <div class="inspector-row-header">
             <span class="inspector-label">Stroke Width</span>
-            <span id="popoverWidthVal" class="inspector-val-badge">1.6 pt</span>
+            <span id="popoverWidthVal" class="inspector-val-badge">3 pt</span>
           </div>
           <div class="width-presets-row">
-            <button type="button" class="btn-width-preset" data-width="1.0" title="Fine (1.0 pt)">
+            <button type="button" class="btn-width-preset" data-width="1.0" title="Fine (1 pt)">
               <span class="preset-dot" style="width: 4px; height: 4px;"></span>
-              <span>1.0 pt</span>
+              <span>1 pt</span>
             </button>
-            <button type="button" class="btn-width-preset active" data-width="1.6" title="Normal (1.6 pt)">
+            <button type="button" class="btn-width-preset" data-width="2.0" title="Thin (2 pt)">
               <span class="preset-dot" style="width: 6px; height: 6px;"></span>
-              <span>1.6 pt</span>
+              <span>2 pt</span>
             </button>
-            <button type="button" class="btn-width-preset" data-width="3.2" title="Medium (3.2 pt)">
+            <button type="button" class="btn-width-preset active" data-width="3.0" title="Standard (3 pt)">
               <span class="preset-dot" style="width: 8px; height: 8px;"></span>
-              <span>3.2 pt</span>
+              <span>3 pt</span>
             </button>
-            <button type="button" class="btn-width-preset" data-width="6.0" title="Bold (6.0 pt)">
+            <button type="button" class="btn-width-preset" data-width="6.0" title="Bold (6 pt)">
               <span class="preset-dot" style="width: 11px; height: 11px;"></span>
-              <span>6.0 pt</span>
+              <span>6 pt</span>
             </button>
           </div>
           <div class="inspector-slider-wrap">
-            <input type="range" id="popoverWidthSlider" min="0.5" max="16" step="0.1" value="1.6" class="custom-range-slider" aria-label="Stroke width slider">
+            <input type="range" id="popoverWidthSlider" min="0.5" max="16" step="0.5" value="3.0" class="custom-range-slider" aria-label="Stroke width slider">
           </div>
         </div>
 
-        <!-- Color Palette (Clean 2x4 Grid with active indicators + Custom HEX Picker) -->
+        <!-- Color Palette (Curated Swatches + Custom Hex + Custom Saved Slots) -->
         <div class="inspector-section" id="popoverColorSection">
           <div class="inspector-row-header">
             <span class="inspector-label">Color Palette</span>
-            <label class="custom-color-picker-label" title="Custom color picker">
-              <input type="color" id="popoverCustomColorPicker" value="#141724">
+            <label class="custom-color-picker-label" title="Pick custom color">
+              <input type="color" id="popoverCustomColorPicker" value="#000000">
               <span class="custom-picker-dot"></span>
               <span>Custom</span>
             </label>
           </div>
           <div class="color-swatches-grid">
-            <button type="button" class="swatch active" data-color="#141724" style="background:#141724;" title="Carbon Black" aria-label="Carbon Black"></button>
-            <button type="button" class="swatch" data-color="#1e40af" style="background:#1e40af;" title="Oxford Blue" aria-label="Oxford Blue"></button>
+            <button type="button" class="swatch active" data-color="#000000" style="background:#000000;" title="Pitch Black" aria-label="Pitch Black"></button>
+            <button type="button" class="swatch swatch-white" data-color="#ffffff" style="background:#ffffff;" title="Pure White" aria-label="Pure White"></button>
+            <button type="button" class="swatch" data-color="#475569" style="background:#475569;" title="Slate Gray" aria-label="Slate Gray"></button>
             <button type="button" class="swatch" data-color="#dc2626" style="background:#dc2626;" title="Crimson Red" aria-label="Crimson Red"></button>
+            <button type="button" class="swatch" data-color="#ea580c" style="background:#ea580c;" title="Coral Orange" aria-label="Coral Orange"></button>
+            <button type="button" class="swatch" data-color="#d97706" style="background:#d97706;" title="Amber Gold" aria-label="Amber Gold"></button>
+            <button type="button" class="swatch" data-color="#1e40af" style="background:#1e40af;" title="Oxford Blue" aria-label="Oxford Blue"></button>
+            <button type="button" class="swatch" data-color="#0d9488" style="background:#0d9488;" title="Teal Cyan" aria-label="Teal Cyan"></button>
             <button type="button" class="swatch" data-color="#16a34a" style="background:#16a34a;" title="Emerald Green" aria-label="Emerald Green"></button>
             <button type="button" class="swatch" data-color="#7c3aed" style="background:#7c3aed;" title="Royal Purple" aria-label="Royal Purple"></button>
-            <button type="button" class="swatch" data-color="#d97706" style="background:#d97706;" title="Amber Gold" aria-label="Amber Gold"></button>
             <button type="button" class="swatch" data-color="#e11d48" style="background:#e11d48;" title="Rose Pink" aria-label="Rose Pink"></button>
-            <button type="button" class="swatch" data-color="#0d9488" style="background:#0d9488;" title="Teal Cyan" aria-label="Teal Cyan"></button>
+            <button type="button" class="swatch" data-color="#c026d3" style="background:#c026d3;" title="Fuchsia Magenta" aria-label="Fuchsia Magenta"></button>
+          </div>
+
+          <!-- Custom Color Palette Slots -->
+          <div class="custom-palette-header">
+            <span class="custom-palette-title">Custom Colors</span>
+          </div>
+          <div class="custom-swatches-grid" id="customSwatchesGrid">
+            <button type="button" class="swatch swatch-custom empty" data-slot="0" title="Empty custom slot 1 (click to add)"><span class="custom-plus">+</span></button>
+            <button type="button" class="swatch swatch-custom empty" data-slot="1" title="Empty custom slot 2 (click to add)"><span class="custom-plus">+</span></button>
+            <button type="button" class="swatch swatch-custom empty" data-slot="2" title="Empty custom slot 3 (click to add)"><span class="custom-plus">+</span></button>
+            <button type="button" class="swatch swatch-custom empty" data-slot="3" title="Empty custom slot 4 (click to add)"><span class="custom-plus">+</span></button>
           </div>
         </div>
       </div>
@@ -999,6 +1014,22 @@
       <button id="btnConfirmCloseCancel" class="btn-secondary" style="min-height: 38px; padding: 0 16px;">Cancel</button>
       <button id="btnConfirmCloseDiscard" class="btn-secondary" style="min-height: 38px; padding: 0 16px; color: #ef4444; border-color: rgba(239, 68, 68, 0.35);">Don't Save</button>
       <button id="btnConfirmCloseSave" class="btn-primary" style="min-height: 38px; padding: 0 18px;">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Delete Page Modal -->
+<div id="confirmDeletePageModal" class="modal-backdrop hidden">
+  <div class="modal-card modal-card-sm">
+    <div class="modal-header">
+      <h3 id="confirmDeletePageTitle">Delete Page</h3>
+    </div>
+    <div class="modal-body">
+      <p id="confirmDeletePageMsg" style="color: var(--text-dim); margin-bottom: 24px; font-size: 14px; line-height: 1.5;">Are you sure you want to delete this page? This action cannot be undone.</p>
+    </div>
+    <div class="modal-actions" style="display: flex; gap: 10px; justify-content: flex-end;">
+      <button id="btnConfirmDeletePageCancel" class="btn-secondary" style="min-height: 38px; padding: 0 16px;">Cancel</button>
+      <button id="btnConfirmDeletePageConfirm" class="btn-primary" style="min-height: 38px; padding: 0 18px; background: #ef4444; border-color: #ef4444;">Delete</button>
     </div>
   </div>
 </div>

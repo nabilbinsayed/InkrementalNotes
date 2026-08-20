@@ -54,17 +54,27 @@ function escapeHtml(str) {
 
 const state = {
   activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler',
-                          // 'rect', 'ellipse', 'laser'
+                          // 'rect', 'ellipse', 'laser', 'text', 'textSelect'
   prevTool: 'pen',        // restored after spring-loaded key release
+  lastUsedTool: 'rect',   // for Space key toggling between primary tools
+  currentShapeTool: 'rect', // active shape sub-tool: 'rect' | 'ellipse' | 'ruler'
   springKey: null,        // which key is spring-held right now
-  color: [0.08, 0.09, 0.14],
-  penColor: [0.08, 0.09, 0.14],
+  isSpacePressed: false,  // whether spacebar is currently held down
+  spaceDownTime: null,    // performance.now() timestamp when spacebar was pressed
+  spaceToolBefore: null,  // activeTool prior to spacebar hold
+  spaceDidPan: false,     // whether user dragged/panned while spacebar was held
+  color: [0.0, 0.0, 0.0],
+  penColor: [0.0, 0.0, 0.0],
   highlighterColor: [0.99, 0.93, 0.28],
   textColor: '#141724',
-  shapesColor: [0.08, 0.09, 0.14],
-  penWidth: 1.6,
+  shapesColor: [0.0, 0.0, 0.0],
+  penWidth: 3.0,
   highlighterWidth: 16.0,
-  baseWidth: 1.6,         // Fine elegant line width matching Xournal++ / Excalidraw
+  baseWidth: 3.0,         // Standard 3 pt stroke width
+  customColors: JSON.parse(localStorage.getItem('inkwell_custom_colors') || '[]'),
+  highlighterTextSnap: null,
+  textSelectStart: null,
+  textSelectEnd: null,
   pressureSource: 'fallback', // 'native' | 'browser' | 'fallback'
   lastPointerType: 'mouse',   // 'pen' | 'eraser' | 'mouse'
   nativeDeviceInfo: 'None',
@@ -76,8 +86,11 @@ const state = {
   textObjects: [],       // [{id, sheet, x, y, text, fontSize, color, bold, italic, width, height, deleted}]
   selectedTextObjects: [],
   pageTextSpans: {},     // { [sheet: number]: [{ text, rect: [x0, y0, x1, y1], page_index }] }
+  pageTextData: {},      // { [sheet: number]: { page_index, text, lines[], chars[], spans[] } }
   selectedTextSpans: [],
   selectedTextString: '',
+  textSelection: null,   // { sheet, startCharIdx, endCharIdx, text, rects[], chars[] }
+  textSelectAnchor: null, // { sheet, charIndex, time, clickCount }
   isSelectingText: false,
   activeTextEditorObj: null,
   handDownPt: null,
@@ -145,6 +158,10 @@ function markDirty() {
   updateSaveStatusUI('dirty');
   triggerAutosaveDebounced();
   persistSessionState();
+  const invoke = getInvoke();
+  if (invoke) {
+    invoke('set_document_dirty', { dirty: true }).catch(() => {});
+  }
 }
 
 function triggerAutosaveDebounced() {
@@ -830,8 +847,14 @@ function redrawAll() {
     dctx.restore();
   }
 
+  // Draw persistent text selection highlights
+  drawPersistentTextSelectionHighlights(dctx);
+
   // Draw lasso / selection overlay
   drawLassoOverlay();
+
+  // Anchor text selection popover to current screen coordinates
+  updateTextSelectionPopoverPosition();
 }
 
 function drawCommittedStroke(stroke) {
@@ -871,9 +894,10 @@ function prefetchAdjacentPages() {
     if (!state.pageInfos || !state.pageInfos.length) return;
     const curr = state.leftSheet;
     const total = state.pageInfos.length;
-    const adjacentSheets = [curr - 1, curr + 1].filter(s => s >= 0 && s < total);
+    const adjacentSheets = [curr, curr - 1, curr + 1].filter(s => s >= 0 && s < total);
 
     for (const sheetIdx of adjacentSheets) {
+      loadPageTextData(sheetIdx);
       const pi = state.pageInfos[sheetIdx];
       if (!pi) continue;
       const tr = [0, 0, pi.width_pt, pi.height_pt];
@@ -1060,6 +1084,91 @@ function updatePageUI() {
   updateZoomUI();
 }
 
+function getCustomColors() {
+  try {
+    return JSON.parse(localStorage.getItem('inkwell_custom_colors') || '[]');
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveCustomColor(hex, slotIndex) {
+  const colors = getCustomColors();
+  if (slotIndex !== undefined && slotIndex >= 0 && slotIndex < 4) {
+    colors[slotIndex] = hex;
+  } else {
+    const existingIdx = colors.indexOf(hex);
+    if (existingIdx !== -1) colors.splice(existingIdx, 1);
+    colors.unshift(hex);
+    if (colors.length > 4) colors.length = 4;
+  }
+  state.customColors = colors;
+  localStorage.setItem('inkwell_custom_colors', JSON.stringify(colors));
+  renderCustomSwatches();
+}
+
+function renderCustomSwatches() {
+  const grid = $('customSwatchesGrid');
+  if (!grid) return;
+  const colors = getCustomColors();
+  const currentHex = Array.isArray(state.color) ? rgbToHex(state.color).toLowerCase() : (state.color || '#000000').toLowerCase();
+  grid.innerHTML = '';
+  for (let i = 0; i < 4; i++) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'swatch swatch-custom';
+    btn.setAttribute('data-slot', String(i));
+    if (colors[i]) {
+      btn.classList.add('filled');
+      btn.setAttribute('data-color', colors[i]);
+      btn.style.background = colors[i];
+      btn.title = `Custom color ${i + 1}: ${colors[i]}`;
+      if (colors[i].toLowerCase() === currentHex) {
+        btn.classList.add('active');
+      }
+    } else {
+      btn.classList.add('empty');
+      btn.title = `Empty custom slot ${i + 1} (click to add)`;
+      btn.innerHTML = '<span class="custom-plus">+</span>';
+    }
+    btn.addEventListener('click', () => {
+      if (colors[i]) {
+        setColor(colors[i], true);
+        drawStrokePreview();
+      } else {
+        const picker = $('popoverCustomColorPicker');
+        if (picker) {
+          picker.onchange = (e) => {
+            saveCustomColor(e.target.value, i);
+            setColor(e.target.value, true);
+            drawStrokePreview();
+            picker.onchange = null;
+          };
+          picker.click();
+        }
+      }
+    });
+    grid.appendChild(btn);
+  }
+}
+
+function updateShapeToolIcon(shapeTool) {
+  const btn = $('btnDockShapes');
+  if (!btn) return;
+  const iconSvg = btn.querySelector('.dock-icon');
+  if (!iconSvg) return;
+  if (shapeTool === 'ellipse') {
+    iconSvg.innerHTML = '<circle cx="12" cy="12" r="8"/>';
+    btn.title = 'Shape: Ellipse (U / O)';
+  } else if (shapeTool === 'ruler' || shapeTool === 'line') {
+    iconSvg.innerHTML = '<line x1="4" y1="20" x2="20" y2="4"/><circle cx="4" cy="20" r="1.5" fill="currentColor"/><circle cx="20" cy="4" r="1.5" fill="currentColor"/>';
+    btn.title = 'Shape: Ruler / Line (U / R)';
+  } else {
+    iconSvg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+    btn.title = 'Shape: Rectangle (U / Q)';
+  }
+}
+
 function updateToolInspectorUI() {
   const pop = $('propPopover');
   if (!pop) return;
@@ -1077,7 +1186,8 @@ function updateToolInspectorUI() {
     rect: { title: 'Rectangle Tool', icon: '▭', hasColor: true, hasPreview: true },
     ellipse: { title: 'Ellipse Tool', icon: '◯', hasColor: true, hasPreview: true },
     ruler: { title: 'Ruler / Line', icon: '📐', hasColor: true, hasPreview: true },
-    text: { title: 'Text Properties', icon: '🔤', hasColor: true, hasPreview: false },
+    text: { title: 'Text Note Properties', icon: '🔤', hasColor: true, hasPreview: false },
+    textSelect: { title: 'Text Selection Tool', icon: '📝', hasColor: false, hasPreview: false },
     lasso: { title: 'Lasso Selection', icon: '⬚', hasColor: false, hasPreview: false },
     pan: { title: 'Hand / Pan Tool', icon: '🖐️', hasColor: false, hasPreview: false },
   };
@@ -1088,19 +1198,21 @@ function updateToolInspectorUI() {
   if (previewWrap) previewWrap.style.display = cfg.hasPreview ? 'flex' : 'none';
   if (colorSection) colorSection.style.display = cfg.hasColor ? 'flex' : 'none';
 
+  const roundedW = Math.round(state.baseWidth * 10) / 10;
   if ($('popoverWidthSlider')) {
-    $('popoverWidthSlider').value = String(state.baseWidth || 1.6);
+    $('popoverWidthSlider').value = String(state.baseWidth || 3.0);
   }
   if ($('popoverWidthVal')) {
-    $('popoverWidthVal').textContent = (state.baseWidth || 1.6) + ' pt';
+    $('popoverWidthVal').textContent = (roundedW % 1 === 0 ? roundedW.toFixed(0) : roundedW.toFixed(1)) + ' pt';
   }
 
   // Update preset buttons active state
   document.querySelectorAll('.btn-width-preset').forEach(btn => {
     const w = parseFloat(btn.getAttribute('data-width'));
-    btn.classList.toggle('active', Math.abs(w - (state.baseWidth || 1.6)) < 0.15);
+    btn.classList.toggle('active', Math.abs(w - (state.baseWidth || 3.0)) < 0.15);
   });
 
+  renderCustomSwatches();
   drawStrokePreview();
 }
 
@@ -1331,16 +1443,69 @@ function consume(e) {
   if (!pt) return;
   state.samplesCount++;
 
+  if (state.cur.kind === 'highlighter') {
+    clearWet();
+    wctx.save();
+    clipToPane(wctx, state.drawingPane);
+    paneTransform(wctx, state.drawingPane);
+    wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+    wctx.globalCompositeOperation = 'multiply';
+    wctx.globalAlpha = 0.42;
+    const chiselPath = typeof Ink.getChiselPath2D === 'function'
+      ? Ink.getChiselPath2D(state.cur._pts, state.cur.base_width)
+      : null;
+    if (chiselPath) {
+      wctx.fill(chiselPath);
+    } else if (prev) {
+      Ink.drawSegment(wctx, prev, pt);
+    } else {
+      Ink.drawDot(wctx, pt);
+    }
+    wctx.restore();
+    return;
+  }
+
   wctx.save();
   clipToPane(wctx, state.drawingPane);
   paneTransform(wctx, state.drawingPane);
   wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
-  if (state.cur.kind === 'highlighter') {
-    wctx.globalCompositeOperation = 'multiply';
-    wctx.globalAlpha = 0.42;
-  }
   if (prev) Ink.drawSegment(wctx, prev, pt);
   else Ink.drawDot(wctx, pt);
+  wctx.restore();
+}
+
+// ---- Live Text Selection preview helper ----
+
+function drawLiveTextSelection() {
+  if (!state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
+  const sel = state.textSelection;
+  const pl = viewport.getPageLayout(sel.sheet);
+  if (!pl) return;
+
+  wctx.save();
+  wctx.setTransform(1, 0, 0, 1, 0, 0);
+  wctx.scale(state.dpr, state.dpr);
+  clipToPane(wctx, state.drawingPane);
+
+  for (const r of sel.rects) {
+    const [x0, y0, x1, y1] = r.rect;
+    const [sx0, sy0] = viewport.worldToScreen(pl.x + x0, pl.y + y0, state.drawingPane);
+    const [sx1, sy1] = viewport.worldToScreen(pl.x + x1, pl.y + y1, state.drawingPane);
+    const w = sx1 - sx0;
+    const h = sy1 - sy0;
+
+    wctx.fillStyle = 'rgba(56, 189, 248, 0.35)';
+    wctx.strokeStyle = 'rgba(56, 189, 248, 0.85)';
+    wctx.lineWidth = 1;
+    wctx.beginPath();
+    if (typeof wctx.roundRect === 'function') {
+      wctx.roundRect(sx0, sy0, w, h, 2);
+    } else {
+      wctx.rect(sx0, sy0, w, h);
+    }
+    wctx.fill();
+    wctx.stroke();
+  }
   wctx.restore();
 }
 
@@ -1639,6 +1804,14 @@ function selectAllOnCurrentPage() {
 }
 
 function copySelection() {
+  if (state.selectedTextString) {
+    try {
+      navigator.clipboard.writeText(state.selectedTextString);
+      showToast('Text copied to clipboard', 'success');
+      return true;
+    } catch (_) {}
+  }
+
   const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
   const images = (state.selectedImages || []).filter(img => !img.deleted);
   const texts = (state.selectedTextObjects || []).filter(t => !t.deleted);
@@ -2358,8 +2531,12 @@ function onDown(e) {
   }
 
   if (state.spacePanActive || state.activeTool === 'pan') {
+    if (state.isSpacePressed) {
+      state.spaceDidPan = true;
+    }
     if (state.selectedTextSpans && state.selectedTextSpans.length) {
       clearTextSelection();
+      redrawAll();
     }
     commitActiveInlineTextEditor();
     state.handDownPt = [e.clientX, e.clientY];
@@ -2488,6 +2665,68 @@ function onDown(e) {
     return;
   }
 
+  if (state.activeTool === 'textSelect') {
+    const pageCoord = viewport.worldToPage(wx, wy);
+    if (!state.pageTextData[pageCoord.sheet]) {
+      loadPageTextData(pageCoord.sheet).then(() => {
+        if (state.isSelectingText && state.textSelectAnchor) {
+          const hit = findCharAndOffsetAtPageCoord(pageCoord.sheet, pageCoord.px, pageCoord.py);
+          if (hit) {
+            state.textSelectAnchor.charIndex = hit.charIndex;
+            state.textSelection = computeTextSelectionRanges(pageCoord.sheet, hit.charIndex, hit.charIndex);
+            redrawAll();
+          }
+        }
+      });
+    }
+
+    const now = performance.now();
+    const prevAnchor = state.textSelectAnchor;
+    let clickCount = 1;
+    if (prevAnchor && prevAnchor.sheet === pageCoord.sheet && (now - prevAnchor.time) < 380) {
+      clickCount = (prevAnchor.clickCount || 1) + 1;
+    }
+
+    const hit = findCharAndOffsetAtPageCoord(pageCoord.sheet, pageCoord.px, pageCoord.py);
+
+    if (hit) {
+      if (clickCount === 2) {
+        state.textSelection = expandSelectionToWord(pageCoord.sheet, hit.charIndex);
+        state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 2 };
+        state.isSelectingText = false;
+        if (state.textSelection) {
+          state.selectedTextString = state.textSelection.text;
+          showTextSelectionPopover();
+        }
+        redrawAll();
+        return;
+      } else if (clickCount >= 3) {
+        state.textSelection = expandSelectionToLine(pageCoord.sheet, hit.charIndex);
+        state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 0 };
+        state.isSelectingText = false;
+        if (state.textSelection) {
+          state.selectedTextString = state.textSelection.text;
+          showTextSelectionPopover();
+        }
+        redrawAll();
+        return;
+      }
+
+      clearTextSelection();
+      state.isSelectingText = true;
+      state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 1 };
+      state.textSelection = computeTextSelectionRanges(pageCoord.sheet, hit.charIndex, hit.charIndex);
+      redrawAll();
+      return;
+    } else {
+      clearTextSelection();
+      state.isSelectingText = true;
+      state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: 0, time: now, clickCount: 1 };
+      redrawAll();
+      return;
+    }
+  }
+
   if (state.activeTool === 'ruler') {
     state.shapeKind = 'line';
     state.shapeStart = [wx, wy];
@@ -2513,7 +2752,7 @@ function onDown(e) {
   state.currentSheet = pageCoord.sheet;
 
   const isHighlighter = state.activeTool === 'highlighter';
-  const actualWidth = isHighlighter ? (state.highlighterWidth || state.baseWidth || 16.0) : (state.penWidth || state.baseWidth || 1.6);
+  const actualWidth = isHighlighter ? (state.highlighterWidth || state.baseWidth || 16.0) : (state.penWidth || state.baseWidth || 3.0);
   state.cur = new Ink.Stroke({
     kind: state.activeTool,
     rgb: state.color,
@@ -2711,6 +2950,25 @@ function onMove(e) {
     }
   }
 
+  if (state.activeTool === 'textSelect' && state.isSelectingText) {
+    const pageCoord = viewport.worldToPage(wx, wy);
+    const anchor = state.textSelectAnchor;
+    if (anchor) {
+      const hit = findCharAndOffsetAtPageCoord(anchor.sheet, pageCoord.px, pageCoord.py);
+      if (hit) {
+        state.textSelection = computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex);
+        if (state.textSelection) {
+          state.selectedTextString = state.textSelection.text;
+        }
+      }
+    }
+    clearWet();
+    drawLiveTextSelection();
+    return;
+  }
+
+
+
   if ((state.activeTool === 'ruler' || state.activeTool === 'rect' ||
        state.activeTool === 'ellipse') && state.shapeStart) {
     let ex = wx, ey = wy;
@@ -2745,7 +3003,7 @@ function onMove(e) {
       wctx.restore();
       return;
     }
-    drawShapePreview();
+    drawShapeOverlay();
     return;
   }
 
@@ -2935,6 +3193,22 @@ async function onUp(e) {
     }
   }
 
+  if (state.activeTool === 'textSelect' && state.isSelectingText) {
+    state.isSelectingText = false;
+    clearWet();
+    if (state.textSelection && state.textSelection.text && state.textSelection.text.trim()) {
+      state.selectedTextString = state.textSelection.text;
+      showTextSelectionPopover();
+    } else {
+      clearTextSelection();
+    }
+    redrawAll();
+    try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+    return;
+  }
+
+
+
   // Shape commit
   if ((state.activeTool === 'ruler' || state.activeTool === 'rect' ||
        state.activeTool === 'ellipse') && state.shapeStart && state.shapeEnd) {
@@ -2947,21 +3221,27 @@ async function onUp(e) {
 
     if (Math.hypot(bx - ax, by - ay) > 2) {
       if (state.shapeKind === 'line') {
-        const rulerStroke = new Ink.Stroke({ kind: 'pen', rgb: state.color, baseWidth: state.baseWidth });
-        rulerStroke.push(localAx, localAy, 0.7, 0);
-        rulerStroke.push(localBx, localBy, 0.7, 50);
-        const strokeBbox = (Ink.computeStrokeBbox || computeStrokeBbox)(rulerStroke.points, rulerStroke.base_width);
+        const pts = [
+          { x: localAx, y: localAy, w: state.baseWidth, p: 0.7, t: 0 },
+          { x: localBx, y: localBy, w: state.baseWidth, p: 0.7, t: 50 },
+        ];
+        const strokeBbox = (Ink.computeStrokeBbox || computeStrokeBbox)(pts, state.baseWidth);
         const finishedStroke = {
-          id: rulerStroke.id, kind: rulerStroke.kind, rgb: rulerStroke.rgb,
-          base_width: rulerStroke.base_width, points: rulerStroke.points.slice(),
-          sheet: pageCoord.sheet, deleted: false,
+          id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
+          kind: 'pen',
+          rgb: state.color,
+          base_width: state.baseWidth,
+          points: pts,
+          sheet: pageCoord.sheet,
+          deleted: false,
           bbox: strokeBbox,
-          cssColor: rulerStroke.cssColor || `rgb(${rulerStroke.rgb.map(v => Math.round(v * 255)).join(',')})`,
-          _cachedPath2D: typeof Ink.getPath2D === 'function' ? Ink.getPath2D(rulerStroke) : null,
+          cssColor: `rgb(${state.color.map(v => Math.round(v * 255)).join(',')})`,
+          _cachedPath2D: typeof Ink.getPath2D === 'function' ? Ink.getPath2D({ kind: 'pen', points: pts, base_width: state.baseWidth }) : null,
         };
         state.strokes.push(finishedStroke);
         state.undoStack.push({ type: 'add', stroke: finishedStroke });
         state.redoStack = [];
+        state.isDirty = true;
         redrawAll();
         const invoke = getInvoke();
         if (invoke) {
@@ -3095,10 +3375,17 @@ function setColor(colorVal, syncUI = true, forTool = null) {
 
   state.color = rgb;
 
-  if (tool === 'pen') state.penColor = rgb;
-  else if (tool === 'highlighter') state.highlighterColor = rgb;
-  else if (tool === 'text') state.textColor = hex;
-  else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') state.shapesColor = rgb;
+  if (tool === 'pen') {
+    state.penColor = rgb;
+    state.shapesColor = rgb;
+  } else if (tool === 'highlighter') {
+    state.highlighterColor = rgb;
+  } else if (tool === 'text') {
+    state.textColor = hex;
+  } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
+    state.shapesColor = rgb;
+    state.penColor = rgb;
+  }
 
   if (syncUI) {
     if ($('colorPicker')) $('colorPicker').value = hex;
@@ -3127,19 +3414,36 @@ function setTool(tool) {
   if (state.activeTool === 'laser' && tool !== 'laser') {
     clearLaser();
   }
+  if (state.activeTool === 'textSelect' && tool !== 'textSelect' && state.textSelection) {
+    clearTextSelection();
+    redrawAll();
+  }
+  if (tool !== state.activeTool) {
+    state.lastUsedTool = state.activeTool;
+  }
   state.activeTool = tool;
 
   if (tool === 'highlighter') {
     state.baseWidth = state.highlighterWidth || 16.0;
     setColor(state.highlighterColor || [0.99, 0.93, 0.28], true, 'highlighter');
+    loadPageTextData(state.currentSheet);
   } else if (tool === 'pen') {
-    state.baseWidth = state.penWidth || 1.6;
-    setColor(state.penColor || [0.08, 0.09, 0.14], true, 'pen');
+    state.baseWidth = state.penWidth || 3.0;
+    setColor(state.penColor || [0.0, 0.0, 0.0], true, 'pen');
   } else if (tool === 'text') {
     setColor(state.textColor || '#141724', true, 'text');
+  } else if (tool === 'textSelect') {
+    loadPageTextData(state.currentSheet);
   } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
-    state.baseWidth = state.penWidth || 1.6;
-    setColor(state.shapesColor || state.penColor || [0.08, 0.09, 0.14], true, tool);
+    state.currentShapeTool = tool;
+    state.baseWidth = state.penWidth || 3.0;
+    state.shapesColor = state.penColor || [0.0, 0.0, 0.0];
+    setColor(state.shapesColor, true, tool);
+    updateShapeToolIcon(tool);
+  } else if (tool === 'shapes') {
+    const subTool = state.currentShapeTool || 'rect';
+    setTool(subTool);
+    return;
   }
 
   // Clear active from all dock and toolbar buttons
@@ -3158,6 +3462,7 @@ function setTool(tool) {
     ruler: 'btnDockShapes',
     shapes: 'btnDockShapes',
     text: 'btnDockText',
+    textSelect: 'btnDockTextSelect',
   };
 
   const btnId = toolBtnMap[tool];
@@ -3198,9 +3503,12 @@ function setTool(tool) {
       ellipse: 'Ellipse (O)',
       ruler: 'Ruler (R)',
       text: 'Text Note (T)',
+      textSelect: 'Text Select (S)',
     };
     radialLabel.textContent = titles[tool] || (tool.charAt(0).toUpperCase() + tool.slice(1));
   }
+
+  updateToolInspectorUI();
 }
 
 // ---- Undo / Redo ----
@@ -3694,33 +4002,67 @@ document.addEventListener('fullscreenchange', () => {
   redrawAll();
 });
 
-// Spacebar Spring Panning
-let spaceKeyDown = false;
-let previousToolBeforeSpace = null;
-
+// Spacebar: Hold for Pan/Hand Tool vs Quick Tap to Toggle/Revert Last Tool
 window.addEventListener('keydown', e => {
-  if (e.code === 'Space' && !spaceKeyDown) {
+  if (e.code === 'Space') {
     const activeEl = document.activeElement;
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
       return;
     }
+    const modalOpen = ($('cmdPaletteModal') && !$('cmdPaletteModal').classList.contains('hidden')) ||
+                      ($('settingsModal') && !$('settingsModal').classList.contains('hidden')) ||
+                      ($('goToPageModal') && !$('goToPageModal').classList.contains('hidden')) ||
+                      ($('insertPageModal') && !$('insertPageModal').classList.contains('hidden'));
+    if (modalOpen) return;
+
     e.preventDefault();
-    spaceKeyDown = true;
-    previousToolBeforeSpace = state.activeTool;
-    state.spacePanActive = true;
-    if (wetCanvas) wetCanvas.classList.add('space-pan');
+    if (e.repeat) return;
+    if (state.isSpacePressed) return;
+
+    state.isSpacePressed = true;
+    state.spaceDownTime = performance.now();
+    state.spaceToolBefore = state.activeTool;
+    state.spaceDidPan = false;
+
+    // Immediately switch to Pan / Hand tool while held
+    if (state.activeTool !== 'pan') {
+      const priorLastUsed = state.lastUsedTool;
+      setTool('pan');
+      // Do not let temporary space-pan clobber lastUsedTool
+      state.lastUsedTool = priorLastUsed;
+    }
   }
 });
 
 window.addEventListener('keyup', e => {
-  if (e.code === 'Space' && spaceKeyDown) {
+  if (e.code === 'Space') {
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
+      return;
+    }
+    if (!state.isSpacePressed) return;
     e.preventDefault();
-    spaceKeyDown = false;
-    state.spacePanActive = false;
-    if (wetCanvas) wetCanvas.classList.remove('space-pan');
-    if (previousToolBeforeSpace) {
-      setTool(previousToolBeforeSpace);
-      previousToolBeforeSpace = null;
+
+    const duration = performance.now() - (state.spaceDownTime || performance.now());
+    const toolBefore = state.spaceToolBefore || 'pen';
+    const didPan = state.spaceDidPan;
+
+    state.isSpacePressed = false;
+    state.spaceDownTime = null;
+    state.spaceToolBefore = null;
+    state.spaceDidPan = false;
+
+    // Quick tap (< 250ms and user did not pan): toggle between current tool and last used tool
+    if (duration < 250 && !didPan) {
+      const targetTool = (state.lastUsedTool && state.lastUsedTool !== toolBefore)
+        ? state.lastUsedTool
+        : (toolBefore === 'pen' ? 'highlighter' : 'pen');
+      setTool(targetTool);
+    } else {
+      // Revert back to the tool before space was held
+      const priorLastUsed = state.lastUsedTool;
+      setTool(toolBefore);
+      state.lastUsedTool = priorLastUsed;
     }
   }
 });
@@ -4049,6 +4391,9 @@ async function switchTab(tabId) {
   updateToolBadges();
   renderOutline();
   clearTileCache();
+  clearTextSelection();
+  loadPageTextData(state.leftSheet);
+  prefetchAdjacentPages();
   scheduleRedrawTiles();
   redrawAll();
   updateDocScrollbar();
@@ -4171,6 +4516,109 @@ function executeCloseTab(tabId) {
     } else {
       renderTabsDOM();
     }
+  }
+}
+
+function hasAnyUnsavedChanges() {
+  return !!state.isDirty;
+}
+
+function promptCloseWindow() {
+  const invoke = getInvoke();
+  if (!hasAnyUnsavedChanges()) {
+    if (invoke) {
+      invoke('force_close_window').catch(() => window.close());
+    } else {
+      window.close();
+    }
+    return;
+  }
+
+  const modal = $('confirmCloseModal');
+  const titleEl = $('confirmCloseTitle');
+  const msgEl = $('confirmCloseMsg');
+  const btnSave = $('btnConfirmCloseSave');
+  const btnDiscard = $('btnConfirmCloseDiscard');
+  const btnCancel = $('btnConfirmCloseCancel');
+
+  if (!modal) {
+    if (invoke) invoke('force_close_window').catch(() => window.close());
+    else window.close();
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = `Save changes before closing?`;
+  if (msgEl) msgEl.textContent = `Do you want to save your document changes before quitting?`;
+
+  modal.classList.remove('hidden');
+
+  const cleanupListeners = () => {
+    modal.classList.add('hidden');
+    if (btnSave) btnSave.onclick = null;
+    if (btnDiscard) btnDiscard.onclick = null;
+    if (btnCancel) btnCancel.onclick = null;
+  };
+
+  if (btnCancel) {
+    btnCancel.onclick = () => {
+      cleanupListeners();
+    };
+  }
+
+  if (btnDiscard) {
+    btnDiscard.onclick = () => {
+      cleanupListeners();
+      if (invoke) {
+        invoke('force_close_window').catch(() => window.close());
+      } else {
+        window.close();
+      }
+    };
+  }
+
+  if (btnSave) {
+    btnSave.onclick = async () => {
+      cleanupListeners();
+      await saveDocument(false);
+      if (invoke) {
+        invoke('force_close_window').catch(() => window.close());
+      } else {
+        window.close();
+      }
+    };
+  }
+}
+
+function promptDeletePage(index) {
+  if (index == null) index = state.leftSheet;
+  if (!state.pageInfos || state.pageInfos.length <= 1) {
+    showToast('Cannot delete the only page in the document.', 'warning');
+    return;
+  }
+  const modal = $('confirmDeletePageModal');
+  const msg = $('confirmDeletePageMsg');
+  const btnCancel = $('btnConfirmDeletePageCancel');
+  const btnConfirm = $('btnConfirmDeletePageConfirm');
+
+  if (msg) {
+    msg.textContent = `Are you sure you want to delete Page ${index + 1}? This action cannot be undone.`;
+  }
+  if (modal) modal.classList.remove('hidden');
+
+  const cleanUp = () => {
+    if (modal) modal.classList.add('hidden');
+    if (btnCancel) btnCancel.onclick = null;
+    if (btnConfirm) btnConfirm.onclick = null;
+  };
+
+  if (btnCancel) {
+    btnCancel.onclick = cleanUp;
+  }
+  if (btnConfirm) {
+    btnConfirm.onclick = () => {
+      cleanUp();
+      deleteCurrentPage(index);
+    };
   }
 }
 
@@ -4661,23 +5109,289 @@ function updateRailButtonsUI() {
   if (zoomSplitBtn) zoomSplitBtn.classList.toggle('active', !!(viewport && viewport.splitMode));
 }
 
-// ---- Text Spans & Drawboard-Style Text Selection ----
-async function loadTextSpansForPage(sheet) {
-  if (state.pageTextSpans[sheet]) return state.pageTextSpans[sheet];
+// ---- High-Precision Letter-by-Letter PDF Text Selection Engine ----
+
+async function loadPageTextData(sheet) {
+  if (sheet == null || sheet < 0) return null;
+  if (state.pageTextData[sheet]) return state.pageTextData[sheet];
   const invoke = getInvoke();
-  if (!invoke) return [];
+  if (!invoke) return null;
   try {
-    const spans = await invoke('get_page_text_spans', { pageIndex: sheet });
-    state.pageTextSpans[sheet] = spans || [];
-    return state.pageTextSpans[sheet];
+    const data = await invoke('get_page_text_data', { pageIndex: sheet });
+    if (data) {
+      state.pageTextData[sheet] = data;
+      state.pageTextSpans[sheet] = data.spans || [];
+      return data;
+    }
   } catch (err) {
-    console.warn('[inkwell] get_page_text_spans failed for page', sheet, err);
-    state.pageTextSpans[sheet] = [];
-    return [];
+    console.warn('[inkwell] get_page_text_data failed for page', sheet, err);
   }
+  return null;
+}
+
+async function loadTextSpansForPage(sheet) {
+  const data = await loadPageTextData(sheet);
+  return data ? (data.spans || []) : [];
+}
+
+function findCharAndOffsetAtPageCoord(sheet, px, py) {
+  const pageData = state.pageTextData[sheet];
+  if (!pageData || !pageData.lines || !pageData.lines.length || !pageData.chars || !pageData.chars.length) {
+    return null;
+  }
+
+  // 1. Find the best matching line by vertical distance
+  let bestLine = null;
+  let bestLineDist = Infinity;
+
+  for (const line of pageData.lines) {
+    if (!line.chars || !line.chars.length) continue;
+    const [lx0, ly0, lx1, ly1] = line.rect;
+
+    let distY = 0;
+    if (py < ly0) distY = ly0 - py;
+    else if (py > ly1) distY = py - ly1;
+
+    let distX = 0;
+    if (px < lx0) distX = lx0 - px;
+    else if (px > lx1) distX = px - lx1;
+
+    const totalDist = distY * 8.0 + distX;
+    if (totalDist < bestLineDist) {
+      bestLineDist = totalDist;
+      bestLine = line;
+    }
+  }
+
+  if (!bestLine) {
+    return { charIndex: 0, lineIndex: 0, char: pageData.chars[0] };
+  }
+
+  const chars = bestLine.chars;
+  const firstChar = chars[0];
+  const lastChar = chars[chars.length - 1];
+
+  if (px <= firstChar.rect[0]) {
+    return {
+      charIndex: firstChar.char_index,
+      lineIndex: bestLine.line_index,
+      char: firstChar,
+      isBefore: true,
+      line: bestLine
+    };
+  }
+
+  if (px >= lastChar.rect[2]) {
+    return {
+      charIndex: lastChar.char_index,
+      lineIndex: bestLine.line_index,
+      char: lastChar,
+      isAfter: true,
+      line: bestLine
+    };
+  }
+
+  let closestChar = firstChar;
+  let closestDist = Infinity;
+
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    const cx0 = c.rect[0];
+    const cx1 = c.rect[2];
+    const midX = (cx0 + cx1) / 2;
+
+    if (px >= cx0 && px <= cx1) {
+      return {
+        charIndex: c.char_index,
+        lineIndex: bestLine.line_index,
+        char: c,
+        isBefore: px < midX,
+        line: bestLine
+      };
+    }
+
+    const d = Math.abs(px - midX);
+    if (d < closestDist) {
+      closestDist = d;
+      closestChar = c;
+    }
+  }
+
+  return {
+    charIndex: closestChar.char_index,
+    lineIndex: bestLine.line_index,
+    char: closestChar,
+    isBefore: px < (closestChar.rect[0] + closestChar.rect[2]) / 2,
+    line: bestLine
+  };
+}
+
+function computeTextSelectionRanges(sheet, startCharIdx, endCharIdx) {
+  const pageData = state.pageTextData[sheet];
+  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
+
+  const minIdx = Math.max(0, Math.min(startCharIdx, endCharIdx));
+  const maxIdx = Math.min(pageData.chars.length - 1, Math.max(startCharIdx, endCharIdx));
+
+  const selectedChars = pageData.chars.slice(minIdx, maxIdx + 1);
+  if (!selectedChars.length) return null;
+
+  const selectedString = selectedChars.map(c => c.c).join('');
+
+  // Group characters by line to form precise rectangular line segments
+  const lineMap = new Map();
+  for (const c of selectedChars) {
+    if (!lineMap.has(c.line_index)) {
+      lineMap.set(c.line_index, []);
+    }
+    lineMap.get(c.line_index).push(c);
+  }
+
+  const rects = [];
+  for (const [lineIdx, rawCharsOnLine] of lineMap.entries()) {
+    const charsOnLine = rawCharsOnLine.filter(c => c.c !== '\n' && c.c !== '\r');
+    if (!charsOnLine.length) continue;
+    const parentLine = (pageData.lines || []).find(l => l.line_index === lineIdx);
+
+    charsOnLine.sort((a, b) => a.rect[0] - b.rect[0]);
+    const firstC = charsOnLine[0];
+    const lastC = charsOnLine[charsOnLine.length - 1];
+
+    const x0 = firstC.rect[0];
+    const x1 = lastC.rect[2];
+    const y0 = parentLine ? parentLine.rect[1] : charsOnLine[0].rect[1];
+    const y1 = parentLine ? parentLine.rect[3] : charsOnLine[0].rect[3];
+
+    rects.push({
+      sheet,
+      lineIndex: lineIdx,
+      rect: [x0, y0, x1, y1],
+      text: charsOnLine.map(c => c.c).join(''),
+      startCharIdx: firstC.char_index,
+      endCharIdx: lastC.char_index,
+      chars: charsOnLine
+    });
+  }
+
+  rects.sort((a, b) => a.rect[1] - b.rect[1]);
+
+  return {
+    sheet,
+    startCharIdx: minIdx,
+    endCharIdx: maxIdx,
+    text: selectedString,
+    rects,
+    chars: selectedChars
+  };
+}
+
+function expandSelectionToWord(sheet, charIndex) {
+  const pageData = state.pageTextData[sheet];
+  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
+
+  let start = Math.max(0, Math.min(pageData.chars.length - 1, charIndex));
+  let end = start;
+
+  const isWordChar = c => !/[\s\r\n\t.,!?;:()\[\]{}"'—–/\\]/.test(c);
+
+  while (start > 0 && isWordChar(pageData.chars[start - 1].c)) {
+    start--;
+  }
+  while (end < pageData.chars.length - 1 && isWordChar(pageData.chars[end + 1].c)) {
+    end++;
+  }
+
+  return computeTextSelectionRanges(sheet, start, end);
+}
+
+function expandSelectionToLine(sheet, charIndex) {
+  const pageData = state.pageTextData[sheet];
+  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
+
+  const c = pageData.chars[charIndex];
+  if (!c) return null;
+
+  const line = (pageData.lines || []).find(l => l.line_index === c.line_index);
+  if (!line || !line.chars || !line.chars.length) return null;
+
+  const start = line.chars[0].char_index;
+  const end = line.chars[line.chars.length - 1].char_index;
+  return computeTextSelectionRanges(sheet, start, end);
+}
+
+function sortTextSpans(spans) {
+  if (!spans || !spans.length) return [];
+  return spans.slice().sort((a, b) => {
+    const sheetA = a.page_index !== undefined ? a.page_index : (a.sheet || 0);
+    const sheetB = b.page_index !== undefined ? b.page_index : (b.sheet || 0);
+    if (sheetA !== sheetB) return sheetA - sheetB;
+
+    const midYa = (a.rect[1] + a.rect[3]) / 2;
+    const midYb = (b.rect[1] + b.rect[3]) / 2;
+    const heightAvg = Math.max(8, ((a.rect[3] - a.rect[1]) + (b.rect[3] - b.rect[1])) / 2);
+    if (Math.abs(midYa - midYb) > heightAvg * 0.5) {
+      return a.rect[1] - b.rect[1];
+    }
+    return a.rect[0] - b.rect[0];
+  });
+}
+
+function mergeTextSpansIntoLines(spans) {
+  if (!spans || !spans.length) return [];
+  const sorted = sortTextSpans(spans);
+  const lines = [];
+  let currentLine = null;
+
+  for (const span of sorted) {
+    const sheet = span.page_index !== undefined ? span.page_index : (span.sheet || 0);
+    const [x0, y0, x1, y1] = span.rect;
+    const midY = (y0 + y1) / 2;
+    const h = Math.max(8, y1 - y0);
+
+    if (!currentLine) {
+      currentLine = {
+        sheet,
+        rect: [x0, y0, x1, y1],
+        midY,
+        h,
+        text: span.text || '',
+        spans: [span]
+      };
+      lines.push(currentLine);
+    } else {
+      const isSameSheet = currentLine.sheet === sheet;
+      const isSameLine = Math.abs(currentLine.midY - midY) < Math.max(currentLine.h, h) * 0.6;
+      const isAdjacentX = x0 >= currentLine.rect[0] - 5 && x0 <= currentLine.rect[2] + 35;
+
+      if (isSameSheet && isSameLine && isAdjacentX) {
+        currentLine.rect[0] = Math.min(currentLine.rect[0], x0);
+        currentLine.rect[1] = Math.min(currentLine.rect[1], y0);
+        currentLine.rect[2] = Math.max(currentLine.rect[2], x1);
+        currentLine.rect[3] = Math.max(currentLine.rect[3], y1);
+        currentLine.midY = (currentLine.rect[1] + currentLine.rect[3]) / 2;
+        currentLine.h = currentLine.rect[3] - currentLine.rect[1];
+        currentLine.text += (currentLine.text.endsWith(' ') || span.text.startsWith(' ') ? '' : ' ') + (span.text || '');
+        currentLine.spans.push(span);
+      } else {
+        currentLine = {
+          sheet,
+          rect: [x0, y0, x1, y1],
+          midY,
+          h,
+          text: span.text || '',
+          spans: [span]
+        };
+        lines.push(currentLine);
+      }
+    }
+  }
+
+  return lines;
 }
 
 function clearTextSelection() {
+  state.textSelection = null;
+  state.textSelectAnchor = null;
   state.selectedTextSpans = [];
   state.selectedTextString = '';
   state.isSelectingText = false;
@@ -4686,55 +5400,75 @@ function clearTextSelection() {
   clearWet();
 }
 
-function drawTextSelectionHighlights() {
-  if (!wctx || !wetCanvas || !state.selectedTextSpans || !state.selectedTextSpans.length) return;
-  wctx.save();
-  wctx.setTransform(1, 0, 0, 1, 0, 0);
-  wctx.scale(state.dpr, state.dpr);
+function drawPersistentTextSelectionHighlights(ctx) {
+  if (!ctx || !state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
+  const sel = state.textSelection;
+  for (const pane of visiblePanes()) {
+    ctx.save();
+    clipToPane(ctx, pane);
+    const pl = viewport.getPageLayout(sel.sheet);
+    if (pl) {
+      for (const r of sel.rects) {
+        const [sx0, sy0] = viewport.worldToScreen(pl.x + r.rect[0], pl.y + r.rect[1], pane);
+        const [sx1, sy1] = viewport.worldToScreen(pl.x + r.rect[2], pl.y + r.rect[3], pane);
+        const w = sx1 - sx0;
+        const h = sy1 - sy0;
 
-  for (const span of state.selectedTextSpans) {
-    const pl = viewport.getPageLayout(span.page_index);
-    const [sx0, sy0] = viewport.worldToScreen(pl.x + span.rect[0], pl.y + span.rect[1], state.drawingPane || 'left');
-    const [sx1, sy1] = viewport.worldToScreen(pl.x + span.rect[2], pl.y + span.rect[3], state.drawingPane || 'left');
-
-    const w = sx1 - sx0;
-    const h = sy1 - sy0;
-
-    wctx.fillStyle = 'rgba(99, 102, 241, 0.3)';
-    wctx.strokeStyle = 'rgba(99, 102, 241, 0.7)';
-    wctx.lineWidth = 1;
-    wctx.beginPath();
-    if (typeof wctx.roundRect === 'function') {
-      wctx.roundRect(sx0 - 1, sy0 - 1, w + 2, h + 2, 3);
-    } else {
-      wctx.rect(sx0 - 1, sy0 - 1, w + 2, h + 2);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.32)';
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.78)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(sx0, sy0, w, h, 2);
+        } else {
+          ctx.rect(sx0, sy0, w, h);
+        }
+        ctx.fill();
+        ctx.stroke();
+      }
     }
-    wctx.fill();
-    wctx.stroke();
+    ctx.restore();
   }
-  wctx.restore();
+}
+
+function drawTextSelectionHighlights() {
+  if (dctx) drawPersistentTextSelectionHighlights(dctx);
+}
+
+function updateTextSelectionPopoverPosition() {
+  const popover = $('textSelectionPopover');
+  if (!popover || popover.classList.contains('hidden') || !state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
+
+  const pane = state.drawingPane || 'left';
+  const sel = state.textSelection;
+  const pl = viewport.getPageLayout(sel.sheet);
+  if (!pl) return;
+
+  const firstRect = sel.rects[0];
+  const lastRect = sel.rects[sel.rects.length - 1];
+
+  const [firstSx0, firstSy0] = viewport.worldToScreen(pl.x + firstRect.rect[0], pl.y + firstRect.rect[1], pane);
+  const [firstSx1] = viewport.worldToScreen(pl.x + firstRect.rect[2], pl.y + firstRect.rect[1], pane);
+  const [, lastSy1] = viewport.worldToScreen(pl.x + lastRect.rect[0], pl.y + lastRect.rect[3], pane);
+
+  const midSx = (firstSx0 + firstSx1) / 2;
+  const clampedX = Math.max(160, Math.min(window.innerWidth - 160, midSx));
+
+  if (firstSy0 < 110) {
+    popover.style.left = `${clampedX}px`;
+    popover.style.top = `${lastSy1 + 12}px`;
+    popover.style.transform = 'translate(-50%, 0)';
+  } else {
+    popover.style.left = `${clampedX}px`;
+    popover.style.top = `${firstSy0 - 10}px`;
+    popover.style.transform = 'translate(-50%, -100%)';
+  }
 }
 
 function showTextSelectionPopover() {
   const popover = $('textSelectionPopover');
-  if (!popover || !state.selectedTextSpans || !state.selectedTextSpans.length) return;
-
-  let minSx = Infinity, minSy = Infinity, maxSx = -Infinity;
-  for (const span of state.selectedTextSpans) {
-    const pl = viewport.getPageLayout(span.page_index);
-    const [sx0, sy0] = viewport.worldToScreen(pl.x + span.rect[0], pl.y + span.rect[1], state.drawingPane || 'left');
-    const [sx1] = viewport.worldToScreen(pl.x + span.rect[2], pl.y + span.rect[3], state.drawingPane || 'left');
-    minSx = Math.min(minSx, sx0);
-    maxSx = Math.max(maxSx, sx1);
-    minSy = Math.min(minSy, sy0);
-  }
-
-  const midSx = (minSx + maxSx) / 2;
-  const popoverX = Math.max(120, Math.min(window.innerWidth - 140, midSx));
-  const popoverY = Math.max(70, minSy - 12);
-
-  popover.style.left = `${popoverX}px`;
-  popover.style.top = `${popoverY}px`;
+  if (!popover || !state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
+  updateTextSelectionPopoverPosition();
   popover.classList.remove('hidden');
 }
 
@@ -4752,37 +5486,45 @@ function initTextSelectionActions() {
         showToast('Text copied to clipboard', 'success');
       }
       clearTextSelection();
+      redrawAll();
     });
   }
 
   if (btnHighlight) {
     btnHighlight.addEventListener('click', () => {
-      if (!state.selectedTextSpans || !state.selectedTextSpans.length) return;
+      if (!state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
       const invoke = getInvoke();
       const newStrokes = [];
+      const color = Array.isArray(state.highlighterColor) ? state.highlighterColor : [0.99, 0.93, 0.28];
+      const sel = state.textSelection;
 
-      for (const span of state.selectedTextSpans) {
-        const sheet = span.page_index;
-        const [x0, y0, x1, y1] = span.rect;
+      for (const r of sel.rects) {
+        const sheet = r.sheet;
+        const [x0, y0, x1, y1] = r.rect;
         const midY = (y0 + y1) / 2;
-        const h = Math.max(10, y1 - y0);
+        const h = Math.max(8, y1 - y0);
+
+        let p2d = null;
+        if (typeof Path2D !== 'undefined') {
+          p2d = new Path2D();
+          p2d.rect(x0, y0, x1 - x0, y1 - y0);
+        }
 
         const stroke = {
           id: 'hl_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
           kind: 'highlighter',
           sheet,
-          rgb: [0.99, 0.93, 0.28], // fluorescent yellow
+          rgb: color,
           base_width: h,
           points: [
-            { x: x0, y: midY, p: 0.5, w: h, t: 0 },
-            { x: x1, y: midY, p: 0.5, w: h, t: 10 }
+            { x: x0, y: midY, p: 0.7, w: h, t: 0 },
+            { x: x1, y: midY, p: 0.7, w: h, t: 50 }
           ],
+          bbox: [x0, y0, x1, y1],
+          cssColor: `rgb(${color.map(v => Math.round(v * 255)).join(',')})`,
+          _cachedPath2D: p2d,
           deleted: false,
         };
-
-        if (typeof Ink.getPath2D === 'function') {
-          stroke._cachedPath2D = Ink.getPath2D(stroke);
-        }
 
         state.strokes.push(stroke);
         newStrokes.push(stroke);
@@ -4791,15 +5533,21 @@ function initTextSelectionActions() {
           invoke('commit_stroke', {
             sheet,
             tool: 'highlighter',
-            rgb: stroke.rgb,
+            rgb: color,
             baseWidth: h,
-            samples: stroke.points.map(p => ({ x: p.x, y: p.y, pressure: 0.5, t_ms: p.t })),
+            samples: [
+              { x: x0, y: midY, pressure: 0.7, t_ms: 0 },
+              { x: x1, y: midY, pressure: 0.7, t_ms: 50 },
+            ],
           }).catch(err => console.warn('highlight commit failed:', err));
         }
       }
 
-      state.undoStack.push({ type: 'add_objects', strokes: newStrokes, images: [] });
-      state.redoStack = [];
+      if (newStrokes.length) {
+        state.undoStack.push({ type: 'batch_add', strokes: newStrokes });
+        state.redoStack = [];
+        markDirty();
+      }
       clearTextSelection();
       redrawAll();
       showToast('Text highlighted', 'success');
@@ -4808,25 +5556,29 @@ function initTextSelectionActions() {
 
   if (btnUnderline) {
     btnUnderline.addEventListener('click', () => {
-      if (!state.selectedTextSpans || !state.selectedTextSpans.length) return;
+      if (!state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
       const invoke = getInvoke();
       const newStrokes = [];
+      const color = state.penColor || state.color || [0.86, 0.15, 0.15];
+      const sel = state.textSelection;
 
-      for (const span of state.selectedTextSpans) {
-        const sheet = span.page_index;
-        const [x0, , x1, y1] = span.rect;
+      for (const r of sel.rects) {
+        const sheet = r.sheet;
+        const [x0, , x1, y1] = r.rect;
         const underY = y1 + 1.5;
 
         const stroke = {
           id: 'ul_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
           kind: 'pen',
           sheet,
-          rgb: state.color || [0.86, 0.15, 0.15],
+          rgb: color,
           base_width: 2.0,
           points: [
             { x: x0, y: underY, p: 0.5, w: 2.0, t: 0 },
             { x: x1, y: underY, p: 0.5, w: 2.0, t: 10 }
           ],
+          bbox: [x0, underY - 1, x1, underY + 1],
+          cssColor: `rgb(${color.map(v => Math.round(v * 255)).join(',')})`,
           deleted: false,
         };
 
@@ -4841,15 +5593,18 @@ function initTextSelectionActions() {
           invoke('commit_stroke', {
             sheet,
             tool: 'pen',
-            rgb: stroke.rgb,
+            rgb: color,
             baseWidth: 2.0,
             samples: stroke.points.map(p => ({ x: p.x, y: p.y, pressure: 0.5, t_ms: p.t })),
           }).catch(err => console.warn('underline commit failed:', err));
         }
       }
 
-      state.undoStack.push({ type: 'add_objects', strokes: newStrokes, images: [] });
-      state.redoStack = [];
+      if (newStrokes.length) {
+        state.undoStack.push({ type: 'batch_add', strokes: newStrokes });
+        state.redoStack = [];
+        markDirty();
+      }
       clearTextSelection();
       redrawAll();
       showToast('Text underlined', 'success');
@@ -4858,25 +5613,29 @@ function initTextSelectionActions() {
 
   if (btnStrike) {
     btnStrike.addEventListener('click', () => {
-      if (!state.selectedTextSpans || !state.selectedTextSpans.length) return;
+      if (!state.textSelection || !state.textSelection.rects || !state.textSelection.rects.length) return;
       const invoke = getInvoke();
       const newStrokes = [];
+      const color = state.penColor || state.color || [0.86, 0.15, 0.15];
+      const sel = state.textSelection;
 
-      for (const span of state.selectedTextSpans) {
-        const sheet = span.page_index;
-        const [x0, y0, x1, y1] = span.rect;
+      for (const r of sel.rects) {
+        const sheet = r.sheet;
+        const [x0, y0, x1, y1] = r.rect;
         const midY = (y0 + y1) / 2;
 
         const stroke = {
           id: 'st_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
           kind: 'pen',
           sheet,
-          rgb: state.color || [0.86, 0.15, 0.15],
+          rgb: color,
           base_width: 2.0,
           points: [
             { x: x0, y: midY, p: 0.5, w: 2.0, t: 0 },
             { x: x1, y: midY, p: 0.5, w: 2.0, t: 10 }
           ],
+          bbox: [x0, midY - 1, x1, midY + 1],
+          cssColor: `rgb(${color.map(v => Math.round(v * 255)).join(',')})`,
           deleted: false,
         };
 
@@ -4891,15 +5650,18 @@ function initTextSelectionActions() {
           invoke('commit_stroke', {
             sheet,
             tool: 'pen',
-            rgb: stroke.rgb,
+            rgb: color,
             baseWidth: 2.0,
             samples: stroke.points.map(p => ({ x: p.x, y: p.y, pressure: 0.5, t_ms: p.t })),
           }).catch(err => console.warn('strikethrough commit failed:', err));
         }
       }
 
-      state.undoStack.push({ type: 'add_objects', strokes: newStrokes, images: [] });
-      state.redoStack = [];
+      if (newStrokes.length) {
+        state.undoStack.push({ type: 'batch_add', strokes: newStrokes });
+        state.redoStack = [];
+        markDirty();
+      }
       clearTextSelection();
       redrawAll();
       showToast('Strikethrough applied', 'success');
@@ -4917,6 +5679,7 @@ function initTextSelectionActions() {
         }
       }
       clearTextSelection();
+      redrawAll();
     });
   }
 }
@@ -5315,7 +6078,7 @@ async function renderThumbnails() {
         const pageIdx = parseInt(btnAct.getAttribute('data-page'), 10);
         if (act === 'dup') duplicateCurrentPage(pageIdx);
         else if (act === 'rot') rotateCurrentPage(pageIdx, true);
-        else if (act === 'del') deleteCurrentPage(pageIdx);
+        else if (act === 'del') promptDeletePage(pageIdx);
         return;
       }
       const i = parseInt(el.getAttribute('data-page'), 10);
@@ -5524,10 +6287,17 @@ function bindUI() {
     } else if (state.activeTool === 'ellipse') {
       setTool('ruler');
       showToast('Shape: Ruler Line (R)', 'info');
-    } else {
+    } else if (state.activeTool === 'ruler') {
       setTool('rect');
       showToast('Shape: Rectangle (U)', 'info');
+    } else {
+      const target = state.currentShapeTool || 'rect';
+      setTool(target);
     }
+  });
+  $('btnDockTextSelect') && $('btnDockTextSelect').addEventListener('click', () => {
+    setTool('textSelect');
+    showToast('Text Selection Tool (S)', 'info');
   });
   $('btnDockText') && $('btnDockText').addEventListener('click', () => {
     setTool('text');
@@ -5541,7 +6311,6 @@ function bindUI() {
       if (willShow) updateToolInspectorUI();
     }
   });
-  $('btnDockStylusOptions') && $('btnDockStylusOptions').addEventListener('click', () => openSettingsModal());
 
   // Left Navigation Rail buttons
   $('btnRailThumbnails') && $('btnRailThumbnails').addEventListener('click', () => toggleDrawer('thumbnails'));
@@ -6104,9 +6873,19 @@ function handlePdfLoadSuccess(title, selectedPath, infosOrResult, recovered = 0,
     viewport.fitPage(state.pageInfos[0]?.width_pt, state.pageInfos[0]?.height_pt, 'left');
     renderOutline();
     if ($('welcomeDropzone')) $('welcomeDropzone').classList.add('hidden');
+    clearTextSelection();
+    loadPageTextData(0);
+    prefetchAdjacentPages();
     scheduleRedrawAll();
     scheduleRedrawTiles();
     updateDocScrollbar();
+
+    state.isDirty = false;
+    const invoke = getInvoke();
+    if (invoke) {
+      invoke('set_document_dirty', { dirty: false }).catch(() => {});
+    }
+    updateSaveStatusUI('saved');
 
     const totalRecovered = (recovered || 0) + (recoveredImages || 0) + (recoveredTexts || 0);
     if (totalRecovered > 0) {
@@ -6277,6 +7056,10 @@ async function saveDocument(forceSaveAs = false, isAutosave = false) {
         if ($('activeTabTitle')) $('activeTabTitle').textContent = curTab.title;
       }
       state.isDirty = false;
+      const invoke = getInvoke();
+      if (invoke) {
+        invoke('set_document_dirty', { dirty: false }).catch(() => {});
+      }
       updateSaveStatusUI('saved');
       persistSessionState();
       updateDocInfo();
@@ -6375,6 +7158,16 @@ window.saveDocument = saveDocument;
 
 // Window blur safety cleanup to prevent stuck drawing / panning states
 window.addEventListener('blur', () => {
+  if (state.isSpacePressed) {
+    const toolBefore = state.spaceToolBefore || 'pen';
+    const priorLastUsed = state.lastUsedTool;
+    state.isSpacePressed = false;
+    state.spaceDownTime = null;
+    state.spaceToolBefore = null;
+    state.spaceDidPan = false;
+    setTool(toolBefore);
+    state.lastUsedTool = priorLastUsed;
+  }
   if (viewport) {
     viewport.isPanning = false;
   }
@@ -6580,10 +7373,17 @@ window.addEventListener('keydown', e => {
       ctxMenu.classList.add('hidden');
       return;
     }
-    // 5. Text selection popover
+    // 5. Text selection popover / active text selection
+    if (state.textSelection || (state.selectedTextSpans && state.selectedTextSpans.length > 0)) {
+      clearTextSelection();
+      redrawAll();
+      return;
+    }
     const textSel = $('textSelectionPopover');
     if (textSel && !textSel.classList.contains('hidden')) {
       textSel.classList.add('hidden');
+      clearTextSelection();
+      redrawAll();
       return;
     }
     // 6. Inline text editor
@@ -6777,6 +7577,7 @@ window.addEventListener('keydown', e => {
     r: 'ruler',
     o: 'ellipse',
     t: 'text',
+    s: 'textSelect',
   };
 
   if (DIRECT_TOOL_MAP[k]) {
@@ -6787,11 +7588,6 @@ window.addEventListener('keydown', e => {
   if (k === 'c') {
     e.preventDefault();
     $('propPopover') && $('propPopover').classList.toggle('hidden');
-    return;
-  }
-  if (k === 's') {
-    e.preventDefault();
-    openSettingsModal();
     return;
   }
 });
@@ -6912,6 +7708,26 @@ window.addEventListener('DOMContentLoaded', () => {
     if (stageEl) ro.observe(stageEl);
     const mainEl = $('mainContent');
     if (mainEl) ro.observe(mainEl);
+  }
+
+  // Window Close & Unsaved changes guard
+  window.addEventListener('beforeunload', (e) => {
+    if (hasAnyUnsavedChanges()) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('app-close-requested', () => {
+      promptCloseWindow();
+    });
+    window.__TAURI__.event.listen('app-save-and-close', async () => {
+      await saveDocument(false);
+      const invoke = getInvoke();
+      if (invoke) invoke('force_close_window').catch(() => window.close());
+      else window.close();
+    });
   }
 
   restoreSessionState();

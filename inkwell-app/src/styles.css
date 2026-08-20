@@ -3846,6 +3846,16 @@ body.welcome-active .top-header {
   color: #38bdf8;
 }
 
+.sel-action-btn:active {
+  transform: scale(0.96);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.sel-action-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 1px;
+}
+
 .sel-action-btn svg {
   stroke: currentColor;
   flex-shrink: 0;
@@ -4191,6 +4201,96 @@ body.welcome-active .top-header {
   color: #fff;
 }
 
+/* ============================================================================
+ * Additional Styles for Upgraded Toolbar, Colors & Modals
+ * ========================================================================== */
+#wet.tool-highlighter {
+  mix-blend-mode: multiply;
+}
 
+#wet.tool-textSelect {
+  cursor: text;
+}
 
+.color-swatches-grid {
+  grid-template-columns: repeat(6, 1fr) !important;
+  gap: 8px !important;
+}
 
+.swatch.swatch-white {
+  border: 2px solid rgba(255, 255, 255, 0.45) !important;
+}
+
+.custom-palette-header {
+  margin-top: 14px;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.custom-palette-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim, #94a3b8);
+}
+
+.custom-swatches-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  justify-items: center;
+  margin-top: 4px;
+}
+
+.swatch.swatch-custom {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  position: relative;
+}
+
+.swatch.swatch-custom.empty {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1.5px dashed rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.swatch.swatch-custom.empty:hover {
+  border-color: rgba(255, 255, 255, 0.7);
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.14);
+  transform: scale(1.1);
+}
+
+.swatch.swatch-custom.filled {
+  border: 2px solid rgba(255, 255, 255, 0.18);
+}
+
+.swatch.swatch-custom.filled:hover {
+  transform: scale(1.12);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.swatch.swatch-custom.active,
+.color-swatches-grid .swatch.active {
+  transform: scale(1.15);
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px #7C3AED, 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+#confirmDeletePageModal .modal-card {
+  max-width: 400px;
+}

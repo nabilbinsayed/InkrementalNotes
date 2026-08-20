@@ -80,7 +80,7 @@ class Stroke {
                                 : String(Math.random()).slice(2);
     this.kind = opts.kind || 'pen';
     this.rgb = opts.rgb || [0.08, 0.09, 0.14];
-    this.base_width = opts.baseWidth || 3.2;
+    this.base_width = opts.baseWidth || 3.0;
     this.cssColor = `rgb(${this.rgb.map(v => Math.round(v * 255)).join(',')})`;
     this.samples = [];
     this._pts = [];            // {x, y, w} in CSS px, post-filter
@@ -454,5 +454,5 @@ function drawStroke(ctx, stroke) {
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, computeStrokeBbox };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox };
 

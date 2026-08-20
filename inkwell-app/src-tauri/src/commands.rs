@@ -1136,6 +1136,32 @@ pub async fn get_page_text_spans(
 }
 
 #[tauri::command]
+pub async fn get_page_text_data(
+    page_index: usize,
+    state: State<'_, AppState>,
+) -> Result<inkwell_pdf::PageTextData, String> {
+    let bytes_opt = state.pdf_bytes.lock().unwrap().clone();
+    let Some(bytes) = bytes_opt else {
+        return Ok(inkwell_pdf::PageTextData {
+            page_index,
+            text: String::new(),
+            lines: Vec::new(),
+            chars: Vec::new(),
+            spans: Vec::new(),
+        });
+    };
+
+    let pdfium_guard = state.pdfium.lock().unwrap();
+    let pdfium = pdfium_guard.as_ref().ok_or("PDFium not available")?;
+
+    let doc = pdfium
+        .load_pdf_from_byte_slice(&bytes, None)
+        .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+    Ok(inkwell_pdf::extract_page_text_data(&doc, page_index as u32))
+}
+
+#[tauri::command]
 pub async fn get_pdf_outline(state: State<'_, AppState>) -> Result<Vec<inkwell_pdf::TocItem>, String> {
     let bytes = state
         .pdf_bytes
@@ -1422,6 +1448,24 @@ pub async fn start_stylus_stream(
     crate::stylus_linux::spawn_stylus_worker(channel, is_running);
     Ok(())
 }
+
+#[tauri::command]
+pub async fn force_close_window(app_handle: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Ok(mut wal_guard) = state.wal.lock() {
+        if let Some(tx) = wal_guard.take() {
+            let _ = tx.send(crate::state::WalOp::Close);
+        }
+    };
+    app_handle.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_document_dirty(dirty: bool, state: State<'_, AppState>) -> Result<(), String> {
+    state.is_dirty.store(dirty, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 
 
 

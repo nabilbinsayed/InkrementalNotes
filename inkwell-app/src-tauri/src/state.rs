@@ -88,6 +88,7 @@ pub struct AppState {
     /// Multi-document session map for tab switching and isolation
     pub sessions: Mutex<HashMap<String, DocumentSession>>,
     pub active_session_id: Mutex<Option<String>>,
+    pub is_dirty: std::sync::atomic::AtomicBool,
 }
 
 impl Default for AppState {
@@ -103,6 +104,7 @@ impl Default for AppState {
             page_dimensions: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             active_session_id: Mutex::new(None),
+            is_dirty: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }

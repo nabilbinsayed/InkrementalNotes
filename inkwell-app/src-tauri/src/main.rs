@@ -42,14 +42,41 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 use tauri::Manager;
-                let state: tauri::State<'_, AppState> = window.state();
-                if let Ok(mut wal_guard) = state.wal.lock() {
-                    if let Some(tx) = wal_guard.take() {
-                        let _ = tx.send(crate::state::WalOp::Close);
-                    }
-                };
+                let app_state = window.state::<AppState>();
+                let is_dirty = app_state.is_dirty.load(std::sync::atomic::Ordering::Relaxed);
+                if is_dirty {
+                    use tauri::Emitter;
+                    use tauri_plugin_dialog::DialogExt;
+                    api.prevent_close();
+                    let window_clone = window.clone();
+                    window.app_handle().dialog()
+                        .message("Do you want to save your document changes before quitting? Click OK to save or Cancel to discard and exit.")
+                        .title("Save Changes?")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancel)
+                        .show(move |save_confirmed| {
+                            if save_confirmed {
+                                let _ = window_clone.emit("app-save-and-close", ());
+                            } else {
+                                let state = window_clone.state::<AppState>();
+                                let _ = state.wal.lock().map(|mut g| {
+                                    if let Some(tx) = g.take() {
+                                        let _ = tx.send(crate::state::WalOp::Close);
+                                    }
+                                });
+                                window_clone.app_handle().exit(0);
+                            }
+                        });
+                } else {
+                    let _ = app_state.wal.lock().map(|mut g| {
+                        if let Some(tx) = g.take() {
+                            let _ = tx.send(crate::state::WalOp::Close);
+                        }
+                    });
+                    window.app_handle().exit(0);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -68,6 +95,7 @@ fn main() {
             commands::insert_blank_page,
             commands::search_pdf,
             commands::get_page_text_spans,
+            commands::get_page_text_data,
             commands::get_pdf_outline,
             commands::switch_document_session,
             commands::close_document_session,
@@ -78,7 +106,10 @@ fn main() {
             commands::journal_image_mutation,
             commands::journal_text_mutation,
             commands::start_stylus_stream,
+            commands::force_close_window,
+            commands::set_document_dirty,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");
 }
+
