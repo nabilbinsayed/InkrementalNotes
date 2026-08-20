@@ -322,7 +322,13 @@ export function performUndo() {
   } else if (tx.type === 'transform_objects') {
     for (const init of (tx.initialStrokes || [])) {
       const s = state.strokes.find(st => st.id === init.id);
-      if (s) s.points = init.points.map(p => ({ ...p }));
+      if (s) {
+        s.points = init.points.map(p => ({ ...p }));
+        s._cachedPath2D = null;
+        if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+          s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
+        }
+      }
     }
     for (const init of (tx.initialImages || [])) {
       const img = (state.images || []).find(im => im.id === init.id);
@@ -369,6 +375,33 @@ export function performRedo() {
     for (const t of (tx.textObjects || [])) t.deleted = false;
     history.pushUndoRaw(tx);
     notifyMutation('redo_add_objects', tx);
+  } else if (tx.type === 'transform_objects') {
+    for (const final of (tx.finalStrokes || [])) {
+      const s = state.strokes.find(st => st.id === final.id);
+      if (s) {
+        s.points = final.points.map(p => ({ ...p }));
+        s._cachedPath2D = null;
+        if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
+          s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
+        }
+      }
+    }
+    for (const final of (tx.finalImages || [])) {
+      const img = (state.images || []).find(im => im.id === final.id);
+      if (img) {
+        img.x = final.x; img.y = final.y;
+        img.width = final.width; img.height = final.height;
+      }
+    }
+    for (const final of (tx.finalTextObjects || [])) {
+      const t = (state.textObjects || []).find(txt => txt.id === final.id);
+      if (t) {
+        t.x = final.x; t.y = final.y;
+        if (final.fontSize) t.fontSize = final.fontSize;
+      }
+    }
+    history.pushUndoRaw(tx);
+    notifyMutation('redo_transform_objects', tx);
   } else if (tx.type === 'add_image' && tx.image) {
     tx.image.deleted = false;
     history.pushUndoRaw(tx);

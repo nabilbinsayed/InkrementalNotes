@@ -157,7 +157,8 @@ fn test_pdfobj_skip_value_fuzzing_and_clamp() {
 // ===========================================================================
 
 fn validate_save_path(p: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(p);
+    let normalized = p.replace('\\', "/");
+    let path = PathBuf::from(&normalized);
     if p.contains("..") || path.components().any(|c| c == Component::ParentDir) {
         return Err("Path traversal components (..) are not permitted in save path".to_string());
     }
@@ -174,7 +175,7 @@ fn validate_save_path(p: &str) -> Result<PathBuf, String> {
             return Err(format!("Parent directory does not exist: {parent:?}"));
         }
     }
-    Ok(path)
+    Ok(PathBuf::from(p))
 }
 
 #[test]

@@ -3032,19 +3032,8 @@ async function onUp(e) {
   drawCommittedStroke(strokeRec);
   state.cur = null;
 
-  // Clear dirty damage bounding rect or clear full wet layer
-  if (wctx && strokeBbox) {
-    wctx.save();
-    wctx.setTransform(1, 0, 0, 1, 0, 0);
-    wctx.scale(state.dpr, state.dpr);
-    clipToPane(wctx, state.drawingPane);
-    const [sx0, sy0] = viewport.worldToScreen(pl.x + strokeBbox[0] - 8, pl.y + strokeBbox[1] - 8, state.drawingPane);
-    const [sx1, sy1] = viewport.worldToScreen(pl.x + strokeBbox[2] + 8, pl.y + strokeBbox[3] + 8, state.drawingPane);
-    wctx.clearRect(Math.min(sx0, sx1) - 4, Math.min(sy0, sy1) - 4, Math.abs(sx1 - sx0) + 8, Math.abs(sy1 - sy0) + 8);
-    wctx.restore();
-  } else {
-    clearWet();
-  }
+  // Cleanly clear wet layer
+  clearWet();
 
   updateStats(e.pointerType);
   try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}

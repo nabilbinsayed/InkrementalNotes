@@ -483,6 +483,8 @@ function attachPointerHandlers(wetCanvas) {
   }
 
   wetCanvas.addEventListener('pointerdown', e => {
+    compositor.updateStageRect();
+    try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
     const { ptWorld, pane, screenPt } = localXY(e);
     const tool = state.activeTool || 'pen';
 
@@ -503,19 +505,25 @@ function attachPointerHandlers(wetCanvas) {
 
   const moveEvt = ('onpointerrawupdate' in window) ? 'pointerrawupdate' : 'pointermove';
   wetCanvas.addEventListener(moveEvt, e => {
-    const { ptWorld, pane, screenPt } = localXY(e);
     const tool = state.activeTool || 'pen';
+    const coalesced = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
+    const events = (coalesced && coalesced.length) ? coalesced : [e];
 
-    if (tool === 'pen' || tool === 'highlighter') {
-      penTool.onPenMove(e, ptWorld, pane, _viewport);
-    } else if (tool === 'eraser') {
-      eraserTool.onEraserMove(e, ptWorld, pane, _viewport);
-    } else if (tool === 'lasso') {
-      lassoTool.onLassoMove(e, ptWorld, screenPt, pane, _viewport);
-    } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
-      shapesTool.onShapeMove(e, ptWorld, pane, _viewport);
-    } else if (tool === 'laser') {
-      laserTool.onLaserMove(e, ptWorld, pane, _viewport);
+    for (let i = 0; i < events.length; i++) {
+      const subEvt = events[i];
+      const { ptWorld, pane, screenPt } = localXY(subEvt);
+
+      if (tool === 'pen' || tool === 'highlighter') {
+        penTool.onPenMove(subEvt, ptWorld, pane, _viewport);
+      } else if (tool === 'eraser') {
+        eraserTool.onEraserMove(subEvt, ptWorld, pane, _viewport);
+      } else if (tool === 'lasso') {
+        lassoTool.onLassoMove(subEvt, ptWorld, screenPt, pane, _viewport);
+      } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
+        shapesTool.onShapeMove(subEvt, ptWorld, pane, _viewport);
+      } else if (tool === 'laser') {
+        laserTool.onLaserMove(subEvt, ptWorld, pane, _viewport);
+      }
     }
   });
 
@@ -533,12 +541,14 @@ function attachPointerHandlers(wetCanvas) {
     } else if (tool === 'laser') {
       laserTool.onLaserUp();
     }
+    try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
 
-  wetCanvas.addEventListener('pointercancel', () => {
+  wetCanvas.addEventListener('pointercancel', e => {
     penTool.onPenCancel();
     eraserTool.onEraserUp();
     laserTool.clearLaser();
+    try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
 }
 

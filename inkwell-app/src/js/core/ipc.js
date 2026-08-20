@@ -53,7 +53,7 @@ export async function newWhiteboard() {
 }
 
 export async function insertBlankPage(afterIndex = 0, widthPt = 595.0, heightPt = 842.0) {
-  return await invokeTauri('insert_blank_page', { afterIndex, widthPt, heightPt });
+  return await invokeTauri('insert_blank_page', { index: afterIndex, widthPt, heightPt });
 }
 
 export async function extractOutline() {
@@ -63,7 +63,7 @@ export async function extractOutline() {
 // ---- LOD Tile Rasterization ----
 
 export async function fetchTile(pageIndex, rect, px) {
-  return await invokeTauri('render_tile', { pageIndex, rect, px });
+  return await invokeTauri('render_tile', { page: pageIndex, rect, px });
 }
 
 // ---- Vector Stroke Persistence ----

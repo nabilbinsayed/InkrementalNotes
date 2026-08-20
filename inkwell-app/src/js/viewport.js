@@ -356,11 +356,6 @@ class ViewportManager {
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
         const newZoom = Math.max(0.15, Math.min(10.0, curZoom * zoomFactor));
         this.setZoom(newZoom, [relX, relY], pane);
-        if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
-        if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
-        if (typeof window.redrawAll === 'function') window.redrawAll();
-        if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
-        if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
         return;
       } else {
         e.preventDefault();

@@ -344,6 +344,13 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
     state.page_bitmap_cache.lock().unwrap().clear();
 
+    if let Ok(mut dim_guard) = state.page_dimensions.lock() {
+        dim_guard.clear();
+        for pi in &page_infos {
+            dim_guard.insert(pi.page_index as u32, (pi.width_pt, pi.height_pt));
+        }
+    }
+
     // Open WAL in temp dir (not the synced folder).
     let wp = wal_path_for(&path);
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
@@ -446,6 +453,13 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
     *state.original_pdf_bytes.lock().unwrap() = Some(arc_bytes);
     state.page_bitmap_cache.lock().unwrap().clear();
 
+    if let Ok(mut dim_guard) = state.page_dimensions.lock() {
+        dim_guard.clear();
+        for pi in &page_infos {
+            dim_guard.insert(pi.page_index as u32, (pi.width_pt, pi.height_pt));
+        }
+    }
+
     let wp = wal_path_for(&path);
     if let Some(old_tx) = state.wal.lock().unwrap().take() {
         let _ = old_tx.send(WalOp::Close);
@@ -500,27 +514,38 @@ pub async fn render_tile(
         .ok_or("No PDF loaded")?;
 
     let (bgra_bytes, bitmap_w, bitmap_h) = {
-        let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
-        let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
-            "PDFium is not available (pdfium.dll was not found at startup). \
-             PDF tiles cannot be rendered.".to_string()
-        })?;
-
-        let doc = pdfium
-            .load_pdf_from_byte_slice(&arc_bytes, None)
-            .map_err(|e| format!("PDFium load error: {e:?}"))?;
-
-        let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
-        let page_w = page_obj.width().value as f64;
-        let page_h = page_obj.height().value as f64;
+        let (page_w, page_h) = {
+            let dim_guard = state.page_dimensions.lock().map_err(|e| format!("Lock error: {e}"))?;
+            dim_guard.get(&page).copied().unwrap_or((595.0, 842.0))
+        };
 
         let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
         let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
 
-        let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
-        if let Some(cached) = cache_guard.get(page, target_w, target_h) {
-            cached
+        let cached = {
+            let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
+            cache_guard.get(page, target_w, target_h)
+        };
+
+        if let Some(cached_data) = cached {
+            cached_data
         } else {
+            let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
+            let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
+                "PDFium is not available (pdfium.dll was not found at startup). \
+                 PDF tiles cannot be rendered.".to_string()
+            })?;
+
+            let doc = pdfium
+                .load_pdf_from_byte_slice(&arc_bytes, None)
+                .map_err(|e| format!("PDFium load error: {e:?}"))?;
+
+            let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+            let actual_w = page_obj.width().value as f64;
+            let actual_h = page_obj.height().value as f64;
+            let target_w = ((actual_w * scale).round().max(1.0) as i32).min(8192);
+            let target_h = ((actual_h * scale).round().max(1.0) as i32).min(8192);
+
             let config = PdfRenderConfig::new()
                 .set_target_width(target_w)
                 .set_maximum_height(target_h)
@@ -535,6 +560,7 @@ pub async fn render_tile(
             let bw = bitmap.width() as u32;
             let bh = bitmap.height() as u32;
 
+            let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
             cache_guard.put(CachedPageBitmap {
                 page,
                 target_w,
@@ -543,6 +569,10 @@ pub async fn render_tile(
                 bitmap_w: bw,
                 bitmap_h: bh,
             });
+
+            if let Ok(mut dim_guard) = state.page_dimensions.lock() {
+                dim_guard.insert(page, (actual_w, actual_h));
+            }
 
             (bgra, bw, bh)
         }
@@ -1145,6 +1175,7 @@ pub async fn switch_document_session(
             session.original_pdf_bytes = state.original_pdf_bytes.lock().unwrap().clone();
             session.wal = state.wal.lock().unwrap().take();
             std::mem::swap(&mut session.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
+            std::mem::swap(&mut session.page_dimensions, &mut *state.page_dimensions.lock().unwrap());
         }
     }
 
@@ -1155,6 +1186,7 @@ pub async fn switch_document_session(
         *state.original_pdf_bytes.lock().unwrap() = target.original_pdf_bytes.clone();
         *state.wal.lock().unwrap() = target.wal.take();
         std::mem::swap(&mut target.page_bitmap_cache, &mut *state.page_bitmap_cache.lock().unwrap());
+        std::mem::swap(&mut target.page_dimensions, &mut *state.page_dimensions.lock().unwrap());
         *active_id_guard = Some(session_id);
         Ok(true)
     } else {

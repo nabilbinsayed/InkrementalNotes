@@ -15,6 +15,8 @@ fn main() {
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
         "--disable-features=CalculateNativeWinOcclusion,TouchpadOverscrollHistoryNavigation \
          --enable-features=CanvasOopRasterization \
+         --enable-gpu-rasterization \
+         --enable-zero-copy \
          --disable-renderer-backgrounding \
          --disable-backgrounding-occluded-windows \
          --disable-background-timer-throttling",

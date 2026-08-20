@@ -59,6 +59,9 @@ export function popRedo() {
 export function pushUndoRaw(tx) {
   if (!tx) return;
   _undoStack.push(tx);
+  if (_undoStack.length > MAX_HISTORY_DEPTH) {
+    _undoStack.shift();
+  }
   notifyHistoryChange();
 }
 

@@ -111,19 +111,31 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   wctx.translate(psx, psy);
   wctx.scale(z, z);
 
-  if (window.Ink && typeof window.Ink.drawStroke === 'function') {
-    window.Ink.drawStroke(wctx, state.cur);
+  const prev = state.cur.points.length > 1 ? state.cur.points[state.cur.points.length - 2] : null;
+  const isHighlighter = state.cur.kind === 'highlighter';
+
+  if (isHighlighter) {
+    wctx.globalCompositeOperation = 'multiply';
+    wctx.globalAlpha = 0.42;
+  }
+  wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+
+  if (window.Ink && typeof window.Ink.drawSegment === 'function') {
+    if (prev) {
+      window.Ink.drawSegment(wctx, prev, pt);
+    } else {
+      window.Ink.drawDot(wctx, pt);
+    }
   } else {
     // Fallback line rendering
-    wctx.strokeStyle = `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+    wctx.strokeStyle = wctx.fillStyle;
     wctx.lineWidth = (state.cur.base_width || 1.6) * p;
     wctx.lineCap = 'round';
     wctx.beginPath();
-    if (state.cur.points.length === 1) {
+    if (!prev) {
       wctx.arc(px, py, wctx.lineWidth / 2, 0, Math.PI * 2);
       wctx.fill();
     } else {
-      const prev = state.cur.points[state.cur.points.length - 2];
       wctx.moveTo(prev.x, prev.y);
       wctx.lineTo(px, py);
       wctx.stroke();

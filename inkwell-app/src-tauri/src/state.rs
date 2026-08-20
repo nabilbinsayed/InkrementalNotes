@@ -65,6 +65,7 @@ pub struct DocumentSession {
     pub original_pdf_bytes: Option<Arc<Vec<u8>>>,
     pub wal: Option<Sender<WalOp>>,
     pub page_bitmap_cache: PageBitmapLruCache,
+    pub page_dimensions: HashMap<u32, (f64, f64)>,
 }
 
 pub struct AppState {
@@ -82,6 +83,8 @@ pub struct AppState {
     /// Multi-page in-memory LRU cache for rendered full-page PDFium bitmaps
     /// to avoid redundant page rasterization across tiles on active/split/adjacent pages.
     pub page_bitmap_cache: Mutex<PageBitmapLruCache>,
+    /// Pre-extracted page dimensions (width_pt, height_pt) for instant tile bounds calculation.
+    pub page_dimensions: Mutex<HashMap<u32, (f64, f64)>>,
     /// Multi-document session map for tab switching and isolation
     pub sessions: Mutex<HashMap<String, DocumentSession>>,
     pub active_session_id: Mutex<Option<String>>,
@@ -96,7 +99,8 @@ impl Default for AppState {
             original_pdf_bytes: Mutex::new(None),
             wal: Mutex::new(None),
             pdfium: Mutex::new(None),
-            page_bitmap_cache: Mutex::new(PageBitmapLruCache::new(8)),
+            page_bitmap_cache: Mutex::new(PageBitmapLruCache::new(16)),
+            page_dimensions: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             active_session_id: Mutex::new(None),
         }
