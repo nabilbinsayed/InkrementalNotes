@@ -19,6 +19,7 @@ Thumbs.db
 # PDF test files and generated corpus (keep fixtures/lecture.pdf and MANIFEST.md)
 *.pdf
 !fixtures/lecture.pdf
+!**/fixtures/lecture.pdf
 
 # Python / Venv
 .venv/

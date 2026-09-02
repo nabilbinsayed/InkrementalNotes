@@ -1,4 +1,5 @@
 target/
 out/
 fixtures/*.pdf
+!fixtures/lecture.pdf
 __pycache__/
