@@ -26,6 +26,24 @@ Every stroke drawn in Inkwell is saved as native vector geometry—crisp at any 
 
 ---
 
+## 📥 Downloads & Releases
+
+Pre-compiled standalone packages and installers are available directly on the **[GitHub Releases](https://github.com/nabilbinsayed/InkrementalNotes/releases)** page.
+
+| Platform | Package / Format | Instructions |
+|---|---|---|
+| **Windows** | **Installer (`.exe` / `.msi`)** | Download and double-click `Inkwell_<version>_x64-setup.exe` (or `.msi`) to install with start menu and desktop shortcuts. |
+| **Windows** | **Portable (`.zip`)** | Download `inkwell-windows-x64-portable.zip`, extract anywhere, and run `Launch Inkwell.bat`. Zero installation required. |
+| **Linux (Universal)** | **AppImage (`.AppImage`)** | Download `Inkwell_<version>_amd64.AppImage`, make executable (`chmod +x Inkwell_*.AppImage`), and run. Compatible with Ubuntu, Fedora, Arch, Debian, openSUSE. |
+| **Linux (Ubuntu / Debian)** | **Debian Package (`.deb`)** | Download `inkwell_<version>_amd64.deb` and install via `sudo dpkg -i inkwell_*.deb`. |
+| **Linux (Fedora / RHEL)** | **RPM Package (`.rpm`)** | Download `inkwell-<version>-1.x86_64.rpm` and install via `sudo dnf install ./inkwell-*.rpm`. |
+| **Linux (Portable)** | **Tarball (`.tar.gz`)** | Download `inkwell-linux-x64-portable.tar.gz`, extract, and execute `./Launch Inkwell.sh`. |
+
+> [!TIP]
+> All releases include bundled PDFium libraries and cryptographic hashes (`SHA256SUMS.txt`) to verify package integrity.
+
+---
+
 ## ✨ Core Highlights
 
 ### 🖋️ Ultra-Low Latency Inking Engine

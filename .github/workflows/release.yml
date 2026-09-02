@@ -1,0 +1,268 @@
+name: Publish GitHub Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+      draft:
+        description: 'Create as draft release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch Windows PDFium Binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "bin"
+          New-Item -ItemType Directory -Force -Path "inkwell-app/src-tauri/target/release"
+          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip" -OutFile "pdfium.zip"
+          Expand-Archive -Path "pdfium.zip" -DestinationPath "pdfium-extracted" -Force
+          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "bin/pdfium.dll" -Force
+          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
+          Remove-Item -Recurse -Force "pdfium.zip", "pdfium-extracted"
+
+      - name: Build Windows App & Bundles
+        working-directory: inkwell-app
+        run: |
+          npm install
+          npx @tauri-apps/cli build
+
+      - name: Package Windows Portable Zip
+        shell: pwsh
+        run: |
+          $dist = "inkwell-windows-x64-portable"
+          New-Item -ItemType Directory -Path $dist
+          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/"
+          Copy-Item "bin/pdfium.dll" -Destination "$dist/"
+          Copy-Item "Launch Inkwell.bat" -Destination "$dist/"
+          Copy-Item "README.md" -Destination "$dist/"
+          Compress-Archive -Path "$dist/*" -DestinationPath "$dist.zip"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: |
+            inkwell-windows-x64-portable.zip
+            inkwell-app/src-tauri/target/release/bundle/msi/*.msi
+            inkwell-app/src-tauri/target/release/bundle/nsis/*.exe
+
+  build-linux:
+    name: Build Linux Release (AppImage & DEB)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libevdev-dev \
+            patchelf \
+            squashfs-tools
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch Linux PDFium Shared Library
+        run: |
+          mkdir -p bin
+          mkdir -p inkwell-app/src-tauri/target/release
+          wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
+          tar -xzf pdfium-linux-x64.tgz
+          cp lib/libpdfium.so bin/libpdfium.so
+          cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
+          sudo cp lib/libpdfium.so /usr/local/lib/libpdfium.so
+          sudo ldconfig || true
+          rm -rf pdfium-linux-x64.tgz lib include args.gn
+
+      - name: Build Linux App & Bundles
+        working-directory: inkwell-app
+        run: |
+          npm install
+          npx @tauri-apps/cli build
+
+      - name: Package Linux Portable Tarball
+        run: |
+          DIST="inkwell-linux-x64-portable"
+          mkdir -p "$DIST/bin"
+          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/"
+          cp bin/libpdfium.so "$DIST/bin/"
+          cp "Launch Inkwell.sh" "$DIST/"
+          cp README.md "$DIST/"
+          tar -czf "$DIST.tar.gz" "$DIST"
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: |
+            inkwell-linux-x64-portable.tar.gz
+            inkwell-app/src-tauri/target/release/bundle/appimage/*.AppImage
+            inkwell-app/src-tauri/target/release/bundle/deb/*.deb
+
+  build-fedora-rpm:
+    name: Build Fedora RPM Package
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Fedora Build Dependencies
+        run: |
+          dnf install -y \
+            webkit2gtk4.1-devel \
+            gtk3-devel \
+            libayatana-appindicator-gtk3-devel \
+            librsvg2-devel \
+            openssl-devel \
+            libevdev-devel \
+            libxdo-devel \
+            file-devel \
+            gcc gcc-c++ make curl wget tar nodejs npm rust cargo
+
+      - name: Fetch Fedora PDFium Shared Library
+        run: |
+          mkdir -p bin
+          mkdir -p inkwell-app/src-tauri/target/release
+          wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
+          tar -xzf pdfium-linux-x64.tgz
+          cp lib/libpdfium.so bin/libpdfium.so
+          cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
+          cp lib/libpdfium.so /usr/lib64/libpdfium.so || true
+          rm -rf pdfium-linux-x64.tgz lib include args.gn
+
+      - name: Build Fedora RPM Package
+        working-directory: inkwell-app
+        run: |
+          npm install
+          npx @tauri-apps/cli build --bundles rpm
+
+      - name: Upload Fedora RPM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-fedora
+          path: inkwell-app/src-tauri/target/release/bundle/rpm/*.rpm
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux, build-fedora-rpm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist-windows
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux
+          path: dist-linux
+
+      - name: Download Fedora RPM Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-fedora
+          path: dist-fedora
+
+      - name: Consolidate Release Assets & Generate Checksums
+        run: |
+          mkdir -p release-assets
+          find dist-windows dist-linux dist-fedora -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          ls -lh
+
+      - name: Determine Tag Name
+        id: tag_name
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.tag_name }}" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v0.1.0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag_name.outputs.tag }}
+          name: "Inkwell Release ${{ steps.tag_name.outputs.tag }}"
+          draft: ${{ github.event.inputs.draft || false }}
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## Inkwell ${{ steps.tag_name.outputs.tag }} — PDF-Native Ink Annotator
+
+            Welcome to the public release of **Inkwell**!
+
+            ### 📦 Which file should I download?
+
+            #### 🪟 Windows (Windows 10/11 64-bit)
+            - **Installer (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_x64-setup.exe` (or `.msi`) — Standard installer with Start menu & desktop shortcuts.
+            - **Portable**: `inkwell-windows-x64-portable.zip` — No installation needed. Extract and run `Launch Inkwell.bat`.
+
+            #### 🐧 Linux (x86_64)
+            - **Universal (Recommended)**: `Inkwell_${{ steps.tag_name.outputs.tag }}_amd64.AppImage` — Works on Ubuntu, Fedora, Debian, Arch, openSUSE. Make executable (`chmod +x`) and run.
+            - **Ubuntu / Debian / Mint / Pop!_OS**: `inkwell_${{ steps.tag_name.outputs.tag }}_amd64.deb` (`sudo dpkg -i inkwell_*.deb`)
+            - **Fedora / RHEL / CentOS**: `inkwell-${{ steps.tag_name.outputs.tag }}-1.x86_64.rpm` (`sudo dnf install ./inkwell-*.rpm`)
+            - **Portable**: `inkwell-linux-x64-portable.tar.gz` — Extract and run `./Launch Inkwell.sh`.
+
+            ---
+            *Verify download integrity using the included `SHA256SUMS.txt`.*
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

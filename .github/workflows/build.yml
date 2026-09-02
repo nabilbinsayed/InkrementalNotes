@@ -1,0 +1,167 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: Verify (Tests, Clippy & Smoke)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch Windows PDFium Binary for Integration Tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "bin"
+          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip" -OutFile "pdfium.zip"
+          Expand-Archive -Path "pdfium.zip" -DestinationPath "pdfium-extracted" -Force
+          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "bin/pdfium.dll" -Force
+          Remove-Item -Recurse -Force "pdfium.zip", "pdfium-extracted"
+
+      - name: Install Python Test Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright pytest
+          playwright install chromium
+
+      - name: Cargo Tests
+        working-directory: inkwell
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: Cargo Clippy
+        working-directory: inkwell
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Desktop App Smoke Suite
+        working-directory: inkwell-app
+        run: python test_app_smoke.py
+
+      - name: M0 Prototype Smoke Suite
+        working-directory: inkwell-m0
+        run: python test_smoke.py
+
+  build-windows:
+    name: Build Windows Packages
+    needs: [verify]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch Windows PDFium Binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "bin"
+          New-Item -ItemType Directory -Force -Path "inkwell-app/src-tauri/target/release"
+          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip" -OutFile "pdfium.zip"
+          Expand-Archive -Path "pdfium.zip" -DestinationPath "pdfium-extracted" -Force
+          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "bin/pdfium.dll" -Force
+          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
+          Remove-Item -Recurse -Force "pdfium.zip", "pdfium-extracted"
+
+      - name: Build Windows App
+        working-directory: inkwell-app
+        run: |
+          npm install
+          npx @tauri-apps/cli build
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkwell-windows-ci
+          path: inkwell-app/src-tauri/target/release/bundle/
+
+  build-linux:
+    name: Build Linux Packages (AppImage & DEB)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Dependencies (WebKitGTK, GTK3, AppIndicator)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libevdev-dev \
+            patchelf \
+            squashfs-tools
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch Linux PDFium Shared Library
+        run: |
+          mkdir -p bin
+          mkdir -p inkwell-app/src-tauri/target/release
+          wget -q https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-linux-x64.tgz
+          tar -xzf pdfium-linux-x64.tgz
+          cp lib/libpdfium.so bin/libpdfium.so
+          cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
+          sudo cp lib/libpdfium.so /usr/local/lib/libpdfium.so
+          sudo ldconfig || true
+          rm -rf pdfium-linux-x64.tgz lib include args.gn
+
+      - name: Build Linux App (AppImage & DEB)
+        working-directory: inkwell-app
+        run: |
+          npm install
+          npx @tauri-apps/cli build
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: inkwell-linux-ci
+          path: inkwell-app/src-tauri/target/release/bundle/

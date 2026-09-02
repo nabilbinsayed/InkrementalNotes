@@ -35,9 +35,16 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
     let mut add_dir_and_subdirs = |p: std::path::PathBuf| {
         candidate_paths.push(p.clone());
         candidate_paths.push(p.join("bin"));
+        candidate_paths.push(p.join("lib"));
+        candidate_paths.push(p.join("lib64"));
         candidate_paths.push(p.join("src-tauri"));
         candidate_paths.push(p.join("resources"));
         candidate_paths.push(p.join("resources").join("bin"));
+        candidate_paths.push(p.join("resources").join("lib"));
+        candidate_paths.push(p.join("lib").join("Inkwell"));
+        candidate_paths.push(p.join("lib").join("inkwell"));
+        candidate_paths.push(p.join("lib").join("Inkwell").join("resources"));
+        candidate_paths.push(p.join("lib").join("Inkwell").join("resources").join("bin"));
     };
 
     if let Ok(exe) = std::env::current_exe() {
