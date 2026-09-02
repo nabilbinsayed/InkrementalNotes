@@ -30,16 +30,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Fetch Windows PDFium Binary for Integration Tests
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "bin"
-          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip" -OutFile "pdfium.zip"
-          Expand-Archive -Path "pdfium.zip" -DestinationPath "pdfium-extracted" -Force
-          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "bin/pdfium.dll" -Force
-          Remove-Item -Recurse -Force "pdfium.zip", "pdfium-extracted"
+          curl.exe -fsSL -o pdfium.tgz https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz
+          tar.exe -xzf pdfium.tgz
+          Remove-Item -Force "pdfium.tgz"
 
       - name: Install Python Test Dependencies
         run: |
@@ -81,18 +80,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Fetch Windows PDFium Binary
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "bin"
           New-Item -ItemType Directory -Force -Path "inkwell-app/src-tauri/target/release"
-          Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.zip" -OutFile "pdfium.zip"
-          Expand-Archive -Path "pdfium.zip" -DestinationPath "pdfium-extracted" -Force
-          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "bin/pdfium.dll" -Force
-          Copy-Item "pdfium-extracted/bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
-          Remove-Item -Recurse -Force "pdfium.zip", "pdfium-extracted"
+          curl.exe -fsSL -o pdfium.tgz https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-x64.tgz
+          tar.exe -xzf pdfium.tgz
+          Copy-Item "bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
+          Remove-Item -Force "pdfium.tgz"
 
       - name: Build Windows App
         working-directory: inkwell-app
@@ -140,7 +138,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Fetch Linux PDFium Shared Library
         run: |
