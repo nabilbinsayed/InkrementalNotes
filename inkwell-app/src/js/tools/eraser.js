@@ -3,7 +3,7 @@
  * Performs proximity hit-testing across visible pages and deletes strokes.
  * ========================================================================== */
 
-import { state } from '../core/state.js';
+import { state, warnDurability } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
@@ -81,7 +81,10 @@ export function eraseStrokesAt(ptWorld, pane, viewport) {
   if (strokesToErase.length > 0) {
     const deleted = documentOps.deleteStrokes(strokesToErase, { recordHistory: true });
     for (const d of deleted) {
-      ipc.deleteStroke(d.id).catch(() => {});
+      ipc.deleteStroke(d.id).catch(err => {
+        console.warn('[inkwell/eraser] deleteStroke error:', err);
+        warnDurability('Erase may not persist: ' + err);
+      });
     }
     compositor.redrawAll();
   }

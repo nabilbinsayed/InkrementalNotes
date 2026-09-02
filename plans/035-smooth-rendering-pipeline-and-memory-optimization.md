@@ -1,4 +1,6 @@
-# Plan 035: Smooth Viewport RAF Pipeline & Memory Footprint Optimization
+# Plan 035: Smooth Rendering Pipeline & Memory Optimization
+
+> *Historical note: The former Python tier e2e test gate (272 checks) was retired in 2026-08 by Plan 045 because it tested a Python mock rather than the product.*
 
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the

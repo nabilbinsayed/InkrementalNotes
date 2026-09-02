@@ -1214,7 +1214,6 @@ html, body {
   color: var(--text-main);
   user-select: none;
 }
-
 .status-indicator-dot {
   width: 7px;
   height: 7px;
@@ -1284,7 +1283,7 @@ html, body {
   bottom: 22px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 25;
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1414,7 +1413,7 @@ html, body {
 /* Floating Scroll Back to Top Button */
 .floating-scroll-btn {
   position: absolute;
-  bottom: 66px;
+  top: 18px;
   right: 20px;
   width: 36px;
   height: 36px;
@@ -1445,7 +1444,7 @@ html, body {
   position: absolute;
   bottom: 18px;
   right: 20px;
-  z-index: 25;
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 3px;
@@ -2325,7 +2324,6 @@ html, body {
   opacity: 1;
   transform: translateX(-50%) translateY(2px);
 }
-
 /* Glassmorphic Toast Notifications */
 .toast-container {
   position: fixed;
@@ -2339,20 +2337,24 @@ html, body {
 }
 
 .toast {
-  background: rgba(28, 25, 23, 0.9);
+  background: rgba(28, 25, 23, 0.88);
+  -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
-  color: var(--text-main);
-  border: 1px solid var(--border);
+  color: var(--text-main, #f8fafc);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-left: 4px solid #7C3AED;
   border-radius: 10px;
   padding: 12px 18px;
   font-size: 13px;
   font-weight: 500;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  line-height: 1.4;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
   pointer-events: auto;
   opacity: 0;
   transform: translateY(12px);
-  transition: opacity 0.25s ease, transform 0.25s ease;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  max-width: 380px;
+  word-wrap: break-word;
 }
 
 .toast.show {
@@ -2362,11 +2364,92 @@ html, body {
 .toast.toast-error { border-left-color: #ef4444; }
 .toast.toast-success { border-left-color: #10b981; }
 .toast.toast-warning { border-left-color: #f59e0b; }
+.toast.toast-info { border-left-color: #7C3AED; }
 
 .hidden { display: none !important; }
-button:focus-visible, .rail-btn:focus-visible, .dock-btn:focus-visible, .header-icon-btn:focus-visible, .doc-tab:focus-visible {
-  outline: 2px solid #7C3AED;
-  outline-offset: 2px;
+
+/* Universal Focus-Visible System for Keyboard and Assistive Accessibility (F14) */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+.rail-btn:focus-visible,
+.dock-btn:focus-visible,
+.header-icon-btn:focus-visible,
+.nav-cluster-btn:focus-visible,
+.zoom-dock-btn:focus-visible,
+.doc-tab:focus-visible,
+.tab-add-btn:focus-visible,
+.tab-close:focus-visible,
+.drawer-close-btn:focus-visible,
+.bookmark-delete-btn:focus-visible,
+.layer-visibility-btn:focus-visible,
+.inspector-close-btn:focus-visible,
+.settings-close-btn:focus-visible,
+.more-menu-item:focus-visible,
+.recent-file-item:focus-visible,
+.recent-file-remove-btn:focus-visible,
+.settings-nav-item:focus-visible,
+.sel-action-btn:focus-visible,
+.text-tb-btn:focus-visible,
+.btn-primary-accent:focus-visible,
+.btn-secondary-pill:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-modal-primary:focus-visible,
+.btn-modal-secondary:focus-visible,
+.modal-card:focus-visible,
+.cmd-palette:focus-visible,
+.settings-window:focus-visible {
+  outline: 2px solid #7C3AED !important;
+  outline-offset: 2px !important;
+}
+
+/* ============================================================================
+ * Touch Target Accessibility Expansion (F13 - Minimum 44x44px Hit Target)
+ * Ensures compact UI buttons meet touch and stylus ergonomic standards
+ * without altering visual compact layout.
+ * ========================================================================== */
+.header-icon-btn,
+.nav-cluster-btn,
+.zoom-dock-btn,
+.tab-add-btn,
+.tab-close,
+.drawer-close-btn,
+.bookmark-delete-btn,
+.layer-visibility-btn,
+.inspector-close-btn,
+.settings-close-btn,
+.recent-file-remove-btn,
+.text-tb-btn {
+  position: relative;
+}
+
+.header-icon-btn::before,
+.nav-cluster-btn::before,
+.zoom-dock-btn::before,
+.tab-add-btn::before,
+.tab-close::before,
+.drawer-close-btn::before,
+.bookmark-delete-btn::before,
+.layer-visibility-btn::before,
+.inspector-close-btn::before,
+.settings-close-btn::before,
+.recent-file-remove-btn::before,
+.text-tb-btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 44px;
+  min-height: 44px;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+  z-index: 1;
 }
 
 /* Primary Header Accent Button */

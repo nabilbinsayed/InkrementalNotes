@@ -4,7 +4,7 @@
  * paints to the wet canvas, and commits vector strokes to the document.
  * ========================================================================== */
 
-import { state } from '../core/state.js';
+import { state, warnDurability } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
@@ -14,22 +14,23 @@ export function onPenDown(e, ptWorld, pane, viewport) {
   const pageCoord = viewport.worldToPage(ptWorld[0], ptWorld[1]);
   const activeSheet = pageCoord.sheet;
 
+  const baseW = state.baseWidth || (isHighlighter ? 16.0 : 1.6);
   if (window.Ink && typeof window.Ink.Stroke === 'function') {
     state.cur = new window.Ink.Stroke({
       kind: isHighlighter ? 'highlighter' : 'pen',
       rgb: state.color,
-      baseWidth: state.baseWidth,
+      baseWidth: baseW,
     });
   } else {
     state.cur = {
       id: 's_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
       kind: isHighlighter ? 'highlighter' : 'pen',
       rgb: state.color,
-      base_width: state.baseWidth,
+      base_width: baseW,
       points: [],
     };
   }
-
+  state.cur.base_width = baseW;
   state.cur.sheet = activeSheet;
   state.drawingPane = pane;
   if (window.Ink && typeof window.Ink.Streamline === 'function') {
@@ -62,8 +63,12 @@ export function onPenUp(e, viewport) {
     documentOps.addStroke(stroke, { recordHistory: true });
 
     // Asynchronous WAL journal commit
-    ipc.commitStroke(stroke.sheet, stroke.kind, stroke.rgb, stroke.base_width, stroke.points)
-      .catch(err => console.warn('[inkwell/pen] commitStroke WAL error:', err));
+    ipc.commitStroke(stroke.sheet, stroke.kind, stroke.rgb, stroke.base_width, stroke.points, stroke.id)
+      .then(serverId => { if (serverId) stroke.id = String(serverId); })
+      .catch(err => {
+        console.warn('[inkwell/pen] commitStroke WAL error:', err);
+        warnDurability('Stroke may not persist: ' + err);
+      });
   }
 
   compositor.clearWet();
@@ -98,7 +103,12 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   const { wctx } = compositor.getContexts();
   if (!wctx || !state.cur) return;
 
-  const pt = { x: px, y: py, p, t };
+  const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
+  const isHighlighter = state.cur.kind === 'highlighter';
+  const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
+  const w = isHighlighter ? baseW : baseW * (0.22 + 0.78 * c);
+
+  const pt = { x: px, y: py, p, w, t };
   if (!state.cur.points) state.cur.points = [];
   state.cur.points.push(pt);
 
@@ -112,7 +122,6 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   wctx.scale(z, z);
 
   const prev = state.cur.points.length > 1 ? state.cur.points[state.cur.points.length - 2] : null;
-  const isHighlighter = state.cur.kind === 'highlighter';
 
   if (isHighlighter) {
     wctx.globalCompositeOperation = 'multiply';

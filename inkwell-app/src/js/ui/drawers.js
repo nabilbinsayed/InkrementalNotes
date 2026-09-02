@@ -5,6 +5,9 @@
 
 import { state, $, escapeHtml, emit } from '../core/state.js';
 import * as templates from '../render/templates.js';
+import * as ipc from '../core/ipc.js';
+import * as textSelection from '../workspace/text-selection.js';
+import * as compositor from '../render/compositor.js';
 
 let _goToPageCallback = null;
 
@@ -15,6 +18,7 @@ export function setGoToPageCallback(cb) {
 export function initDrawers() {
   bindRailButtons();
   bindMoreMenu();
+  bindSearchEvents();
 }
 
 function bindRailButtons() {
@@ -24,10 +28,64 @@ function bindRailButtons() {
   $('btnRailBookmarks') && $('btnRailBookmarks').addEventListener('click', () => toggleDrawer('bookmarks'));
   $('btnRailLayers') && $('btnRailLayers').addEventListener('click', () => toggleDrawer('layers'));
   $('btnRailDocInfo') && $('btnRailDocInfo').addEventListener('click', () => toggleDrawer('docinfo'));
+  $('btnRailSettings') && $('btnRailSettings').addEventListener('click', () => {
+    const modal = $('settingsModal');
+    if (modal) modal.classList.remove('hidden');
+    else toggleDrawer('settings');
+  });
   $('btnCloseDrawer') && $('btnCloseDrawer').addEventListener('click', () => closeDrawer());
 
   $('btnToggleSidebar') && $('btnToggleSidebar').addEventListener('click', () => toggleDrawer('thumbnails'));
   $('btnCollapseSidebar') && $('btnCollapseSidebar').addEventListener('click', () => closeDrawer());
+
+  // Listen for hardware diagnostics events
+  import('../core/state.js').then(({ on }) => {
+    on('hardwareDiagnostics', payload => updateHardwareDiagnosticsUI(payload));
+  });
+}
+
+let _diagElements = null;
+
+export function updateHardwareDiagnosticsUI(diag) {
+  if (!diag) return;
+
+  const modal = $('settingsModal');
+  const isSettingsVisible = (modal && !modal.classList.contains('hidden')) || state.activeDrawer === 'settings' || state.activeDrawer === 'docinfo';
+  if (!isSettingsVisible) return;
+
+  if (!_diagElements) {
+    _diagElements = {
+      pointerType: $('diagPointerType'),
+      pressureSource: $('diagPressureSource'),
+      activeDevice: $('diagActiveDevice'),
+      livePressure: $('diagLivePressure'),
+    };
+  }
+
+  if (_diagElements.pointerType) {
+    _diagElements.pointerType.textContent = diag.pointerType === 'pen'
+      ? 'Stylus Pen'
+      : (diag.pointerType === 'eraser' ? 'Stylus Eraser' : 'Mouse / Trackpad');
+  }
+  if (_diagElements.pressureSource) {
+    if (diag.pressureSource === 'native') {
+      _diagElements.pressureSource.textContent = 'Native Linux (evdev)';
+      _diagElements.pressureSource.className = 'diag-badge green';
+    } else if (diag.pressureSource === 'browser') {
+      _diagElements.pressureSource.textContent = 'Browser (PointerEvent)';
+      _diagElements.pressureSource.className = 'diag-badge';
+    } else {
+      _diagElements.pressureSource.textContent = 'Fallback (0.5)';
+      _diagElements.pressureSource.className = 'diag-badge';
+    }
+  }
+  if (_diagElements.activeDevice && diag.device) {
+    _diagElements.activeDevice.textContent = `${diag.device.name || 'Device'} (${diag.device.path || ''})`;
+    _diagElements.activeDevice.title = `${diag.device.name || ''} at ${diag.device.path || ''}`;
+  }
+  if (_diagElements.livePressure && diag.pressure != null) {
+    _diagElements.livePressure.textContent = Number(diag.pressure).toFixed(2);
+  }
 }
 
 function bindMoreMenu() {
@@ -202,6 +260,140 @@ export function renderOutline() {
           _goToPageCallback(pageIdx, 'left');
           container.querySelectorAll('.outline-item').forEach(el => el.classList.remove('active'));
           header.closest('.outline-item').classList.add('active');
+        }
+      }
+    });
+  });
+}
+
+function bindSearchEvents() {
+  const input = $('drawerSearchInput');
+  const go = $('btnExecuteSearch');
+
+  if (go) {
+    go.addEventListener('click', () => executeSearch());
+  }
+  if (input) {
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        executeSearch();
+      }
+    });
+  }
+}
+
+export function openSearchWithQuery(query) {
+  openDrawer('search');
+  const input = $('drawerSearchInput');
+  if (input) {
+    input.value = query;
+    executeSearch();
+  }
+}
+
+export async function executeSearch() {
+  const input = $('drawerSearchInput');
+  const q = (input && input.value || '').trim();
+  state.searchQuery = q;
+  state.searchResults = [];
+
+  if (!q) {
+    renderSearchResults([]);
+    compositor.redrawAll();
+    return;
+  }
+
+  const results = await ipc.invokeTauri('search_pdf', { query: q }).catch(err => {
+    console.warn('[inkwell/drawers] search_pdf error:', err);
+    return [];
+  });
+
+  const searchRects = await buildSearchRects(q, results || []);
+  state.searchResults = searchRects;
+  state.activeSearchMatch = 0;
+  renderSearchResults(results || []);
+  compositor.redrawAll();
+}
+
+export async function buildSearchRects(q, results) {
+  if (!q || !results || !results.length) return [];
+  const qLower = q.toLowerCase();
+  const searchRects = [];
+
+  for (const item of results) {
+    const pageIndex = item.page_index;
+    const pageData = await textSelection.ensurePageTextData(pageIndex);
+    if (!pageData || !pageData.chars || !pageData.chars.length) continue;
+
+    const chars = pageData.chars;
+    const fullText = chars.map(c => c.c).join('').toLowerCase();
+    let pos = 0;
+
+    while ((pos = fullText.indexOf(qLower, pos)) !== -1) {
+      if (searchRects.length >= 500) break;
+      const matchedChars = chars.slice(pos, pos + qLower.length);
+      if (matchedChars.length > 0) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const ch of matchedChars) {
+          if (ch.rect) {
+            minX = Math.min(minX, ch.rect[0]);
+            minY = Math.min(minY, ch.rect[1]);
+            maxX = Math.max(maxX, ch.rect[2]);
+            maxY = Math.max(maxY, ch.rect[3]);
+          }
+        }
+        if (minX !== Infinity) {
+          searchRects.push({
+            pageIndex,
+            rect: [minX, minY, maxX, maxY],
+            snippet: item.snippet,
+          });
+        }
+      }
+      pos += qLower.length || 1;
+    }
+    if (searchRects.length >= 500) break;
+  }
+  return searchRects;
+}
+
+export function renderSearchResults(searchItems) {
+  const container = $('drawerSearchResults');
+  if (!container) return;
+
+  if (!searchItems || !searchItems.length) {
+    container.innerHTML = `
+      <div class="drawer-empty-state">
+        <div class="empty-state-icon">🔍</div>
+        <div class="empty-state-title">No Results Found</div>
+        <div class="empty-state-desc">Try searching for a different term or keyword.</div>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = searchItems.map((item, idx) => {
+    return `
+      <div class="search-result-card" data-page="${item.page_index}" data-idx="${idx}">
+        <div class="search-result-header">
+          <span class="search-page-badge">Page ${item.page_index + 1}</span>
+          <span class="search-match-count">${item.match_count || 1} match${(item.match_count || 1) > 1 ? 'es' : ''}</span>
+        </div>
+        <div class="search-snippet">${escapeHtml(item.snippet)}</div>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.search-result-card').forEach(el => {
+    el.addEventListener('click', () => {
+      const pageStr = el.dataset.page;
+      if (pageStr !== '' && typeof _goToPageCallback === 'function') {
+        const pageIdx = parseInt(pageStr, 10);
+        if (!isNaN(pageIdx)) {
+          _goToPageCallback(pageIdx, 'left');
+          container.querySelectorAll('.search-result-card').forEach(item => item.classList.remove('active'));
+          el.classList.add('active');
         }
       }
     });

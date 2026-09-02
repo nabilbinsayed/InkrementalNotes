@@ -3,12 +3,14 @@ pub mod normalise;
 pub mod outline;
 pub mod rasterizer;
 pub mod text;
+pub mod text_embed;
 
 pub use images::{embed_images_in_pdf, ImageAnnotation};
 pub use normalise::normalise;
 pub use outline::{extract_outline, TocItem};
 pub use rasterizer::PdfiumRasterizer;
 pub use text::{extract_text, extract_text_spans, extract_page_text_data, TextSpan, CharSpan, TextLine, PageTextData};
+pub use text_embed::{embed_texts_in_pdf, TextAnnotation};
 
 // Re-export core PDFium types so dependents don't need a direct pdfium_render dependency.
 pub use pdfium_render::prelude::{Pdfium, PdfiumError};
@@ -34,6 +36,8 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
         candidate_paths.push(p.clone());
         candidate_paths.push(p.join("bin"));
         candidate_paths.push(p.join("src-tauri"));
+        candidate_paths.push(p.join("resources"));
+        candidate_paths.push(p.join("resources").join("bin"));
     };
 
     if let Ok(exe) = std::env::current_exe() {
@@ -45,6 +49,13 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
             } else {
                 break;
             }
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        add_dir_and_subdirs(cwd.clone());
+        if let Some(parent) = cwd.parent() {
+            add_dir_and_subdirs(parent.to_path_buf());
         }
     }
 

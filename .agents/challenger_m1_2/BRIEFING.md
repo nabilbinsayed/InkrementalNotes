@@ -1,61 +1,48 @@
-# BRIEFING — 2026-08-14T13:30:00Z
+# BRIEFING — 2026-09-02T17:14:00+06:00
 
 ## Mission
-Conduct adversarial verification, stress testing, and empirical benchmarking for Milestone 1 PDFium Worker Pipeline & Caching (Plan 021 & Plan 023).
+Independently challenge and stress-test the tool state machine, clipboard copying, radial menu, and command palette navigation for Milestone 1.
 
 ## 🔒 My Identity
-- Archetype: EMPIRICAL CHALLENGER
+- Archetype: teamwork_preview_challenger
 - Roles: critic, specialist
-- Working directory: d:\Own Programs\InkWell\.agents\challenger_m1_2\
-- Original parent: aac50c46-9c9a-426f-af7b-f5545e32d0e9
-- Milestone: Milestone 1 (PDFium Worker Pipeline & Caching)
+- Working directory: /mnt/Work/Own Programs/InkWell/.agents/challenger_m1_2
+- Original parent: 14705561-f0dd-4a76-b0a8-30c276afb62e
+- Milestone: M1
 - Instance: 2 of 2
 
 ## 🔒 Key Constraints
-- Review-only — do NOT modify implementation code directly unless reporting/testing with standalone scripts or test suites
-- Empirical verification required: all bugs/failure modes must be empirically demonstrated or verified through code execution
-- Must check: non-blocking tile rasterization, LRU page bitmap cache, frontend tile error handling, unit/integration tests, smoke tests
+- Review-only — do NOT modify implementation code directly
+- Empirical verification required: must run verification code yourself
+- Find bugs through stress testing, edge-case analysis, and verification harnesses
 
 ## Current Parent
-- Conversation ID: aac50c46-9c9a-426f-af7b-f5545e32d0e9
-- Updated: 2026-08-14T13:30:00Z
+- Conversation ID: 14705561-f0dd-4a76-b0a8-30c276afb62e
+- Updated: not yet
 
 ## Review Scope
-- **Files to review**:
-  - `plans/021-pdfium-document-handle-and-threadpool-offload.md`
-  - `plans/023-security-hardening-utf8-dll-csp-and-path-validation.md`
-  - `inkwell-app/src-tauri/src/commands.rs`
-  - `inkwell-app/src-tauri/src/state.rs`
-  - `inkwell-app/src-tauri/tauri.conf.json`
-  - `inkwell-app/src/js/app.js`
-  - `inkwell/crates/inkwell-pdf/src/lib.rs`
-  - `inkwell/crates/inkwell-pdf/src/rasterizer.rs`
-  - `inkwell/crates/inkwell-core/src/codec.rs`
-  - `inkwell/crates/inkwell-core/src/pdfobj.rs`
-- **Interface contracts**: `d:\Own Programs\InkWell\.agents\sub_orch_m1_gen2\SCOPE.md`
-- **Review criteria**: Correctness, concurrency/threadpool safety, memory safety, caching efficiency, resilience against loop storms, empirical test pass.
+- **Files to review**: inkwell-app/src/js/tools/tool-manager.js, inkwell-app/src/js/ui/palette.js, inkwell-app/src/js/ui/radial.js, inkwell-app/src/js/ui/selection_overlay.js, inkwell-app/src/js/main.js, test_app_smoke.py, test_m1_interactive.py
+- **Interface contracts**: PROJECT.md, AGENTS.md, ORIGINAL_REQUEST.md
+- **Review criteria**: Correctness, tool state machine transitions, clipboard copy & popover, radial menu interactions, command palette edge cases
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Non-blocking rasterization in `spawn_blocking`: FAILED (PDFium rasterization runs synchronously on Tokio async worker thread before `spawn_blocking`).
-  - LRU Page Bitmap Cache avoids redundant PDF byte parsing: FAILED (cache check compares page width to tile width, always misses, triggers `load_pdf_from_byte_slice` per tile).
-  - Tauri configuration validity: FAILED (`tauri.conf.json` has `_disabled_csp`, failing `cargo clippy`).
-  - Frontend tile error handling & loop storms: PASSED (`fetchTile` catch handler caches null, avoids recursive `scheduleRedrawTiles()`).
-  - Security hardening (UTF-8 search slicing, DLL search restriction, varint overflow, path traversal): PASSED.
+  1. Spacebar quick-toggle & spring-key state machine across all 9 tools (PASS).
+  2. Radial menu edge clamping, tool switching, action triggers, Escape / outside click dismissal (PASS).
+  3. Command palette wrap-around boundaries (ArrowUp on 0, ArrowDown on last), query filtering, enter execution, empty search handling (PASS).
+  4. PDF text selection drag on canvas, popover visibility, and clipboard copy (FAIL: critical casing desynchronization bug).
 - **Vulnerabilities found**:
-  - `inkwell-app/src-tauri/tauri.conf.json` build failure (`_disabled_csp`).
-  - Async thread blocking during PDF rasterization.
-  - 100% cache miss on initial `render_tile` cache query leading to redundant `load_pdf_from_byte_slice` calls.
-- **Untested angles**: Multi-tab synchronization (deferred to Milestone 2).
+  - `state.activeTool` casing mismatch (`'textselect'` vs `'textSelect'`) breaks canvas text selection drag, text popover display, toolbar button active highlight, and `Ctrl+C` text clipboard copying.
+- **Untested angles**:
+  - Evdev hardware stylus thread under native Linux kernel driver (simulated via CDP / browser events).
 
 ## Loaded Skills
-- **Source**: ponytail (builtin/config)
-- **Local copy**: N/A
-- **Core methodology**: Minimal, essential solutions, stress testing over-engineering and real-world failure modes.
+- None
 
 ## Key Decisions Made
-- Issued verdict: `REQUEST_CHANGES` with actionable remediation guidance.
+- Executed comprehensive Playwright stress test suite `test_m1_challenger_stress.py`.
+- Identified and empirically reproduced 4 critical failure modes in text selection pipeline.
+- Rendered verdict: REQUEST_CHANGES.
 
 ## Artifact Index
-- `d:\Own Programs\InkWell\.agents\challenger_m1_2\progress.md` — Progress tracker and liveness heartbeat
-- `d:\Own Programs\InkWell\.agents\challenger_m1_2\handoff.md` — Final challenge report and verdict
+- handoff.md — Final adversarial challenge and test verdict report

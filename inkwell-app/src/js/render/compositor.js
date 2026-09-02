@@ -5,6 +5,7 @@
  * ========================================================================== */
 
 import { state } from '../core/state.js';
+import * as documentOps from '../core/document.js';
 import * as templates from './templates.js';
 import * as tiles from './tiles.js';
 import * as overlays from './overlays.js';
@@ -163,6 +164,10 @@ export function redrawAll() {
   _dctx.clearRect(0, 0, _dryCanvas.width, _dryCanvas.height);
   _dctx.scale(state.dpr, state.dpr);
 
+  if (!state.cur) {
+    clearWet();
+  }
+
   if (!state.inkVisible) return;
 
   for (const pane of visiblePanes()) {
@@ -207,25 +212,33 @@ export function redrawAll() {
             _dctx.textBaseline = 'top';
             const lines = (t.text || '').split('\n');
             const lineHeight = size * 1.35;
-            let maxW = 0;
             lines.forEach((line, idx) => {
-              const lineW = _dctx.measureText(line).width;
-              if (lineW > maxW) maxW = lineW;
               _dctx.fillText(line, t.x, t.y + idx * lineHeight);
             });
-            t.width = Math.max(10, maxW);
-            t.height = Math.max(10, lines.length * lineHeight);
             _dctx.restore();
           }
         }
       }
 
-      // 3. Vector ink strokes
+      // 3. Vector ink strokes with sheet indexing and bbox culling
       if (window.Ink && typeof window.Ink.drawStroke === 'function') {
-        for (const s of state.strokes || []) {
-          if (!s.deleted && s.sheet === pl.sheet) {
-            window.Ink.drawStroke(_dctx, s);
+        const sheetStrokes = documentOps.getStrokesForSheet(pl.sheet);
+        const pageW = pl.width;
+        const pageH = pl.height;
+        for (const s of sheetStrokes) {
+          if (s.deleted) continue;
+          if (s.bbox) {
+            const margin = s.base_width || 4;
+            if (
+              s.bbox[2] < -margin ||
+              s.bbox[0] > pageW + margin ||
+              s.bbox[3] < -margin ||
+              s.bbox[1] > pageH + margin
+            ) {
+              continue; // Bbox lies completely outside visible page bounds
+            }
           }
+          window.Ink.drawStroke(_dctx, s);
         }
       }
 
@@ -233,6 +246,10 @@ export function redrawAll() {
     }
     _dctx.restore();
   }
+
+  // 4. Persistent text selection and search highlights
+  overlays.drawPersistentTextSelectionHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
+  overlays.drawSearchHighlights(_dctx, state, _viewport, state.dpr, visiblePanes(), clipToPane);
 
   // Draw selection / lasso overlay on wet layer
   overlays.drawSelectionOverlay(_wctx, state, _viewport, state.dpr, state.drawingPane || 'left');

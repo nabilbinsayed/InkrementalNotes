@@ -131,20 +131,24 @@ cargo run
 
 ## 🧪 Verification & Test Suite
 
-Inkwell enforces strict PDF standards compliance, zero synthetic delays, and 100% test coverage:
+InkWell maintains a strict verification baseline across the Rust workspace and desktop frontend:
 
 ```powershell
-# 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests (48 tests)
+# 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests (72 tests)
 cd inkwell
 cargo test --workspace -- --test-threads=1
 
-# 2. Run Playwright Synthetic Pen & Input Pipeline Smoke Tests (18/18 checks)
-cd inkwell-m0
-py -3 test_smoke.py
-
-# 3. Check for zero Clippy lints
+# 2. Check for zero Clippy warnings across workspace and Tauri backend
 cd inkwell
 cargo clippy --all-targets
+
+# 3. Run production desktop frontend Playwright smoke suite (20/20 checks)
+cd inkwell-app
+py -3 test_app_smoke.py
+
+# 4. (Optional) Run M0 latency spike prototype smoke tests (prototype only, 18/18 checks)
+cd inkwell-m0
+py -3 test_smoke.py
 ```
 
 ---

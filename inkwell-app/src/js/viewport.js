@@ -242,7 +242,23 @@ class ViewportManager {
       }
     }
     if (this.onChange) this.onChange();
+    if (typeof window !== 'undefined' && typeof window.emitZoomChanged === 'function') {
+      window.emitZoomChanged(this);
+    }
   }
+
+  zoomIn(centerPx = null, pane = 'left') {
+    const cur = (pane === 'right' && this.splitMode) ? this.rightZoom : this.zoom;
+    this.setZoom(Math.min(10.0, cur * 1.25), centerPx, pane);
+  }
+
+  zoomOut(centerPx = null, pane = 'left') {
+    const cur = (pane === 'right' && this.splitMode) ? this.rightZoom : this.zoom;
+    this.setZoom(Math.max(0.15, cur / 1.25), centerPx, pane);
+  }
+
+  get stageW() { return this.stageRect ? this.stageRect.width : 800; }
+  get stageH() { return this.stageRect ? this.stageRect.height : 600; }
 
   centerDocument(pageWidthPt, pageHeightPt, pane = 'left') {
     const docW = this.maxDocWidth || pageWidthPt || 595.0;
@@ -459,11 +475,9 @@ class ViewportManager {
             this.panY = this.clampPanY(targetPanY, 'left');
           }
           if (this.onChange) this.onChange();
-          if (typeof window.scheduleRedrawTiles === 'function') window.scheduleRedrawTiles();
-          if (typeof window.scheduleRedrawAll === 'function') window.scheduleRedrawAll();
-          if (typeof window.redrawAll === 'function') window.redrawAll();
-          if (typeof window.updateZoomUI === 'function') window.updateZoomUI();
-          if (typeof window.updateDocScrollbar === 'function') window.updateDocScrollbar();
+          if (typeof window !== 'undefined' && typeof window.emitZoomChanged === 'function') {
+            window.emitZoomChanged(this);
+          }
           return;
         }
       }

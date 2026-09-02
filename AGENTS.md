@@ -9,7 +9,7 @@ Read this before making changes to the InkWell codebase.
   - `crates/inkwell-pdf/`: Low-level PDF parser (`pdf.rs`), object structure (`pdfobj.rs`), PDFium bindings and normalisation engine (`pdfium.rs`).
 - `inkwell-app/`: Desktop application host (Tauri v2 + frontend UI)
   - `src-tauri/`: Tauri backend IPC commands (`commands.rs`), application state (`state.rs`), and entry point (`main.rs`).
-  - `src/`: Web frontend UI (`index.html`, `styles.css`, `js/app.js`, `js/ink.js`, `js/viewport.js`).
+  - `src/`: Web frontend UI (`index.html`, `styles.css`, `js/core/`, `js/tools/`, `js/render/`, `js/ui/`, `js/workspace/`, `js/main.js`).
 - `inkwell-m0/`: M0 latency spike prototype and Playwright smoke tests (`test_smoke.py`).
 - `plans/`: Implementation plans and execution tracking (`README.md`).
 
@@ -26,6 +26,7 @@ Read this before making changes to the InkWell codebase.
 
 | Scope / Target | Command | Expected Outcome |
 |---|---|---|
-| Playwright Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass |
-| Rust Core Tests | `cd inkwell; cargo test` | exit 0, all tests pass |
+| Desktop App Smoke Test | `cd inkwell-app; py -3 test_app_smoke.py` | exit 0, 20/20 checks pass |
+| Rust Workspace Tests | `cd inkwell; cargo test --workspace -- --test-threads=1` | exit 0, all 72 tests pass |
 | Rust Clippy | `cd inkwell; cargo clippy --all-targets` | zero warnings |
+| M0 Prototype Smoke Test | `cd inkwell-m0; py -3 test_smoke.py` | exit 0, 18/18 checks pass (prototype only) |

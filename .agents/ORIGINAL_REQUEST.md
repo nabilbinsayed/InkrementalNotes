@@ -1,61 +1,41 @@
 # Original User Request
 
-## Initial Request — 2026-08-14T10:29:48Z
+## Initial Request — 2026-09-02T10:45:08Z
 
-InkWell is a high-performance, PDF-native ink annotator desktop application built with Tauri v2, Rust (`inkwell-core`, `inkwell-pdf`), and Vanilla JS/Canvas. The objective is to eliminate all inking latency, optimize rendering throughput for large documents, harden security and IPC boundaries, fix multi-document data durability, and deliver fluid 120Hz/touch/stylus UX.
+<USER_REQUEST>
+Optimize the entire InkWell codebase for maximum performance and responsiveness, fix broken or misbehaving canvas tools (such as text selection and spacebar quick-toggling between the last two active tools), polish UI/UX, and ensure robust build and runtime stability across both Windows and Linux without cross-platform regressions.
 
-Working directory: d:\Own Programs\InkWell
+Working directory: /mnt/Work/Own Programs/InkWell
 Integrity mode: development
-
-Detailed execution plans with exact file:line evidence are authored and indexed in `plans/README.md` and `plans/020-*.md` through `plans/026-*.md`.
 
 ## Requirements
 
-### R1. Zero-Latency Inking & GPU Canvas Optimization
-Eliminate all forced synchronous DOM reflows (`getBoundingClientRect`, `updateStats`) and per-sample allocations (`toFixed`, array joins) from the 120Hz–240Hz digitizer event loop. Retain pre-computed `Path2D` vector ribbons, clear only dirty bounding rectangles on pen-up, and ensure sub-1ms pen-tip-to-present processing time. (See `plans/020-pen-latency-dom-layout-and-path2d-caching.md`).
+### R1. Cross-Platform Build & Runtime Stability
+Ensure seamless compilation, dynamic library linking, and error-free runtime execution across both Linux (Fedora/X11/Wayland) and Windows (MSVC, PDFium DLL resolution, paths, and environment) without regressions on either platform.
 
-### R2. Non-Blocking PDFium Rendering & Memory-Budgeted Tile Pipeline
-Offload CPU-heavy PDFium rasterization to background blocking thread pools (`spawn_blocking`). Prevent redundant PDF byte re-parsing under the global PDFium mutex by caching open document handles in backend sessions. Replace unbudgeted full-page bitmap memory hogs with sub-rectangle tile rasterization and epoch-based request cancellation. (See `plans/021-pdfium-document-handle-and-threadpool-offload.md`).
+### R2. Tool Repair & Interaction Polish
+Fix all canvas tools to ensure complete functional reliability. Specifically:
+- Spacebar interaction: Tapping spacebar toggles immediately between the currently active tool and the previous tool; holding spacebar engages temporary pan mode while pressed.
+- Text selection: Ensure text can be accurately selected, highlighted, and copied from PDF text layers and annotations.
+- Full toolsuite reliability: Verify and fix Pen, Highlighter, Eraser, Lasso, Shapes, Text/Sticky Notes, and Laser Pointer behaviors and state transitions.
 
-### R3. Multi-Document Tab Session Synchronization & Data Durability
-Refactor backend `AppState` from a single global document to a session-managed map keyed by document ID. Ensure all frontend tab switches, undo/redo operations, lasso deletions/transformations, and pasted objects synchronize atomically with Rust `Document` state and Write-Ahead Log (WAL) journals. Ensure synchronous WAL disk sync and proper window close flushing. (See `plans/022-multi-document-tab-backend-sync-and-state-durability.md`).
-
-### R4. Security Hardening, Safe Slicing & Memory Isolation
-Eliminate UTF-8 char-boundary slicing panics in PDF text search. Restrict PDFium DLL loading paths to prevent search-order hijacking. Enforce restrictive Content Security Policy (CSP) in `tauri.conf.json`, sanitize file save paths against directory traversal, and bound all binary varint allocation capacities in `codec.rs` and `pdfobj.rs`. (See `plans/023-security-hardening-utf8-dll-csp-and-path-validation.md`).
-
-### R5. Fluid Motion, Touch/Stylus Ergonomics & Accessibility
-Implement palm rejection (ignoring touch during stylus drawing) and multi-touch pinch-to-zoom gesture tracking in `ViewportManager`. Fix CSS drawer transition suppression (`display: none` conflict), preserve laser pointer decay physics, and compute true 45° normal ribbons for the chisel highlighter. Expand all interactive touch targets to at least 44x44px and ensure complete keyboard accessibility and focus trapping on modals. (See `plans/024-touch-stylus-palm-rejection-pinch-zoom-and-fluid-motion.md` & `plans/026-accessibility-touch-targets-focus-traps-and-ux-indicators.md`).
-
-### R6. Spatial Indexing & Viewport Virtualization
-Replace O(N*M) linear stroke collision checks in eraser, lasso, and hit testing with stroke AABB bounding box pre-filtering. Virtualize the thumbnail drawer DOM to recycle canvas elements on multi-hundred page documents. (See `plans/025-spatial-indexing-eraser-lasso-and-thumbnail-virtualization.md`).
+### R3. Performance & UI/UX Optimization
+Maximize rendering frame rates, eliminate UI lag during inking, panning, and zooming, eliminate swallowed errors or silent failures, and polish interactive touch/mouse ergonomics.
 
 ## Acceptance Criteria
 
-### Performance & Latency
-- [ ] Active drawing (`consume` / `onMove`) incurs 0 forced reflows (`getBoundingClientRect`) and 0 DOM mutations per sample.
-- [ ] Stroke sampling and color string formatting produce 0 heap allocations in the hot path.
-- [ ] `render_tile` runs on a blocking worker thread without blocking Tokio async IPC dispatch.
-- [ ] Multi-tile requests reuse cached `PdfDocument` handles without re-parsing PDF bytes per tile.
-- [ ] Lasso selection and eraser hit-testing operate in O(1) / O(log N) against stroke AABB bounding boxes.
+### Cross-Platform & Build
+- [ ] Rust workspace tests (`cd inkwell && cargo test --workspace -- --test-threads=1`) pass with 0 failures and 0 panics.
+- [ ] Desktop app smoke tests (`cd inkwell-app && py -3 test_app_smoke.py` / `python3 test_app_smoke.py`) pass 100%.
+- [ ] Tauri application compiles cleanly on both Linux (`cargo build`) and Windows (`cargo build` / MSVC) with dynamic PDFium library loading verified.
+- [ ] Rust clippy (`cargo clippy --all-targets`) runs with zero warnings across all crates.
 
-### Durability & Correctness
-- [ ] Switching tabs retains independent document models, WAL journals, and PDF byte buffers on the backend without cross-tab clobbering.
-- [ ] Undo and Redo operations update both frontend canvas and backend Rust `Document` / WAL state.
-- [ ] Lasso transformations and duplicate/paste operations commit updated coordinates to Rust core and save cleanly to PDF.
-- [ ] Blank page insertion during WAL crash recovery restores full page count in `page_infos` and preserves strokes on inserted pages.
-- [ ] All 48 existing workspace unit and integration tests (`cd inkwell; cargo test -- --test-threads=1`) pass without failure.
+### Tool & Interaction Functionality
+- [ ] Tapping Spacebar switches seamlessly between current tool and the previously used tool without getting stuck in pan state; holding Spacebar initiates temporary pan mode until released.
+- [ ] Text selection tool allows drag-selecting text blocks on PDF pages, displays selection bounding highlights, and copies text to clipboard via shortcut or context menu.
+- [ ] All primary canvas tools (Pen, Eraser, Highlighter, Lasso, Shapes, Text, Laser) activate, render, and record undo/redo history cleanly without state desynchronization.
 
-### Security & Hardening
-- [ ] PDF search over non-ASCII / Unicode queries executes without UTF-8 slice boundary panics.
-- [ ] PDFium loader resolves exclusively to executable/system directories without relative search paths.
-- [ ] Malformed or truncated PDF/varint streams cannot trigger out-of-bounds slice panics or unbounded vector allocations.
-- [ ] `save_pdf` strictly validates destination paths against directory traversal.
-- [ ] Tauri `tauri.conf.json` enforces a strict Content Security Policy.
-
-### UI / UX & Ergonomics
-- [ ] Touch events do not clobber active stylus strokes; palm contact is cleanly rejected.
-- [ ] Two-finger pinch-to-zoom smoothly zooms and pans the document without drawing stray marks.
-- [ ] Navigation drawer slides smoothly with CSS cubic-bezier easing without pop-in or canvas flicker.
-- [ ] Chisel highlighter produces consistent-width angled ribbons on horizontal, vertical, and diagonal strokes.
-- [ ] All interactive buttons and touch targets satisfy minimum 44x44px touch guidelines.
-- [ ] Export modal traps keyboard focus, closes on Escape, and provides visual focus rings.
+### Performance & Quality
+- [ ] Smooth, 60+ FPS canvas rendering and low-latency stroke response during intensive drawing, panning, and zooming.
+- [ ] Full compliance with core PDF standards, append-only incremental saves, and WAL durability rules specified in `AGENTS.md`.
+</USER_REQUEST>

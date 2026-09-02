@@ -67,11 +67,31 @@ function handlePdfLoadResult(title, pathStr, res) {
   navigation.goToPage(0, 'left', _viewport, false);
   scrollbar.updateDocScrollbar(_viewport);
   drawers.renderOutline();
+  if (typeof window.emitZoomChanged === 'function' && _viewport) {
+    window.emitZoomChanged(_viewport);
+  }
 
   const totalRecovered = (res.recovered_strokes || 0) + (res.recovered_images || 0) + (res.recovered_texts || 0);
   if (totalRecovered > 0) {
     toast.showToast(`Restored ${totalRecovered} items from crash recovery log`, 'info');
   }
+
+  const warm = () => {
+    const t0 = performance.now();
+    for (const s of state.strokes || []) {
+      if (!s.deleted && !s._cachedPath2D && window.Ink && typeof window.Ink.getPath2D === 'function') {
+        s._cachedPath2D = window.Ink.getPath2D(s);
+        if (typeof window.Ink.computeStrokeBbox === 'function') {
+          s.bbox = window.Ink.computeStrokeBbox(s.points, s.base_width);
+        }
+        if (performance.now() - t0 > 8) {
+          setTimeout(warm, 32);
+          return;
+        }
+      }
+    }
+  };
+  setTimeout(warm, 200);
 }
 
 async function openFileTrigger() {
@@ -95,16 +115,36 @@ async function openFileTrigger() {
   $('pdfFileInput') && $('pdfFileInput').click();
 }
 
+export function friendlyError(e) {
+  if (typeof e === 'string') {
+    if (/CANCELLED/i.test(e)) return null;
+    if (/lock|denied|permission/i.test(e)) return 'File is locked — close it in other apps and retry.';
+    if (/No document open|No PDF/i.test(e)) return 'Open a document first.';
+    return e;
+  }
+  return (e && e.message) ? e.message : 'Unexpected error';
+}
+
 async function createNewWhiteboard() {
   try {
     const res = await ipc.newWhiteboard();
     if (res) {
       handlePdfLoadResult('Untitled Note', null, res);
       toast.showToast('Created new whiteboard PDF', 'success');
+      return;
     }
   } catch (e) {
-    toast.showToast('Failed to create whiteboard: ' + e, 'error');
+    const msg = friendlyError(e);
+    if (msg) toast.showToast('Failed to create whiteboard: ' + msg, 'error');
   }
+  // Immediate client fallback so document layout is active on first render
+  handlePdfLoadResult('Untitled Note', null, {
+    page_infos: [{ page_index: 0, width_pt: 842.0, height_pt: 595.0, template: 'blank' }],
+    loaded_strokes: [],
+    loaded_images: [],
+    loaded_texts: [],
+    outline: [],
+  });
 }
 
 function registerCoreCommands() {
@@ -136,13 +176,14 @@ function registerCoreCommands() {
       try {
         state.isSaving = true;
         toolbar.updateSaveStatusUI('saving');
-        await ipc.savePdf(state.currentDocPath, true, false);
+        await ipc.savePdf(state.currentDocPath, state.strokes, state.images, state.textObjects);
         state.isDirty = false;
         toolbar.updateSaveStatusUI('saved');
         toast.showToast('Document saved successfully', 'success');
       } catch (e) {
         toolbar.updateSaveStatusUI('dirty');
-        toast.showToast('Save failed: ' + e, 'error');
+        const msg = friendlyError(e);
+        if (msg) toast.showToast('Save failed: ' + msg, 'error');
       } finally {
         state.isSaving = false;
       }
@@ -182,6 +223,9 @@ function registerCoreCommands() {
     category: 'Edit',
     shortcut: 'Ctrl+C',
     execute: () => {
+      if ((state.activeTool === 'textSelect' || state.activeTool === 'textselect') && state.selectedTextString && textSelection.copySelectedPdfText()) {
+        return;
+      }
       if (clipboard.copySelection()) {
         toast.showToast('Copied to clipboard', 'info');
       }
@@ -257,8 +301,10 @@ function registerCoreCommands() {
   reg.register({ id: 'tool.lasso', title: 'Lasso Select', category: 'Tools', shortcut: 'V', execute: () => { toolManager.setTool('lasso'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.shapes', title: 'Shapes', category: 'Tools', shortcut: 'U', execute: () => { toolManager.setTool('rect'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.text', title: 'Sticky Note', category: 'Tools', shortcut: 'T', execute: () => { toolManager.setTool('text'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.textSelect', title: 'Text Selection', category: 'Tools', shortcut: 'S', execute: () => { toolManager.setTool('textSelect'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.laser', title: 'Laser Pointer', category: 'Tools', shortcut: 'L', execute: () => { toolManager.setTool('laser'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.pan', title: 'Hand / Pan Canvas', category: 'Tools', shortcut: 'H', execute: () => { toolManager.setTool('pan'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.palette', title: 'Ink Color & Width Palette', category: 'Tools', shortcut: 'C', execute: () => { toolbar.togglePropPopover(); } });
 
   // Navigation commands
   reg.register({
@@ -293,6 +339,11 @@ function registerCoreCommands() {
       if (_viewport) {
         _viewport.splitMode = !_viewport.splitMode;
         $('btnRailSplit') && $('btnRailSplit').classList.toggle('active', _viewport.splitMode);
+        const cluster = $('splitPageNavCluster');
+        if (cluster) {
+          if (_viewport.splitMode) cluster.classList.remove('hidden');
+          else cluster.classList.add('hidden');
+        }
         compositor.scheduleRedrawTiles();
         compositor.redrawAll();
       }
@@ -305,6 +356,45 @@ function registerCoreCommands() {
     category: 'View',
     shortcut: 'F11',
     execute: () => toolbar.toggleFullscreen(),
+  });
+
+  reg.register({
+    id: 'view.zoomIn',
+    title: 'Zoom In',
+    category: 'View',
+    shortcut: ['Ctrl+=', 'Ctrl+Shift+=', 'Ctrl++'],
+    execute: () => {
+      if (_viewport) {
+        _viewport.zoomIn([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
+        if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
+      }
+    },
+  });
+
+  reg.register({
+    id: 'view.zoomOut',
+    title: 'Zoom Out',
+    category: 'View',
+    shortcut: 'Ctrl+-',
+    execute: () => {
+      if (_viewport) {
+        _viewport.zoomOut([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
+        if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
+      }
+    },
+  });
+
+  reg.register({
+    id: 'view.fitPage',
+    title: 'Fit Page to Window',
+    category: 'View',
+    shortcut: 'Ctrl+0',
+    execute: () => {
+      if (_viewport && state.pageInfos && state.pageInfos[0]) {
+        _viewport.fitPage(state.pageInfos[0].width_pt, state.pageInfos[0].height_pt, 'left');
+        if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
+      }
+    },
   });
 
   // Modal commands
@@ -353,7 +443,8 @@ function bindAllUIEvents() {
         const r2 = await ipc.openPdfBytes(file.name, bytes);
         handlePdfLoadResult(file.name, null, r2);
       } catch (err) {
-        toast.showToast('Failed to open PDF: ' + err, 'error');
+        const msg = friendlyError(err);
+        if (msg) toast.showToast('Failed to open PDF: ' + msg, 'error');
       }
     });
   }
@@ -371,7 +462,54 @@ function bindAllUIEvents() {
   $('btnHeaderNextPage') && $('btnHeaderNextPage').addEventListener('click', () => commandsModule.commands.execute('nav.nextPage'));
   $('btnPrev') && $('btnPrev').addEventListener('click', () => commandsModule.commands.execute('nav.prevPage'));
   $('btnNext') && $('btnNext').addEventListener('click', () => commandsModule.commands.execute('nav.nextPage'));
+  $('btnCanvasPrevPage') && $('btnCanvasPrevPage').addEventListener('click', () => commandsModule.commands.execute('nav.prevPage'));
+  $('btnCanvasNextPage') && $('btnCanvasNextPage').addEventListener('click', () => commandsModule.commands.execute('nav.nextPage'));
+  $('btnLeftPanePrev') && $('btnLeftPanePrev').addEventListener('click', () => {
+    const cur = _viewport ? _viewport.getActivePageInView('left') : 0;
+    navigation.goToPage(cur - 1, 'left', _viewport);
+  });
+  $('btnLeftPaneNext') && $('btnLeftPaneNext').addEventListener('click', () => {
+    const cur = _viewport ? _viewport.getActivePageInView('left') : 0;
+    navigation.goToPage(cur + 1, 'left', _viewport);
+  });
+  $('btnRightPanePrev') && $('btnRightPanePrev').addEventListener('click', () => {
+    const cur = _viewport ? _viewport.getActivePageInView('right') : 0;
+    navigation.goToPage(cur - 1, 'right', _viewport);
+  });
+  $('btnRightPaneNext') && $('btnRightPaneNext').addEventListener('click', () => {
+    const cur = _viewport ? _viewport.getActivePageInView('right') : 0;
+    navigation.goToPage(cur + 1, 'right', _viewport);
+  });
   $('btnScrollTop') && $('btnScrollTop').addEventListener('click', () => navigation.goToPage(0, 'left', _viewport));
+
+  // Custom Zoom
+  const applyCustomZoom = () => {
+    const input = $('inputCustomZoom');
+    if (!input || !_viewport) return;
+    const val = parseFloat(input.value);
+    if (!isNaN(val) && val > 0) {
+      const targetZoom = Math.max(0.15, Math.min(10.0, val / 100));
+      const stageRect = compositor.getStageRect() || { width: 800, height: 600 };
+      _viewport.setZoom(targetZoom, [stageRect.width / 2, stageRect.height / 2], 'left');
+      if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
+      toolbar.closeZoomMenu();
+    }
+  };
+  $('btnApplyCustomZoom') && $('btnApplyCustomZoom').addEventListener('click', applyCustomZoom);
+  $('inputCustomZoom') && $('inputCustomZoom').addEventListener('keydown', e => {
+    if (e.key === 'Enter') applyCustomZoom();
+  });
+
+  // Autosave delay setting
+  const selAutosave = $('selectAutosaveDelay');
+  if (selAutosave) {
+    selAutosave.value = String(state.autosaveDelayMs || 0);
+    selAutosave.addEventListener('change', () => {
+      const val = parseInt(selAutosave.value, 10) || 0;
+      state.autosaveDelayMs = val;
+      localStorage.setItem('inkwell_autosave_delay', String(val));
+    });
+  }
 
   // Modals & Popovers
   $('btnCmdPalette') && $('btnCmdPalette').addEventListener('click', () => commandPalette.openCommandPalette());
@@ -384,35 +522,143 @@ function bindAllUIEvents() {
     toolbar.toggleFullscreen();
   });
 
-  // Insert Page form
-  $('btnHeaderAddPage') && $('btnHeaderAddPage').addEventListener('click', () => {
-    $('insertPageModal') && $('insertPageModal').classList.remove('hidden');
+  // Insert Page modal and customization
+  function openInsertPageModal() {
+    const modal = $('insertPageModal');
+    if (!modal) return;
+    const curSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+
+    const posSel = $('insertPositionSelect');
+    if (posSel) {
+      if (posSel.options[0]) posSel.options[0].textContent = `After Current Page (${curSheet + 1})`;
+      if (posSel.options[1]) posSel.options[1].textContent = `Before Current Page (${curSheet + 1})`;
+      posSel.value = 'after_current';
+    }
+
+    const sizeSel = $('insertPaperSizeSelect');
+    if (sizeSel) sizeSel.value = 'match_current';
+    const customRow = $('customDimRow');
+    if (customRow) customRow.classList.add('hidden');
+
+    const portraitRadio = document.querySelector('input[name="pageOrientation"][value="portrait"]');
+    if (portraitRadio) portraitRadio.checked = true;
+
+    const templateSel = $('insertTemplateSelect');
+    if (templateSel) templateSel.value = 'blank';
+
+    modal.classList.remove('hidden');
+  }
+
+  function closeInsertPageModal() {
+    const modal = $('insertPageModal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  $('btnHeaderAddPage') && $('btnHeaderAddPage').addEventListener('click', openInsertPageModal);
+  $('btnAddPage') && $('btnAddPage').addEventListener('click', openInsertPageModal);
+  $('btnInsertBlank') && $('btnInsertBlank').addEventListener('click', openInsertPageModal);
+  $('btnCloseInsertPageModal') && $('btnCloseInsertPageModal').addEventListener('click', closeInsertPageModal);
+  $('btnCancelInsertPage') && $('btnCancelInsertPage').addEventListener('click', closeInsertPageModal);
+  $('insertPageModal') && $('insertPageModal').addEventListener('click', e => {
+    if (e.target === $('insertPageModal')) closeInsertPageModal();
   });
-  $('btnAddPage') && $('btnAddPage').addEventListener('click', () => {
-    $('insertPageModal') && $('insertPageModal').classList.remove('hidden');
-  });
-  $('btnInsertBlank') && $('btnInsertBlank').addEventListener('click', () => {
-    $('insertPageModal') && $('insertPageModal').classList.remove('hidden');
-  });
-  $('btnCloseInsertPageModal') && $('btnCloseInsertPageModal').addEventListener('click', () => {
-    $('insertPageModal') && $('insertPageModal').classList.add('hidden');
-  });
-  $('btnCancelInsertPage') && $('btnCancelInsertPage').addEventListener('click', () => {
-    $('insertPageModal') && $('insertPageModal').classList.add('hidden');
+
+  $('insertPaperSizeSelect') && $('insertPaperSizeSelect').addEventListener('change', e => {
+    const customRow = $('customDimRow');
+    if (customRow) {
+      if (e.target.value === 'custom') {
+        customRow.classList.remove('hidden');
+      } else {
+        customRow.classList.add('hidden');
+      }
+    }
   });
 
   $('insertPageForm') && $('insertPageForm').addEventListener('submit', async e => {
     e.preventDefault();
-    $('insertPageModal') && $('insertPageModal').classList.add('hidden');
+    closeInsertPageModal();
     try {
-      const activeSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
-      await ipc.insertBlankPage(activeSheet, 595.0, 842.0);
-      documentOps.insertPage(activeSheet, { page_index: activeSheet + 1, width_pt: 595.0, height_pt: 842.0 });
+      const curSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+      const totalPages = state.pageInfos ? state.pageInfos.length : 0;
+      const curPageInfo = (state.pageInfos && state.pageInfos[curSheet]) || { width_pt: 595.0, height_pt: 842.0 };
+
+      // 1. Resolve base width and height in points
+      const sizePreset = $('insertPaperSizeSelect') ? $('insertPaperSizeSelect').value : 'match_current';
+      let width = 595.0;
+      let height = 842.0;
+
+      switch (sizePreset) {
+        case 'match_current':
+          width = curPageInfo.width_pt || 595.0;
+          height = curPageInfo.height_pt || 842.0;
+          break;
+        case 'a4':
+          width = 595.0; height = 842.0;
+          break;
+        case 'letter':
+          width = 612.0; height = 792.0;
+          break;
+        case 'a3':
+          width = 842.0; height = 1191.0;
+          break;
+        case 'legal':
+          width = 612.0; height = 1008.0;
+          break;
+        case 'widescreen':
+          width = 960.0; height = 540.0;
+          break;
+        case 'custom': {
+          const wInput = parseFloat($('customPageWidth') ? $('customPageWidth').value : '595');
+          const hInput = parseFloat($('customPageHeight') ? $('customPageHeight').value : '842');
+          width = !isNaN(wInput) && wInput >= 72 ? wInput : 595.0;
+          height = !isNaN(hInput) && hInput >= 72 ? hInput : 842.0;
+          break;
+        }
+      }
+
+      // 2. Resolve orientation
+      const orientation = document.querySelector('input[name="pageOrientation"]:checked')?.value || 'portrait';
+      if (orientation === 'landscape' && width < height) {
+        const tmp = width; width = height; height = tmp;
+      } else if (orientation === 'portrait' && width > height) {
+        const tmp = width; width = height; height = tmp;
+      }
+
+      // 3. Resolve template
+      const template = $('insertTemplateSelect') ? $('insertTemplateSelect').value : 'blank';
+
+      // 4. Resolve target insertion index
+      const posChoice = $('insertPositionSelect') ? $('insertPositionSelect').value : 'after_current';
+      let targetIndex = curSheet + 1;
+      if (posChoice === 'before_current') {
+        targetIndex = curSheet;
+      } else if (posChoice === 'document_start') {
+        targetIndex = 0;
+      } else if (posChoice === 'document_end') {
+        targetIndex = totalPages;
+      }
+
+      // 5. Execute insertion
+      await ipc.insertBlankPage(targetIndex, width, height);
+      const newPageInfo = {
+        page_index: targetIndex,
+        width_pt: width,
+        height_pt: height,
+        template,
+      };
+      documentOps.insertPageAtIndex(targetIndex, newPageInfo);
       if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
-      navigation.goToPage(activeSheet + 1, 'left', _viewport);
-      toast.showToast('Inserted blank page', 'success');
+      navigation.goToPage(targetIndex, 'left', _viewport);
+      navigation.renderThumbnails(_viewport);
+      compositor.redrawAll();
+
+      const templateName = $('insertTemplateSelect') && $('insertTemplateSelect').selectedOptions[0]
+        ? $('insertTemplateSelect').selectedOptions[0].textContent
+        : template;
+      toast.showToast(`Inserted page ${targetIndex + 1} (${templateName})`, 'success');
     } catch (err) {
-      toast.showToast('Failed to insert page: ' + err, 'error');
+      const msg = friendlyError(err);
+      if (msg) toast.showToast('Failed to insert page: ' + msg, 'error');
     }
   });
 
@@ -450,6 +696,51 @@ function bindAllUIEvents() {
   });
   $('btnDocInfoClearInk') && $('btnDocInfoClearInk').addEventListener('click', clearInk);
 
+  // Text selection popover actions
+  $('btnTextCopy') && $('btnTextCopy').addEventListener('click', () => {
+    if (textSelection.copySelectedPdfText()) {
+      toast.showToast('Copied text to clipboard', 'info');
+    }
+    const pop = $('textSelectionPopover');
+    if (pop) pop.classList.add('hidden');
+  });
+
+  $('btnTextSearch') && $('btnTextSearch').addEventListener('click', () => {
+    const text = state.selectedTextString || (state.textSelection && state.textSelection.text);
+    if (text) {
+      drawers.openSearchWithQuery(text.trim());
+    }
+    const pop = $('textSelectionPopover');
+    if (pop) pop.classList.add('hidden');
+  });
+
+  $('btnHeaderFind') && $('btnHeaderFind').addEventListener('click', () => {
+    drawers.openDrawer('search');
+    const input = $('drawerSearchInput');
+    if (input) input.focus();
+  });
+
+  // Sticky note inline text editor
+  const textarea = $('inlineTextarea');
+  if (textarea) {
+    textarea.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        textTool.cancelEditing();
+      }
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        textTool.commitEditing();
+      }
+    });
+    textarea.addEventListener('blur', () => {
+      textTool.commitEditing();
+    });
+  }
+  $('btnTextDeleteBox') && $('btnTextDeleteBox').addEventListener('click', () => {
+    textTool.cancelEditing();
+  });
+
   // Drag and Drop PDF
   window.addEventListener('dragover', e => e.preventDefault());
   window.addEventListener('drop', async e => {
@@ -467,10 +758,38 @@ function bindAllUIEvents() {
       const r2 = await ipc.openPdfBytes(file.name, Array.from(new Uint8Array(buf)));
       handlePdfLoadResult(file.name, null, r2);
     } catch (err) {
-      toast.showToast('Failed to open dropped PDF: ' + err, 'error');
+      const msg = friendlyError(err);
+      if (msg) toast.showToast('Failed to open dropped PDF: ' + msg, 'error');
     }
   });
 }
+
+function updateTextSelectionPopover() {
+  const pop = $('textSelectionPopover');
+  if (!pop) return;
+  const sel = state.textSelection;
+  if (sel && sel.text && sel.text.trim() && (state.activeTool === 'textSelect' || state.activeTool === 'textselect')) {
+    const anchorRect = sel.rects && sel.rects.length > 0 ? sel.rects[sel.rects.length - 1].rect : null;
+    if (anchorRect && _viewport) {
+      const pl = _viewport.getPageLayout(sel.sheet);
+      const [sx, sy] = _viewport.worldToScreen(pl.x + anchorRect[2], pl.y + anchorRect[3], 'left');
+      pop.style.left = Math.max(10, Math.min(sx, window.innerWidth - 220)) + 'px';
+      pop.style.top = (sy + 12) + 'px';
+    }
+    pop.classList.remove('hidden');
+  } else {
+    pop.classList.add('hidden');
+  }
+}
+
+let _panState = {
+  isDown: false,
+  startClientX: 0,
+  startClientY: 0,
+  startPanX: 0,
+  startPanY: 0,
+  pane: 'left',
+};
 
 function attachPointerHandlers(wetCanvas) {
   if (!wetCanvas) return;
@@ -482,13 +801,42 @@ function attachPointerHandlers(wetCanvas) {
     return { ptWorld: wx, pane, screenPt: [e.clientX - r.left, e.clientY - r.top] };
   }
 
+  wetCanvas.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    contextMenu.showContextMenu(e.clientX, e.clientY);
+  });
+
+  const stage = $('stage');
+  if (stage) {
+    stage.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      contextMenu.showContextMenu(e.clientX, e.clientY);
+    });
+  }
+
   wetCanvas.addEventListener('pointerdown', e => {
     compositor.updateStageRect();
+    toolbar.hidePropPopover();
     try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
     const { ptWorld, pane, screenPt } = localXY(e);
     const tool = state.activeTool || 'pen';
 
-    if (tool === 'pen' || tool === 'highlighter') {
+    if (tool !== 'textSelect' && tool !== 'textselect') {
+      const pop = $('textSelectionPopover');
+      if (pop) pop.classList.add('hidden');
+    }
+
+    if (tool === 'pan') {
+      const isRight = (pane === 'right' && _viewport && _viewport.splitMode);
+      _panState = {
+        isDown: true,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startPanX: _viewport ? (isRight ? _viewport.rightPanX : _viewport.panX) : 0,
+        startPanY: _viewport ? (isRight ? _viewport.rightPanY : _viewport.panY) : 0,
+        pane,
+      };
+    } else if (tool === 'pen' || tool === 'highlighter') {
       penTool.onPenDown(e, ptWorld, pane, _viewport);
     } else if (tool === 'eraser') {
       eraserTool.onEraserDown(e, ptWorld, pane, _viewport);
@@ -500,6 +848,49 @@ function attachPointerHandlers(wetCanvas) {
       laserTool.onLaserDown(e, ptWorld, pane, _viewport);
     } else if (tool === 'text') {
       textTool.onTextToolClick(e, ptWorld, pane, _viewport);
+    } else if (tool === 'textSelect' || tool === 'textselect') {
+      const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
+      const now = Date.now();
+      const cachedData = state.pageTextData && state.pageTextData[pageCoord.sheet];
+
+      const performHit = (data) => {
+        if (!data) return;
+        const hit = textSelection.findCharAndOffsetAtPageCoord(pageCoord.sheet, pageCoord.px, pageCoord.py);
+        if (hit) {
+          const prevAnchor = state.textSelectAnchor;
+          const isDouble = prevAnchor && (now - prevAnchor.time < 300) && (prevAnchor.sheet === pageCoord.sheet);
+          const isTriple = prevAnchor && (now - prevAnchor.time < 600) && prevAnchor.clickCount === 2;
+          if (isTriple) {
+            state.textSelection = textSelection.expandSelectionToLine(pageCoord.sheet, hit.charIndex);
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 0 };
+            state.isSelectingText = false;
+          } else if (isDouble) {
+            state.textSelection = textSelection.expandSelectionToWord(pageCoord.sheet, hit.charIndex);
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 2 };
+            state.isSelectingText = false;
+          } else {
+            textSelection.clearTextSelection();
+            state.isSelectingText = true;
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 1 };
+            state.textSelection = textSelection.computeTextSelectionRanges(pageCoord.sheet, hit.charIndex, hit.charIndex);
+          }
+          if (state.textSelection) state.selectedTextString = state.textSelection.text;
+          compositor.redrawAll();
+          updateTextSelectionPopover();
+        }
+      };
+
+      if (cachedData) {
+        performHit(cachedData);
+      } else {
+        state.textSelectPending = { sheet: pageCoord.sheet, px: pageCoord.px, py: pageCoord.py, now, isDown: true };
+        textSelection.ensurePageTextData(pageCoord.sheet).then(data => {
+          if (state.textSelectPending && state.textSelectPending.isDown) {
+            performHit(data);
+          }
+          state.textSelectPending = null;
+        });
+      }
     }
   });
 
@@ -513,16 +904,45 @@ function attachPointerHandlers(wetCanvas) {
       const subEvt = events[i];
       const { ptWorld, pane, screenPt } = localXY(subEvt);
 
-      if (tool === 'pen' || tool === 'highlighter') {
+      if (tool === 'pan') {
+        if (_panState.isDown && _viewport) {
+          const dx = subEvt.clientX - _panState.startClientX;
+          const dy = subEvt.clientY - _panState.startClientY;
+          _viewport.setPan(_panState.startPanX + dx, _panState.startPanY + dy, _panState.pane);
+          if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+            state.spaceDidPan = true;
+          }
+        }
+      } else if (tool === 'pen' || tool === 'highlighter') {
         penTool.onPenMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'eraser') {
         eraserTool.onEraserMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'lasso') {
-        lassoTool.onLassoMove(subEvt, ptWorld, screenPt, pane, _viewport);
+        if (state.transformMode || state.lassoPath) {
+          lassoTool.onLassoMove(subEvt, ptWorld, screenPt, pane, _viewport);
+        } else {
+          const handle = overlays.getSelectionHandleAt(screenPt[0], screenPt[1], state, _viewport, pane);
+          wetCanvas.style.cursor = handle ? handle.cursor : 'crosshair';
+        }
       } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
         shapesTool.onShapeMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'laser') {
         laserTool.onLaserMove(subEvt, ptWorld, pane, _viewport);
+      } else if (tool === 'textSelect' || tool === 'textselect') {
+        if (state.isSelectingText && state.textSelectAnchor) {
+          const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
+          const anchor = state.textSelectAnchor;
+          const hit = textSelection.findCharAndOffsetAtPageCoord(anchor.sheet, pageCoord.px, pageCoord.py);
+          if (hit) {
+            state.textSelection = textSelection.computeTextSelectionRanges(anchor.sheet, anchor.charIndex, hit.charIndex);
+            if (state.textSelection) state.selectedTextString = state.textSelection.text;
+            compositor.redrawAll();
+          }
+        } else if (state.textSelectPending && state.textSelectPending.isDown) {
+          const pageCoord = _viewport.worldToPage(ptWorld[0], ptWorld[1]);
+          state.textSelectPending.px = pageCoord.px;
+          state.textSelectPending.py = pageCoord.py;
+        }
       }
     }
   });
@@ -530,7 +950,9 @@ function attachPointerHandlers(wetCanvas) {
   wetCanvas.addEventListener('pointerup', e => {
     const tool = state.activeTool || 'pen';
 
-    if (tool === 'pen' || tool === 'highlighter') {
+    if (tool === 'pan') {
+      _panState.isDown = false;
+    } else if (tool === 'pen' || tool === 'highlighter') {
       penTool.onPenUp(e, _viewport);
     } else if (tool === 'eraser') {
       eraserTool.onEraserUp();
@@ -540,13 +962,25 @@ function attachPointerHandlers(wetCanvas) {
       shapesTool.onShapeUp(e, _viewport);
     } else if (tool === 'laser') {
       laserTool.onLaserUp();
+    } else if (tool === 'textSelect' || tool === 'textselect') {
+      if (state.textSelectPending) {
+        state.textSelectPending.isDown = false;
+      }
+      state.isSelectingText = false;
+      if (state.textSelection && state.textSelection.text && state.textSelection.text.trim()) {
+        state.selectedTextString = state.textSelection.text;
+      }
+      compositor.redrawAll();
+      updateTextSelectionPopover();
     }
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
 
   wetCanvas.addEventListener('pointercancel', e => {
+    _panState.isDown = false;
     penTool.onPenCancel();
     eraserTool.onEraserUp();
+    lassoTool.onLassoUp(e, _viewport);
     laserTool.clearLaser();
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
@@ -554,10 +988,32 @@ function attachPointerHandlers(wetCanvas) {
 
 function attachKeyboardShortcuts() {
   window.addEventListener('keydown', e => {
-    const isTyping = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+    const isTyping = document.activeElement && (
+      document.activeElement.tagName === 'INPUT' ||
+      document.activeElement.tagName === 'TEXTAREA' ||
+      document.activeElement.isContentEditable
+    );
     if (isTyping) return;
 
-    // Spring-loaded modifier keys (e.g. holding 'e' or space)
+    if (e.key === 'Escape') {
+      const insertModal = $('insertPageModal');
+      if (insertModal && !insertModal.classList.contains('hidden')) {
+        insertModal.classList.add('hidden');
+        return;
+      }
+      const propPop = $('propPopover');
+      if (propPop && !propPop.classList.contains('hidden')) {
+        toolbar.hidePropPopover();
+        return;
+      }
+    }
+
+    if (e.key === ' ' || e.code === 'Space') {
+      toolManager.handleSpaceKeyDown(e);
+      return;
+    }
+
+    // Spring-loaded modifier keys (e.g. holding 'e')
     toolManager.handleSpringKeyDown(e.key);
 
     const cmd = commandsModule.commands.findMatchingShortcut(e);
@@ -568,7 +1024,15 @@ function attachKeyboardShortcuts() {
   });
 
   window.addEventListener('keyup', e => {
+    if (e.key === ' ' || e.code === 'Space') {
+      toolManager.handleSpaceKeyUp(e);
+      return;
+    }
     toolManager.handleSpringKeyUp(e.key);
+  });
+
+  window.addEventListener('blur', () => {
+    toolManager.cancelSpringKeys();
   });
 }
 
@@ -605,13 +1069,24 @@ window.addEventListener('DOMContentLoaded', async () => {
   bindAllUIEvents();
   attachPointerHandlers(wetCanvas);
   attachKeyboardShortcuts();
+  toolManager.initStylusIntegration();
 
   window.addEventListener('resize', () => compositor.resize());
   window.addEventListener('scroll', () => compositor.updateStageRect(), { passive: true });
 
   // Passive state listeners
   on('toast', payload => toast.showToast(payload.message, payload.type));
-  on('toolChanged', () => toolbar.updateToolbarUI());
+  on('toolChanged', payload => {
+    toolbar.updateToolbarUI();
+    if (payload && (payload.tool === 'textSelect' || payload.tool === 'textselect' || payload.tool === 'highlighter')) {
+      textSelection.preloadNearbyPageText(state.leftSheet, _viewport);
+    }
+    if (payload && payload.tool !== 'lasso') {
+      state.lassoPath = null;
+      compositor.clearWet();
+      compositor.redrawAll();
+    }
+  });
   on('historyChanged', () => toolbar.updateUndoRedoUI());
   on('pageChanged', payload => {
     const pageDisplay = $('pageNumDisplay');
@@ -620,12 +1095,77 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     scrollbar.updateDocScrollbar(_viewport);
   });
+  on('zoomChanged', payload => {
+    const el = $('zoomLevelDisplay');
+    if (el && payload && typeof payload.zoom === 'number') {
+      el.textContent = Math.round(payload.zoom * 100) + '%';
+    }
+  });
+  on('selectionChanged', updateTextSelectionPopover);
+  on('documentChanged', () => {
+    toolbar.updateSaveStatusUI('dirty');
+    if (state.autosaveDelayMs > 0 && state.currentDocPath && !state.isSaving) {
+      if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
+      state.autosaveTimer = setTimeout(() => {
+        if (state.isDirty && !state.isSaving) {
+          commandsModule.commands.execute('file.save');
+        }
+      }, state.autosaveDelayMs);
+    }
+  });
+
+  // Quit with unsaved changes Tauri event listener
+  if (typeof window !== 'undefined' && window.__TAURI__?.event?.listen) {
+    window.__TAURI__.event.listen('app-save-and-close', async () => {
+      try {
+        await commandsModule.commands.execute('file.save');
+        if (window.forceCloseWindow) await window.forceCloseWindow();
+        else window.close();
+      } catch (e) {
+        const msg = friendlyError(e);
+        if (msg) toast.showToast('Could not save on exit: ' + msg, 'error');
+      }
+    });
+  }
 
   // Global compatibility bridges
+  window.state = state;
+  window.toolManager = toolManager;
+  window.documentOps = documentOps;
+  window.compositor = compositor;
+  window.overlays = overlays;
+  window.lassoTool = lassoTool;
+  window.toolbar = toolbar;
+  window.getViewport = getViewport;
   window.undo = () => commandsModule.commands.execute('edit.undo');
   window.redo = () => commandsModule.commands.execute('edit.redo');
   window.showToast = toast.showToast;
+  window.forceCloseWindow = () => ipc.invokeTauri('force_close_window');
   window.scheduleRedrawTiles = compositor.scheduleRedrawTiles;
   window.scheduleRedrawAll = compositor.scheduleRedrawAll;
   window.redrawAll = compositor.redrawAll;
+  window.emitZoomChanged = (vp) => {
+    if (!vp) return;
+    const z = vp.splitMode && vp.activePane === 'right' ? vp.rightZoom : vp.zoom;
+    emit('zoomChanged', { zoom: z });
+  };
+
+  window.addEventListener('pointerdown', e => {
+    const ctxM = $('canvasContextMenu');
+    if (ctxM && !ctxM.contains(e.target) && !ctxM.classList.contains('hidden')) {
+      contextMenu.hideContextMenu();
+    }
+    const propPop = $('propPopover');
+    const dockBtn = $('btnDockAddPreset');
+    if (propPop && !propPop.classList.contains('hidden')) {
+      if (!propPop.contains(e.target) && (!dockBtn || !dockBtn.contains(e.target))) {
+        toolbar.hidePropPopover();
+      }
+    }
+  }, true);
+
+  // Auto-initialize a blank note on startup if no document is loaded
+  if (!state.currentDocPath && (!state.pageInfos || state.pageInfos.length === 0)) {
+    createNewWhiteboard();
+  }
 });

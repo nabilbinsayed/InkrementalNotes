@@ -1,146 +1,164 @@
-# Milestone 1 Challenge & Adversarial Verification Report
+# Milestone 1 Adversarial Challenge Report
 
-**Verdict**: `REQUEST_CHANGES`
+**Challenger**: challenger_m1_2 (critic / specialist)  
+**Target Milestone**: Milestone 1: Frontend Tool Repair & Interaction Polish  
+**Working Directory**: `/mnt/Work/Own Programs/InkWell/.agents/challenger_m1_2`  
+**Date**: 2026-09-02  
+**Verdict**: **REQUEST_CHANGES**  
 
 ---
 
 ## 1. Observation
 
-### Observation 1: Broken Build / Clippy in `inkwell-app/src-tauri` due to `_disabled_csp` in `tauri.conf.json`
-- **Location**: `inkwell-app/src-tauri/tauri.conf.json:23-25`
-  ```json
-  "security": {
-    "_disabled_csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'ipc:';"
-  }
-  ```
-- **Command & Output**: Running `cd inkwell-app/src-tauri; cargo clippy --all-targets` exits with code 1:
-  ```
-  error: failed to run custom build command for `inkwell-app v0.1.0`
-  ...
-  unknown field `_disabled_csp`, expected one of `csp`, `dev-csp`, `devCsp`, `freeze-prototype`, `freezePrototype`, `dangerous-disable-asset-csp-modification`, `dangerousDisableAssetCspModification`, `asset-protocol`, `assetProtocol`, `pattern`, `capabilities`, `headers`
-  found an unknown configuration field.
-  ```
-- **Impact**: The Tauri build script fails on strict schema validation; furthermore, CSP security hardening is disabled.
+Adversarial stress-testing of Milestone 1 components was executed via Playwright in `test_m1_challenger_stress.py`. Out of 36 rigorous checks, 32 passed and 4 critical failure modes were empirically confirmed in the PDF text selection and clipboard copying pipeline:
 
----
+1. **Tool Casing Desynchronization in `tool-manager.js`**:
+   - `inkwell-app/src/js/tools/tool-manager.js` (lines 4–6, 94, 107):
+     ```javascript
+     export const TOOL_NAMES = [
+       'pen', 'highlighter', 'eraser', 'lasso', 'ruler', 'rect', 'ellipse', 'laser', 'text', 'textSelect', 'pan'
+     ];
+     ...
+     export function setTool(toolName, { isUserSwitch = true } = {}) {
+       if (!toolName) return;
+       const tool = toolName.toLowerCase();
+       ...
+       state.activeTool = tool;
+     ```
+     `setTool('textSelect')` applies `.toLowerCase()`, forcing `state.activeTool` to lowercase `'textselect'`.
 
-### Observation 2: CPU-Bound PDFium Rasterization Is NOT Offloaded to `spawn_blocking`
-- **Location**: `inkwell-app/src-tauri/src/commands.rs:373-434`
-  ```rust
-  let (bgra_bytes, bitmap_w, bitmap_h) = {
-      ...
-      let pdfium_guard = state.pdfium.lock().map_err(|e| format!("Lock error: {e}"))?;
-      let pdfium = pdfium_guard.as_ref().ok_or_else(...)?;
+2. **Inactive Text Selection Dock Button in `toolbar.js`**:
+   - `inkwell-app/src/js/ui/toolbar.js` (lines 43, 52–53):
+     ```javascript
+     const toolButtonMap = {
+       ...
+       text: $('btnDockText'),
+       textSelect: $('btnDockTextSelect'),
+     };
+     ...
+     const activeBtn = toolButtonMap[activeTool];
+     if (activeBtn) activeBtn.classList.add('active');
+     ```
+     When `activeTool` is `'textselect'`, `toolButtonMap['textselect']` evaluates to `undefined`. The Text Selection dock button `#btnDockTextSelect` never receives the `.active` class when clicked.
 
-      let doc = pdfium
-          .load_pdf_from_byte_slice(&arc_bytes, None)
-          .map_err(|e| format!("PDFium load error: {e:?}"))?;
+3. **Complete Failure of Canvas Text Drag Selection in `main.js`**:
+   - `inkwell-app/src/js/main.js` (lines 713, 715, 742, 817, 851):
+     ```javascript
+     const tool = state.activeTool || 'pen';
+     if (tool !== 'textSelect') {
+       const pop = $('textSelectionPopover');
+       if (pop) pop.classList.add('hidden');
+     }
+     ...
+     } else if (tool === 'textSelect') {
+       // Hit-testing and selection anchor setup
+     }
+     ...
+     } else if (tool === 'textSelect') {
+       // Drag selection range computation
+     }
+     ...
+     } else if (tool === 'textSelect') {
+       // Selection commit and popover display
+     }
+     ```
+     Because `tool` is `'textselect'`, all strict equality checks `tool === 'textSelect'` evaluate to `false`. Pointerdown, pointermove, and pointerup handlers on `#wet` canvas bypass text selection entirely. Canvas mouse dragging fails to select text (`state.textSelection` remains `null`).
 
-      let page_obj = doc.pages().get(page as i32)...;
-      ...
-      let bitmap = page_obj.render_with_config(&config)...;
-      ...
-  };
+4. **Permanent Invisibility of Text Selection Popover**:
+   - `inkwell-app/src/js/main.js` (lines 662–663):
+     ```javascript
+     const sel = state.textSelection;
+     if (sel && sel.text && sel.text.trim() && (state.activeTool === 'textSelect')) {
+       ...
+       pop.classList.remove('hidden');
+     } else {
+       pop.classList.add('hidden');
+     }
+     ```
+     Because `state.activeTool` is `'textselect'`, `state.activeTool === 'textSelect'` evaluates to `false`. `#textSelectionPopover` remains permanently hidden in production runtime.
 
-  // Offload the pixel cropping and alpha swizzling to a worker thread
-  tauri::async_runtime::spawn_blocking(move || {
-      ...
-  })
-  ```
-- **Analysis**: PDF byte slice parsing (`load_pdf_from_byte_slice`), page object acquisition (`doc.pages().get`), and CPU-intensive PDF rasterization (`page_obj.render_with_config`) execute synchronously on Tokio's async worker thread before `spawn_blocking` is reached. Only the pixel cropping loop (lines 434–479) is offloaded.
-- **Impact**: Heavy PDF rendering stalls Tokio's async reactor, violating Plan 021 Step 1 and SCOPE.md Item 6.
+5. **Clipboard Text Copy (`Ctrl+C`) Failure**:
+   - `inkwell-app/src/js/main.js` (lines 225–232):
+     ```javascript
+     execute: () => {
+       if (state.activeTool === 'textSelect' && state.selectedTextString && textSelection.copySelectedPdfText()) {
+         return;
+       }
+       if (clipboard.copySelection()) {
+         toast.showToast('Copied to clipboard', 'info');
+       }
+     }
+     ```
+     Because `state.activeTool === 'textSelect'` evaluates to `false`, pressing `Ctrl+C` with selected text falls through to `clipboard.copySelection()` (which is intended for vector stroke lasso selections) and fails to copy the selected PDF text to the clipboard.
 
----
-
-### Observation 3: Initial Page Bitmap Cache Check Always Misses Due to Page-Width vs Tile-Width Comparison
-- **Location**: `inkwell-app/src-tauri/src/commands.rs:375-380`
-  ```rust
-  if let Ok(cache_guard) = state.page_bitmap_cache.lock() {
-      // If target dimensions can be queried from cached entries for this page:
-      if let Some(entry) = cache_guard.entries.iter().find(|e| e.page == page && (e.target_w as f64 - rw * scale).abs() < 2.0) {
-          cache_hit = Some((entry.bgra_bytes.clone(), entry.bitmap_w, entry.bitmap_h));
-      }
-  }
-  ```
-- **Analysis**:
-  - `entry.target_w` is the full rendered page width in pixels: `(page_w * scale)` (e.g. 1224 px for a 612 pt page at scale 2.0).
-  - `rw * scale` is the tile rectangle width in pixels: `(rect[2] - rect[0]) * scale` (e.g. 512 px for a 256 pt tile).
-  - `(1224.0 - 512.0).abs() = 712.0 < 2.0` is `false`.
-  - For any sub-rectangle tile where `rw < page_w`, `cache_hit` is **always** `None`.
-  - Because `cache_hit` is `None`, `render_tile` enters the `else` branch (lines 385–399) on **every tile request**, locks `state.pdfium`, and calls `pdfium.load_pdf_from_byte_slice(&arc_bytes, None)` and `doc.pages().get(...)` before reaching `cache_guard.get(...)` at line 403.
-- **Impact**: The multi-megabyte PDF is re-parsed from raw byte slices under the global PDFium mutex on every single tile, defeating the core objective of Plan 021 Step 2.
-
----
-
-### Observation 4: Frontend Tile Error Handling in `app.js` Verified Robust
-- **Location**: `inkwell-app/src/js/app.js:210-252, 350-432`
-- **Behavior**:
-  - `fetchTile` catch handler sets `tileCache.set(key, null);` and does not call `scheduleRedrawTiles()`.
-  - `drawTileData` guards `if (!data) return;`.
-  - `redrawTilesForPage` checks `if (tileCache.has(trKey)) { await drawTileData(tileCache.get(trKey), ...); return; }`.
-  - Future redraw ticks find the key in `tileCache`, skip re-fetching, and draw nothing without triggering recursive IPC requests or loop storms.
-- **Status**: PASSED.
-
----
-
-### Observation 5: Security Hardening Features Verified
-- **Unicode Search Slicing** (`commands.rs:806-825`): Character array window indexing prevents UTF-8 byte boundary panics. Verified via `test_unicode_search_window_slicing_safety`.
-- **DLL Search Restriction** (`inkwell-pdf/src/lib.rs:18-60`): `current_dir()` search removed; bounded to executable parent dir, `PDFIUM_DLL_DIR`, and system bindings.
-- **Bounds Checking & Varint Guards** (`codec.rs:89-105`, `pdfobj.rs:94-194`): Allocations bounded to `.min(1024)`; varint shifts guarded against `shift >= 64`.
-- **Path Validation** (`commands.rs:563-579`): `..` components rejected, `.pdf` extension enforced, parent directory verified.
-- **Status**: PASSED.
+6. **Worker Test False-Positive Root Cause**:
+   - In `test_m1_interactive.py`, tests manually called `computeTextSelectionRanges` and manually assigned `window.state.textSelection = sel;`, completely bypassing the canvas pointer event routing, toolbar active styling, text popover visibility, and `Ctrl+C` keyboard shortcut handlers.
 
 ---
 
 ## 2. Logic Chain
 
-1. **Clippy Failure**: `tauri.conf.json` contains `_disabled_csp` which is not a recognized field in the Tauri v2 schema. `tauri-build` fails during compilation. Changing `_disabled_csp` to `csp` fixes the schema validation and enables the intended CSP security header.
-2. **Async Thread Blocking**: Tokio async threads are designed for non-blocking I/O. Executing PDFium rasterization synchronously inside `render_tile` starves Tokio workers of CPU time during high tile load. Offloading both PDFium document loading/rendering and pixel cropping into `tauri::async_runtime::spawn_blocking` frees Tokio threads.
-3. **Cache Miss Storm**: `entry.target_w` represents the full page pixel width, while `rw * scale` represents the tile pixel width. Because tile width is smaller than page width, `(entry.target_w as f64 - rw * scale).abs() < 2.0` always fails. Storing `page_w` / `page_h` on `CachedPageBitmap` or matching `entry.target_w == ((page_w * scale).round() as i32)` allows direct cache hits without invoking `load_pdf_from_byte_slice`.
+1. `tool-manager.js:94` transforms tool inputs with `toolName.toLowerCase()`, storing `'textselect'` into `state.activeTool`.
+2. Downstream consumer modules (`main.js` and `toolbar.js`) explicitly use camelCase `'textSelect'` in `tool === 'textSelect'` and `toolButtonMap['textSelect']`.
+3. In JavaScript, `'textselect' === 'textSelect'` evaluates to `false`.
+4. Therefore, when a user activates the Text Selection tool:
+   - The UI button never highlights as active (`toolbar.js:52`).
+   - Pointer events on the canvas do not initiate text hit-testing (`main.js:742`).
+   - Dragging across text does not highlight characters (`main.js:817`).
+   - Releasing the pointer does not display the popover menu (`main.js:663`).
+   - Pressing `Ctrl+C` does not invoke `textSelection.copySelectedPdfText()` (`main.js:226`).
+5. Spacebar toggling, spring keys, radial menu actions/clamping, and command palette boundary navigation (ArrowUp wrap on index 0, ArrowDown wrap on last index, query filtering, and empty search robustness) are functioning properly.
 
 ---
 
 ## 3. Caveats
 
-- Rust core unit/integration tests in `inkwell/` pass (51/51), but `inkwell-app/src-tauri` clippy fails due to the `tauri.conf.json` field name.
-- Playwright smoke test (`inkwell-m0/test_smoke.py`) tests the M0 prototype frontend and passes 18/18, but does not test Tauri backend IPC commands.
+1. **Rust Core Tests**: All 72 tests across `inkwell-core`, `inkwell-pdf`, `inkwell-wal`, `tiles`, and `spatial` pass with 0 failures and 0 warnings. The defect is strictly in the frontend JS tool casing contract.
+2. **Spacebar State Machine**: Spacebar quick-toggling (<250ms), hold-to-pan (>=250ms), window blur recovery (`cancelSpringKeys`), and spring key 'e' temporary toggling are robust and verified across rapid 10-tap oscillations.
+3. **Radial Menu & Command Palette**: Radial menu 6-slot circular dial, edge clamping, Escape dismissal, outside click dismissal, command palette wrap-around boundaries, and query filtering are fully verified and robust.
 
 ---
 
 ## 4. Conclusion
 
-**Verdict: `REQUEST_CHANGES`**
+**Verdict: REQUEST_CHANGES**
 
-The following three remediation items must be resolved by the worker agent:
+Milestone 1 cannot be approved in its current state due to the blocking `textSelect` casing bug that disables PDF text selection, the selection popover, and text clipboard copying.
 
-1. **Fix `tauri.conf.json`**: Rename `"_disabled_csp"` to `"csp"` so `cd inkwell-app/src-tauri; cargo clippy --all-targets` succeeds and CSP is enforced.
-2. **Offload PDFium Rasterization inside `spawn_blocking`**: Move `load_pdf_from_byte_slice` and `render_with_config` into `tauri::async_runtime::spawn_blocking` so CPU rendering does not block the async executor thread.
-3. **Fix `PageBitmapLruCache` Dimension Match in `commands.rs`**: Store `page_w_pt` and `page_h_pt` in `CachedPageBitmap` (or compute `target_w = ((entry.page_w_pt * scale).round() as i32)` from the cache entry) so sub-tiles hit the cache directly without calling `load_pdf_from_byte_slice` on every tile.
+### Required Actions for Worker:
+1. **Unify Tool Identifier Casing**:
+   - In `inkwell-app/src/js/tools/tool-manager.js`:
+     Preserve the canonical tool identifier (e.g., using `const canonical = TOOL_NAMES.find(t => t.toLowerCase() === toolName.toLowerCase()) || tool.toLowerCase();` and setting `state.activeTool = canonical;`) OR ensure all consumers across `main.js`, `toolbar.js`, and `state.js` consistently use `'textselect'`.
+   - In `inkwell-app/src/js/ui/toolbar.js`:
+     Ensure `toolButtonMap` matches the exact string casing of `state.activeTool` (or add `'textselect': $('btnDockTextSelect')`).
+   - In `inkwell-app/src/js/main.js`:
+     Ensure lines 226, 663, 715, 742, 817, 851, and 953 match the tool string casing.
+2. **Upgrade Test Suite**:
+   - Update `test_m1_interactive.py` to drive real mouse drag pointer events on `#wet` canvas, verify `#btnDockTextSelect.active`, verify `#textSelectionPopover` unhides, and verify `Ctrl+C` copies text to clipboard.
 
 ---
 
 ## 5. Verification Method
 
-To verify the fixes:
+To independently verify the defects and validate subsequent fixes:
 
-1. **Tauri Clippy**:
-   ```powershell
-   cd inkwell-app/src-tauri; cargo clippy --all-targets
+1. **Run the Challenger Stress Test Harness**:
+   ```bash
+   cd "/mnt/Work/Own Programs/InkWell/inkwell-app"
+   uv run --with playwright python3 test_m1_challenger_stress.py
    ```
-   *Expected*: Exit code 0 with zero warnings/errors.
+   *Current Outcome*: Fails 4 checks (2.1, 2.2, 2.3, 2.4).  
+   *Expected Outcome after Fix*: All 36 checks pass (36/36).
 
-2. **Rust Core Tests**:
-   ```powershell
-   cd inkwell; cargo test -- --test-threads=1
+2. **Run the Standard Smoke and Interactive Suites**:
+   ```bash
+   cd "/mnt/Work/Own Programs/InkWell/inkwell-app"
+   uv run --with playwright python3 test_app_smoke.py
+   uv run --with playwright python3 test_m1_interactive.py
    ```
-   *Expected*: Exit code 0, 51/51 tests pass.
 
-3. **Smoke Tests**:
-   ```powershell
-   cd inkwell-m0; py -3 test_smoke.py
+3. **Run Rust Workspace Tests**:
+   ```bash
+   cd "/mnt/Work/Own Programs/InkWell/inkwell"
+   cargo test --workspace -- --test-threads=1
    ```
-   *Expected*: Exit code 0, 18/18 checks pass.
-
-4. **Cache & Threadpool Invalidation Condition**:
-   - `render_tile` must not call `load_pdf_from_byte_slice` when a valid page bitmap for `page` and `scale` already exists in `page_bitmap_cache`.
-   - `render_with_config` must execute inside `spawn_blocking`.

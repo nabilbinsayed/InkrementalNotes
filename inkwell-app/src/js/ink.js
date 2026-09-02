@@ -135,19 +135,24 @@ class Stroke {
   }
 
   get points() { return this._pts; }
+  set points(val) { this._pts = val; }
   get last() { return this._pts[this._pts.length - 1]; }
 }
 
 function addDotToPath(path, p) {
-  path.moveTo(p.x + p.w / 2, p.y);
-  path.arc(p.x, p.y, p.w / 2, 0, Math.PI * 2);
+  const w = (p && p.w !== undefined && !isNaN(p.w)) ? p.w : ((p && p.p !== undefined) ? p.p * 2.0 : 2.0);
+  const r = Math.max(0.1, w / 2);
+  path.moveTo(p.x + r, p.y);
+  path.arc(p.x, p.y, r, 0, Math.PI * 2);
 }
 
 function addSegmentToPath(path, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy) || 1e-6;
   const nx = -dy / L, ny = dx / L;
-  const ha = a.w / 2, hb = b.w / 2;
+  const wa = (a && a.w !== undefined && !isNaN(a.w)) ? a.w : ((a && a.p !== undefined) ? a.p * 2.0 : 2.0);
+  const wb = (b && b.w !== undefined && !isNaN(b.w)) ? b.w : ((b && b.p !== undefined) ? b.p * 2.0 : 2.0);
+  const ha = Math.max(0.05, wa / 2), hb = Math.max(0.05, wb / 2);
   path.moveTo(a.x + nx * ha, a.y + ny * ha);
   path.lineTo(b.x + nx * hb, b.y + ny * hb);
   path.lineTo(b.x - nx * hb, b.y - ny * hb);
@@ -230,10 +235,12 @@ function getPath2D(stroke) {
 
   for (let i = 1; i < points.length - 1; i++) {
     const start = pPrev;
+    const prevW = (points[i].w !== undefined && !isNaN(points[i].w)) ? points[i].w : 2.0;
+    const nextW = (points[i + 1].w !== undefined && !isNaN(points[i + 1].w)) ? points[i + 1].w : 2.0;
     const end = {
       x: (points[i].x + points[i + 1].x) / 2,
       y: (points[i].y + points[i + 1].y) / 2,
-      w: (points[i].w + points[i + 1].w) / 2,
+      w: (prevW + nextW) / 2,
     };
     const steps = 3;
     for (let s = 1; s <= steps; s++) {
@@ -257,7 +264,9 @@ function drawSegment(ctx, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const L = Math.hypot(dx, dy) || 1e-6;
   const nx = -dy / L, ny = dx / L;
-  const ha = a.w / 2, hb = b.w / 2;
+  const wa = (a && a.w !== undefined && !isNaN(a.w)) ? a.w : ((a && a.p !== undefined) ? a.p * 2.0 : 2.0);
+  const wb = (b && b.w !== undefined && !isNaN(b.w)) ? b.w : ((b && b.p !== undefined) ? b.p * 2.0 : 2.0);
+  const ha = Math.max(0.05, wa / 2), hb = Math.max(0.05, wb / 2);
   ctx.beginPath();
   ctx.moveTo(a.x + nx * ha, a.y + ny * ha);
   ctx.lineTo(b.x + nx * hb, b.y + ny * hb);
@@ -271,8 +280,10 @@ function drawSegment(ctx, a, b) {
 }
 
 function drawDot(ctx, p) {
+  const w = (p && p.w !== undefined && !isNaN(p.w)) ? p.w : ((p && p.p !== undefined) ? p.p * 2.0 : 2.0);
+  const r = Math.max(0.1, w / 2);
   ctx.beginPath();
-  ctx.arc(p.x, p.y, p.w / 2, 0, Math.PI * 2);
+  ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -281,10 +292,12 @@ function openPolylineToCubics(p) {
   if (n < 2) return [];
   if (n === 2) {
     const a = p[0], b = p[1];
-    const dx = b.x - a.x, dy = b.y - a.y, dw = b.w - a.w;
+    const wa = (a && a.w !== undefined) ? a.w : 2.0;
+    const wb = (b && b.w !== undefined) ? b.w : 2.0;
+    const dx = b.x - a.x, dy = b.y - a.y, dw = wb - wa;
     return [[
-      { x: a.x + dx / 3, y: a.y + dy / 3, w: a.w + dw / 3 },
-      { x: a.x + 2 * dx / 3, y: a.y + 2 * dy / 3, w: a.w + 2 * dw / 3 },
+      { x: a.x + dx / 3, y: a.y + dy / 3, w: wa + dw / 3 },
+      { x: a.x + 2 * dx / 3, y: a.y + 2 * dy / 3, w: wa + 2 * dw / 3 },
       b
     ]];
   }
@@ -298,41 +311,50 @@ function openPolylineToCubics(p) {
   const m = new Array(n);
   for (let i = 1; i < n - 1; i++) {
     const dt = t[i + 1] - t[i - 1];
+    const prevW = p[i - 1].w !== undefined ? p[i - 1].w : 2.0;
+    const nextW = p[i + 1].w !== undefined ? p[i + 1].w : 2.0;
     m[i] = {
       x: (p[i + 1].x - p[i - 1].x) / dt,
       y: (p[i + 1].y - p[i - 1].y) / dt,
-      w: (p[i + 1].w - p[i - 1].w) / dt,
+      w: (nextW - prevW) / dt,
     };
   }
 
   const dt0 = t[1] - t[0], dt1 = (n > 2) ? (t[2] - t[1]) : dt0;
+  const p0w = p[0].w !== undefined ? p[0].w : 2.0;
+  const p1w = p[1].w !== undefined ? p[1].w : 2.0;
+  const p2w = (p[2] && p[2].w !== undefined) ? p[2].w : p1w;
   m[0] = {
     x: ((2 * dt0 + dt1) * (p[1].x - p[0].x) / dt0 - dt0 * ((p[2] ? p[2].x : p[1].x) - p[1].x) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
     y: ((2 * dt0 + dt1) * (p[1].y - p[0].y) / dt0 - dt0 * ((p[2] ? p[2].y : p[1].y) - p[1].y) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
-    w: ((2 * dt0 + dt1) * (p[1].w - p[0].w) / dt0 - dt0 * ((p[2] ? p[2].w : p[1].w) - p[1].w) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
+    w: ((2 * dt0 + dt1) * (p1w - p0w) / dt0 - dt0 * (p2w - p1w) / Math.max(1e-4, dt1)) / Math.max(1e-4, dt0 + dt1),
   };
 
   const dtn2 = t[n - 1] - t[n - 2];
   const dtn3 = (n > 2) ? (t[n - 2] - t[n - 3]) : dtn2;
   const pPrev2 = p[n - 3] || p[n - 2];
+  const pn1w = p[n - 1].w !== undefined ? p[n - 1].w : 2.0;
+  const pn2w = p[n - 2].w !== undefined ? p[n - 2].w : 2.0;
+  const prev2w = (pPrev2 && pPrev2.w !== undefined) ? pPrev2.w : pn2w;
   m[n - 1] = {
     x: ((2 * dtn2 + dtn3) * (p[n - 1].x - p[n - 2].x) / dtn2 - dtn2 * (p[n - 2].x - pPrev2.x) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
     y: ((2 * dtn2 + dtn3) * (p[n - 1].y - p[n - 2].y) / dtn2 - dtn2 * (p[n - 2].y - pPrev2.y) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
-    w: ((2 * dtn2 + dtn3) * (p[n - 1].w - p[n - 2].w) / dtn2 - dtn2 * (p[n - 2].w - pPrev2.w) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
+    w: ((2 * dtn2 + dtn3) * (pn1w - pn2w) / dtn2 - dtn2 * (pn2w - prev2w) / Math.max(1e-4, dtn3)) / Math.max(1e-4, dtn2 + dtn3),
   };
 
   const cubics = [];
   for (let i = 0; i < n - 1; i++) {
     const dt = t[i + 1] - t[i];
+    const pw = p[i].w !== undefined ? p[i].w : 2.0;
     const c1 = {
       x: p[i].x + (m[i].x * dt) / 3,
       y: p[i].y + (m[i].y * dt) / 3,
-      w: p[i].w + (m[i].w * dt) / 3,
+      w: pw + (m[i].w * dt) / 3,
     };
     const c2 = {
       x: p[i + 1].x - (m[i + 1].x * dt) / 3,
       y: p[i + 1].y - (m[i + 1].y * dt) / 3,
-      w: p[i + 1].w - (m[i + 1].w * dt) / 3,
+      w: (p[i + 1].w !== undefined ? p[i + 1].w : 2.0) - (m[i + 1].w * dt) / 3,
     };
     cubics.push([c1, c2, p[i + 1]]);
   }
@@ -342,10 +364,14 @@ function openPolylineToCubics(p) {
 function cubicAt(p0, cubic, t) {
   const u = 1 - t;
   const a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  const w0 = p0.w !== undefined ? p0.w : 2.0;
+  const w1 = (cubic[0] && cubic[0].w !== undefined) ? cubic[0].w : 2.0;
+  const w2 = (cubic[1] && cubic[1].w !== undefined) ? cubic[1].w : 2.0;
+  const w3 = (cubic[2] && cubic[2].w !== undefined) ? cubic[2].w : 2.0;
   return {
     x: a * p0.x + b * cubic[0].x + c * cubic[1].x + d * cubic[2].x,
     y: a * p0.y + b * cubic[0].y + c * cubic[1].y + d * cubic[2].y,
-    w: a * p0.w + b * cubic[0].w + c * cubic[1].w + d * cubic[2].w,
+    w: a * w0 + b * w1 + c * w2 + d * w3,
   };
 }
 
@@ -355,15 +381,17 @@ function chaikinSubdivide(points, iterations = 2) {
     const next = [out[0]];
     for (let i = 0; i < out.length - 1; i++) {
       const a = out[i], b = out[i + 1];
+      const wa = (a && a.w !== undefined && !isNaN(a.w)) ? a.w : ((a && a.p !== undefined) ? a.p * 2.0 : 2.0);
+      const wb = (b && b.w !== undefined && !isNaN(b.w)) ? b.w : ((b && b.p !== undefined) ? b.p * 2.0 : 2.0);
       next.push({
         x: 0.75 * a.x + 0.25 * b.x,
         y: 0.75 * a.y + 0.25 * b.y,
-        w: 0.75 * a.w + 0.25 * b.w,
+        w: 0.75 * wa + 0.25 * wb,
       });
       next.push({
         x: 0.25 * a.x + 0.75 * b.x,
         y: 0.25 * a.y + 0.75 * b.y,
-        w: 0.25 * a.w + 0.75 * b.w,
+        w: 0.25 * wa + 0.75 * wb,
       });
     }
     next.push(out[out.length - 1]);
@@ -374,10 +402,13 @@ function chaikinSubdivide(points, iterations = 2) {
 
 function quadraticAt(p0, control, p1, t) {
   const u = 1 - t;
+  const w0 = (p0 && p0.w !== undefined && !isNaN(p0.w)) ? p0.w : 2.0;
+  const wc = (control && control.w !== undefined && !isNaN(control.w)) ? control.w : 2.0;
+  const w1 = (p1 && p1.w !== undefined && !isNaN(p1.w)) ? p1.w : 2.0;
   return {
     x: u * u * p0.x + 2 * u * t * control.x + t * t * p1.x,
     y: u * u * p0.y + 2 * u * t * control.y + t * t * p1.y,
-    w: u * u * p0.w + 2 * u * t * control.w + t * t * p1.w,
+    w: u * u * w0 + 2 * u * t * wc + t * t * w1,
   };
 }
 

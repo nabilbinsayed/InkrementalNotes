@@ -40,6 +40,8 @@ export function updateToolbarUI() {
     ellipse: $('btnDockShapes'),
     ruler: $('btnDockShapes'),
     text: $('btnDockText'),
+    textSelect: $('btnDockTextSelect'),
+    textselect: $('btnDockTextSelect'),
   };
 
   document.querySelectorAll('.dock-btn').forEach(btn => {
@@ -178,6 +180,11 @@ function bindDockButtons() {
     updateToolbarUI();
   });
 
+  $('btnDockTextSelect') && $('btnDockTextSelect').addEventListener('click', () => {
+    toolManager.setTool('textSelect');
+    updateToolbarUI();
+  });
+
   $('btnDockAddPreset') && $('btnDockAddPreset').addEventListener('click', () => togglePropPopover());
   $('btnDockStylusOptions') && $('btnDockStylusOptions').addEventListener('click', () => openSettingsModal());
 
@@ -193,9 +200,16 @@ function bindDockButtons() {
   $('btnRuler') && $('btnRuler').addEventListener('click', () => { toolManager.setTool('ruler'); updateToolbarUI(); });
 }
 
-function togglePropPopover() {
+export function togglePropPopover() {
   const pop = $('propPopover');
   if (pop) pop.classList.toggle('hidden');
+}
+
+export function hidePropPopover() {
+  const pop = $('propPopover');
+  if (pop && !pop.classList.contains('hidden')) {
+    pop.classList.add('hidden');
+  }
 }
 
 function bindPropertyControls() {
@@ -206,6 +220,8 @@ function bindPropertyControls() {
       if (colorStr) {
         const rgb = hexToRgb(colorStr);
         if (rgb) toolManager.setColor(rgb);
+        document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+        chip.classList.add('active');
       }
     });
   });
@@ -244,12 +260,14 @@ function bindPropertyControls() {
         toolManager.setWidth(w);
         if ($('popoverWidthSlider')) $('popoverWidthSlider').value = String(w);
         if ($('popoverWidthVal')) $('popoverWidthVal').textContent = w + ' pt';
+        document.querySelectorAll('.btn-width-preset').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
       }
     });
   });
 
   $('btnClosePropPopover') && $('btnClosePropPopover').addEventListener('click', () => {
-    $('propPopover') && $('propPopover').classList.add('hidden');
+    hidePropPopover();
   });
 }
 
@@ -265,14 +283,14 @@ function bindUndoRedoButtons() {
 function bindZoomControls() {
   $('btnZoomIn') && $('btnZoomIn').addEventListener('click', () => {
     if (_viewport) {
-      _viewport.zoomIn();
+      _viewport.zoomIn([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
       emit('zoomChanged', { zoom: _viewport.zoom });
     }
   });
 
   $('btnZoomOut') && $('btnZoomOut').addEventListener('click', () => {
     if (_viewport) {
-      _viewport.zoomOut();
+      _viewport.zoomOut([_viewport.stageW / 2, _viewport.stageH / 2], 'left');
       emit('zoomChanged', { zoom: _viewport.zoom });
     }
   });
@@ -309,15 +327,20 @@ function bindZoomControls() {
           _viewport.setZoom(factor, [_viewport.stageW / 2, _viewport.stageH / 2], 'left');
         }
       }
-      $('zoomMenuPopover') && $('zoomMenuPopover').classList.add('hidden');
+      closeZoomMenu();
     });
   });
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest('#zoomMenuPopover') && !e.target.closest('#btnZoomMenu')) {
-      $('zoomMenuPopover') && $('zoomMenuPopover').classList.add('hidden');
+      closeZoomMenu();
     }
   });
+}
+
+export function closeZoomMenu() {
+  const el = $('zoomMenuPopover');
+  if (el) el.classList.add('hidden');
 }
 
 export function toggleFullscreen() {

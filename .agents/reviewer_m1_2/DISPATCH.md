@@ -1,24 +1,20 @@
-## 2026-08-14T13:26:22Z
-You are reviewer_m1_2, reviewing Milestone 1: Security Hardening & PDFium Worker Pipeline for InkWell.
-Working directory: d:\Own Programs\InkWell\.agents\reviewer_m1_2\
+## 2026-09-02T11:06:30Z
+Objective:
+Independently review the work product of worker_m1 for Milestone 1: Frontend Tool Repair & Interaction Polish.
 
 Instructions:
-1. Read:
-   - `d:\Own Programs\InkWell\ORIGINAL_REQUEST.md`
-   - `d:\Own Programs\InkWell\AGENTS.md`
-   - `d:\Own Programs\InkWell\plans\021-pdfium-document-handle-and-threadpool-offload.md`
-   - `d:\Own Programs\InkWell\plans\023-security-hardening-utf8-dll-csp-and-path-validation.md`
-   - `d:\Own Programs\InkWell\.agents\sub_orch_m1_gen2\SCOPE.md`
-   - `d:\Own Programs\InkWell\.agents\worker_m1_1\handoff.md`
-
-2. Review the implementations in:
-   - `inkwell/crates/inkwell-pdf/src/lib.rs` (PDFium DLL search path restriction, removal of `current_dir()`)
-   - `inkwell/crates/inkwell-core/src/codec.rs` (varint 64-bit shift overflow check, bounded initial capacity allocation)
-   - `inkwell/crates/inkwell-core/src/pdfobj.rs` (`skip_value` end offset clamping to `d.len()`, escape char bounds checks)
-   - `inkwell/crates/inkwell-core/tests/integration.rs` and `inkwell/crates/inkwell-pdf/tests/integration.rs` (new security unit tests)
-
-3. Run verification commands:
-   - `cd inkwell; cargo test -- --test-threads=1`
-   - `cd inkwell; cargo clippy --all-targets`
-
-4. Produce a structured review in `d:\Own Programs\InkWell\.agents\reviewer_m1_2\handoff.md` with explicit verdict: `APPROVE` or `REQUEST_CHANGES`. Send a completion message when done.
+1. Read /mnt/Work/Own Programs/InkWell/.agents/ORIGINAL_REQUEST.md, /mnt/Work/Own Programs/InkWell/AGENTS.md, /mnt/Work/Own Programs/InkWell/PROJECT.md, and /mnt/Work/Own Programs/InkWell/.agents/worker_m1/handoff.md.
+2. Review the code changes in:
+   - `inkwell-app/src/js/core/state.js`
+   - `inkwell-app/src/js/tools/tool-manager.js`
+   - `inkwell-app/src/js/workspace/text-selection.js`
+   - `inkwell-app/src/js/ui/radial-menu.js`
+   - `inkwell-app/src/js/ui/command-palette.js`
+   - `inkwell-app/src/js/main.js`
+3. Execute and verify:
+   - `cd /mnt/Work/Own Programs/InkWell/inkwell-app && uv run --with playwright python3 test_app_smoke.py`
+   - `cd /mnt/Work/Own Programs/InkWell/inkwell-app && uv run --with playwright python3 test_m1_interactive.py`
+   - `cd /mnt/Work/Own Programs/InkWell/inkwell && cargo test --workspace -- --test-threads=1`
+4. Check interface compliance with PROJECT.md, error handling, absence of swallowed errors or unhandled promises, and clean state restoration.
+5. Render a clear binary verdict: APPROVE or REQUEST_CHANGES.
+6. Write your report to `/mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2/handoff.md` following standard format. Send a completion message with your verdict to the parent.

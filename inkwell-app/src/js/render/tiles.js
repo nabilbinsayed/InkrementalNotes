@@ -103,6 +103,8 @@ export async function fetchTile(page, rect, px) {
       let rgbaData = raw;
       if (rgbaData instanceof ArrayBuffer) {
         rgbaData = new Uint8ClampedArray(rgbaData);
+      } else if (ArrayBuffer.isView(rgbaData)) {
+        rgbaData = new Uint8ClampedArray(rgbaData.buffer, rgbaData.byteOffset, rgbaData.byteLength);
       } else if (Array.isArray(rgbaData)) {
         rgbaData = Uint8ClampedArray.from(rgbaData);
       } else if (rgbaData && typeof rgbaData === 'object' && rgbaData.buffer) {

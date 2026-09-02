@@ -22,6 +22,7 @@ use std::thread;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Copy, Clone, Default, Debug)]
 struct InputEvent {
@@ -32,6 +33,7 @@ struct InputEvent {
     value: i32,
 }
 
+#[cfg(target_os = "linux")]
 #[repr(C)]
 #[derive(Copy, Clone, Default, Debug)]
 struct InputAbsInfo {
@@ -57,9 +59,13 @@ extern "C" {
 }
 
 // IOCTL command definitions
+#[cfg(target_os = "linux")]
 const EVIOCGNAME_256: std::os::raw::c_ulong = 0x80ff4506;
+#[cfg(target_os = "linux")]
 const EVIOCGBIT_EV_ABS: std::os::raw::c_ulong = 0x80084523; // EV_ABS = 3
+#[cfg(target_os = "linux")]
 const EVIOCGABS_PRESSURE: std::os::raw::c_ulong = 0x80184558; // 0x40 + ABS_PRESSURE (0x18) = 0x58
+#[cfg(target_os = "linux")]
 const EVIOCSCLOCKID: std::os::raw::c_ulong = 0x400445a0; // Set evdev clock domain
 
 #[allow(dead_code)]
@@ -73,17 +79,27 @@ const CLOCK_MONOTONIC: i32 = 1;
 const O_NONBLOCK: i32 = 0x800; // Linux O_NONBLOCK (octal 04000)
 
 // Event constants
+#[cfg(target_os = "linux")]
 const EV_SYN: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const EV_KEY: u16 = 0x01;
+#[cfg(target_os = "linux")]
 const EV_ABS: u16 = 0x03;
 
+#[cfg(target_os = "linux")]
 const SYN_REPORT: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const ABS_X: u16 = 0x00;
+#[cfg(target_os = "linux")]
 const ABS_Y: u16 = 0x01;
+#[cfg(target_os = "linux")]
 const ABS_PRESSURE: u16 = 0x18;
 
+#[cfg(target_os = "linux")]
 const BTN_TOOL_PEN: u16 = 0x140;
+#[cfg(target_os = "linux")]
 const BTN_TOOL_RUBBER: u16 = 0x141;
+#[cfg(target_os = "linux")]
 const BTN_TOUCH: u16 = 0x14a;
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +114,7 @@ pub struct NativeStylusSample {
     pub device_path: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum StylusMessage {

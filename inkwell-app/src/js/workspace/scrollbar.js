@@ -60,9 +60,6 @@ export function initDocScrollbar(viewport) {
 
     const panDelta = (dy / scrollableTrack) * (docTotalH - stageH);
     viewport.setPan(viewport.panX, _startPanY - panDelta, 'left');
-    compositor.scheduleRedrawTiles();
-    compositor.redrawAll();
-    updateDocScrollbar(viewport);
 
     const curPage = viewport.getActivePageInView('left');
     if (tooltip) {

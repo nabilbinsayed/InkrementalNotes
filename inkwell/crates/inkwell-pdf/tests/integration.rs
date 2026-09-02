@@ -277,6 +277,41 @@ fn test_color_fidelity() {
     assert_eq!((tile_i.data[0], tile_i.data[1], tile_i.data[2]), (15, 23, 42), "Image color must be (15, 23, 42)");
 }
 
+#[test]
+fn saved_sticky_note_survives_round_trip() {
+    let _lock = PDFIUM_TEST_LOCK.lock().unwrap();
+    let pdfium = match init_pdfium() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    let fixture_path = get_fixture_path();
+    let original_bytes = std::fs::read(&fixture_path).expect("read fixture");
+
+    let note = inkwell_pdf::TextAnnotation {
+        sheet: 0,
+        x: 100.0,
+        y: 100.0,
+        text: "InkWell note sticky text".to_string(),
+        font_size: 16.0,
+        color: "#141724".to_string(),
+        bold: false,
+        italic: false,
+    };
+
+    let embedded_bytes = inkwell_pdf::embed_texts_in_pdf(&pdfium, &original_bytes, &[note])
+        .expect("embed_texts_in_pdf should succeed");
+
+    assert!(PdfFile::open(embedded_bytes.clone()).is_ok(), "Embedded PDF must open cleanly in PdfFile");
+
+    let doc = pdfium.load_pdf_from_byte_slice(&embedded_bytes, None).expect("load embedded PDF");
+    let extracted = extract_text(&doc, 0).expect("extract text from page 0");
+    assert!(
+        extracted.contains("InkWell note sticky text"),
+        "Extracted text should contain the embedded sticky note text"
+    );
+}
+
 
 
 

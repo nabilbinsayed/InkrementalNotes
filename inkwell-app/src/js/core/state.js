@@ -46,10 +46,19 @@ export function emit(event, data) {
   }
 }
 
+let _lastToastAt = 0;
+export function warnDurability(message) {
+  const now = Date.now();
+  if (now - _lastToastAt < 4000) return; // dedupe storms
+  _lastToastAt = now;
+  emit('toast', { message, type: 'error' });
+}
+
 export const state = {
   // Tool Modes & Properties
-  activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler', 'rect', 'ellipse', 'laser', 'text'
+  activeTool: 'pen',     // 'pen', 'highlighter', 'eraser', 'lasso', 'ruler', 'rect', 'ellipse', 'laser', 'text', 'textSelect', 'pan'
   prevTool: 'pen',        // restored after spring-loaded key release
+  lastActiveTool: 'eraser', // previously used tool for Space quick-toggle
   lastUsedTool: 'rect',
   springKey: null,        // which key is spring-held right now
   isSpacePressed: false,  // whether spacebar is currently held down
@@ -71,6 +80,7 @@ export const state = {
   textObjects: [],       // [{id, sheet, x, y, text, fontSize, color, bold, italic, width, height, deleted}, ...]
   pageTextSpans: {},     // { [sheet: number]: [{ text, rect: [x0, y0, x1, y1], page_index }] }
   pageTextData: {},      // { [sheet: number]: { page_index, text, lines[], chars[], spans[] } }
+  pageTextLoading: {},   // { [sheet: number]: Promise<any> }
   pageInfos: [],         // [{page_index, width_pt, height_pt, template?}, ...]
   outline: [],           // hierarchical outline [{ title, page_index, children }]
   bookmarks: [],         // [{ id, page, label, createdAt }]
@@ -83,6 +93,7 @@ export const state = {
   selectedTextString: '',
   textSelection: null,   // { sheet, startCharIdx, endCharIdx, text, rects[], chars[] }
   textSelectAnchor: null, // { sheet, charIndex, time, clickCount }
+  textSelectPending: null, // { sheet, px, py, currentPx, currentPy, time, clickCount, isDown }
   isSelectingText: false,
   activeTextEditorObj: null,
 

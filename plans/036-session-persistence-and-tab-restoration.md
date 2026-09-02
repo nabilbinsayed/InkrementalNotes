@@ -1,4 +1,6 @@
-# Plan 036: Session State Persistence & Multi-Tab Crash Restoration
+# Plan 036: Complete Session Persistence & Seamless Tab Restoration
+
+> *Historical note: The former Python tier e2e test gate (272 checks) was retired in 2026-08 by Plan 045 because it tested a Python mock rather than the product.*
 
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the

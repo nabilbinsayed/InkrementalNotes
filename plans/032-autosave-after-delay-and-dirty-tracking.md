@@ -1,5 +1,7 @@
 # Plan 032: Configurable Autosave After Delay & Non-Blocking Dirty State Engine
 
+> *Historical note: The former Python tier e2e test gate (272 checks) was retired in 2026-08 by Plan 045 because it tested a Python mock rather than the product.*
+
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the
 > next step. If anything in the "STOP conditions" section occurs, stop and

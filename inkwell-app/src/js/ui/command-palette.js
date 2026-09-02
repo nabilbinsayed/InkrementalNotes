@@ -29,19 +29,70 @@ export function closeCommandPalette() {
 export function initCommandPalette() {
   const modal = $('cmdPaletteModal');
   const input = $('cmdPaletteInput');
-  const backdrop = $('cmdPaletteBackdrop');
+  const backdrop = $('cmdPaletteBackdrop') || modal;
   if (!modal || !input) return;
 
-  if (backdrop) backdrop.addEventListener('click', closeCommandPalette);
+  if (backdrop) {
+    backdrop.addEventListener('click', e => {
+      if (e.target === modal || e.target === backdrop) {
+        closeCommandPalette();
+      }
+    });
+  }
 
   input.addEventListener('input', e => {
     _selectedIndex = 0;
     filterCommands(e.target.value);
   });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (_currentMatches.length > 0) {
+        _selectedIndex = (_selectedIndex + 1) % _currentMatches.length;
+        updateSelectionHighlight();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (_currentMatches.length > 0) {
+        _selectedIndex = (_selectedIndex - 1 + _currentMatches.length) % _currentMatches.length;
+        updateSelectionHighlight();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (_currentMatches.length > 0 && _currentMatches[_selectedIndex]) {
+        const cmd = _currentMatches[_selectedIndex];
+        closeCommandPalette();
+        commandsModule.commands.execute(cmd.id);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      closeCommandPalette();
+    }
+  });
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+      closeCommandPalette();
+    }
+  });
+}
+
+function updateSelectionHighlight() {
+  const list = $('cmdPaletteResults') || $('cmdPaletteList');
+  if (!list) return;
+  const items = list.querySelectorAll('.cmd-item');
+  items.forEach((item, idx) => {
+    const isSelected = idx === _selectedIndex;
+    item.classList.toggle('selected', isSelected);
+    if (isSelected) {
+      item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  });
 }
 
 export function filterCommands(query) {
-  const list = $('cmdPaletteList');
+  const list = $('cmdPaletteResults') || $('cmdPaletteList');
   if (!list) return;
 
   const allCmds = commandsModule.commands.getAll();

@@ -1,4 +1,6 @@
-# Plan 033: Universal WAL Durability & Comprehensive Crash Recovery for All Mutations
+# Plan 033: Universal WAL Journal Durability & Crash Recovery Engine
+
+> *Historical note: The former Python tier e2e test gate (272 checks) was retired in 2026-08 by Plan 045 because it tested a Python mock rather than the product.*
 
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the

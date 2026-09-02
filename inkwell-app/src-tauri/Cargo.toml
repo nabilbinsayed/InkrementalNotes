@@ -9,7 +9,7 @@ description = "Inkwell application host — pressure-sensitive PDF annotation ap
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["devtools"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -17,4 +17,27 @@ log = "0.4"
 pdfium-render = "0.9"
 inkwell-core = { path = "../../inkwell/crates/inkwell-core" }
 inkwell-pdf = { path = "../../inkwell/crates/inkwell-pdf" }
+
+[profile.dev]
+opt-level = 1
+debug = 0
+strip = true
+
+# Keep dependency codegen cheap: this machine has a tight commit-charge
+# ceiling, and opt-level=3 made rustc abort (BEX64 / 0xc0000409) on the
+# large crates (windows-rs, image, tauri-utils). Runtime hot paths live in
+# pdfium.dll, so dep opt-level barely affects app performance here.
+[profile.dev.package."*"]
+opt-level = 1
+debug = 0
+
+[profile.release]
+opt-level = 1
+debug = false
+strip = true
+lto = false
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = 2
 

@@ -182,9 +182,7 @@ pub fn extract_page_text_data(document: &PdfDocument<'_>, page_index: u32) -> Pa
     for (idx, rc) in raw_chars.iter().enumerate() {
         let is_newline = rc.c == "\n" || rc.c == "\r";
 
-        let starts_new_line = if current_line.is_empty() {
-            false
-        } else if is_newline {
+        let starts_new_line = if current_line.is_empty() || is_newline {
             false
         } else if rc.has_bounds && line_min_y.is_finite() {
             let line_h = (line_max_y - line_min_y).max(6.0);

@@ -1,65 +1,64 @@
-# BRIEFING — 2026-08-14T13:30:15Z
+# BRIEFING — 2026-09-02T11:10:15Z
 
 ## Mission
-Review Milestone 1 Security Hardening & PDFium Worker Pipeline implementations against specifications, verify tests & clippy, and provide adversarial evaluation.
+Independently review and adversarially challenge worker_m1's work product for Milestone 1: Frontend Tool Repair & Interaction Polish.
 
 ## 🔒 My Identity
-- Archetype: reviewer
+- Archetype: teamwork_preview_reviewer
 - Roles: reviewer, critic
-- Working directory: d:\Own Programs\InkWell\.agents\reviewer_m1_2\
-- Original parent: aac50c46-9c9a-426f-af7b-f5545e32d0e9
-- Milestone: Milestone 1 Security Hardening & PDFium Worker Pipeline
-- Instance: 1 of 1
+- Working directory: /mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2
+- Original parent: 14705561-f0dd-4a76-b0a8-30c276afb62e
+- Milestone: Milestone 1 (Frontend Tool Repair & Interaction Polish)
+- Instance: 2 of 2
 
 ## 🔒 Key Constraints
 - Review-only — do NOT modify implementation code
-- Actively check for integrity violations (hardcoded results, facade implementations, bypassed tasks, fabricated logs)
-- Explicit verdict: APPROVE or REQUEST_CHANGES
+- Thorough verification of claims, tests, error handling, edge cases, and integrity
+- Strictly follow AGENTS.md, PROJECT.md, and System Prompt protection rules
 
 ## Current Parent
-- Conversation ID: aac50c46-9c9a-426f-af7b-f5545e32d0e9
-- Updated: not yet
+- Conversation ID: 14705561-f0dd-4a76-b0a8-30c276afb62e
+- Updated: 2026-09-02T11:10:15Z
 
 ## Review Scope
 - **Files to review**:
-  - `inkwell/crates/inkwell-pdf/src/lib.rs` (PDFium DLL search path restriction)
-  - `inkwell/crates/inkwell-core/src/codec.rs` (Varint shift overflow & bounded vector allocation)
-  - `inkwell/crates/inkwell-core/src/pdfobj.rs` (skip_value boundary clamping & escape char checks)
-  - `inkwell-app/src-tauri/src/commands.rs` (Unicode safe search, path sanitization, spawn_blocking, bitmap cache)
-  - `inkwell-app/src-tauri/tauri.conf.json` (CSP policy)
-  - `inkwell-app/src/js/app.js` (Tile error loop prevention)
-  - `inkwell/crates/inkwell-core/tests/integration.rs` & `inkwell-pdf/tests/integration.rs` (New security tests)
-- **Interface contracts**: `plans/021-pdfium-document-handle-and-threadpool-offload.md`, `plans/023-security-hardening-utf8-dll-csp-and-path-validation.md`, `.agents/sub_orch_m1_gen2/SCOPE.md`
-- **Review criteria**: correctness, security hardening, robust error handling, bounds checking, zero clippy warnings, all tests pass.
+  - `inkwell-app/src/js/core/state.js`
+  - `inkwell-app/src/js/tools/tool-manager.js`
+  - `inkwell-app/src/js/workspace/text-selection.js`
+  - `inkwell-app/src/js/ui/radial-menu.js`
+  - `inkwell-app/src/js/ui/command-palette.js`
+  - `inkwell-app/src/js/main.js`
+- **Interface contracts**: `/mnt/Work/Own Programs/InkWell/PROJECT.md`, `AGENTS.md`
+- **Review criteria**: Correctness, integrity, error handling, performance, edge cases, conformance
 
 ## Review Checklist
 - **Items reviewed**:
-  - [x] Item A: Unicode character window slicing in `search_pdf`
-  - [x] Item B: PDFium DLL search path restriction in `init_pdfium`
-  - [x] Item C: Varint shift overflow check & bounded capacity in `codec.rs`, `pdfobj.rs`
-  - [x] Item D: Path traversal validation in `save_pdf`, dimension bounds in `insert_blank_page` / `create_blank_document`
-  - [x] Item E: Restrictive CSP configured in `tauri.conf.json`
-  - [x] Item F & G: `render_tile` offloaded to `spawn_blocking` with `page_bitmap_cache`
-  - [x] Item H: `fetchTile` error cache and recursive loop storm elimination
-  - [x] Unit & Integration Tests in `inkwell-core` and `inkwell-pdf`
-  - [x] Integrity Audit (no hardcoding, no facades, genuine implementations)
-- **Verdict**: APPROVE
-- **Unverified claims**: None. All claims verified by direct inspection, test execution, and clippy analysis.
+  - `state.js`: lastActiveTool, spacebar state tracking, text selection state
+  - `tool-manager.js`: setTool, space down/up handlers, spring keys, casing normalization
+  - `text-selection.js`: ensurePageTextData, character filtering, word/line expansion, clipboard copy
+  - `radial-menu.js`: .radial-item selector, data-tool, data-action, escape and pointerdown dismissals
+  - `command-palette.js`: keyboard navigation, escape, enter execution, backdrop click
+  - `main.js`: spacebar event routing, pan tool pointerdown/move/up, text selection pointerdown/move/up, context menu
+- **Verdict**: REQUEST_CHANGES
+- **Unverified claims**: none
 
 ## Attack Surface
 - **Hypotheses tested**:
-  - Varint integer overflow with >64-bit continuous shift: verified rejected with `CodecError::Truncated`
-  - Varint shift 63 payload > 1: verified rejected with `CodecError::Truncated`
-  - Malformed/unterminated PDF tokens in `skip_value`: verified clamped to buffer length without out-of-bounds panics
-  - Unicode / Bangla / emoji text search: verified character-level indexing prevents UTF-8 byte slice panics
-  - Path traversal `../../something.pdf`: verified rejected with traversal error
-  - Excessive allocation payloads: verified bounded to `.min(1024)` initial allocation
-- **Vulnerabilities found**: None in reviewed changes.
-- **Untested angles**: Cross-platform dynamic library loading (.so / .dylib) on non-Windows OS (InkWell target is Windows desktop).
+  - Rapid spacebar oscillation: PASS
+  - Space hold and pan drag across viewport edges: PASS
+  - Text selection multi-line non-contiguous indexing: PASS
+  - Text selection in-place mouse drag via UI: CRITICAL FAILURE (casing mismatch `textSelect` vs `textselect`)
+  - Radial menu actions (undo, palette, tools): PASS
+  - Command palette wrap-around and Enter execution: PASS
+- **Vulnerabilities found**:
+  - Critical casing mismatch: `toolManager.setTool('textSelect')` sets `state.activeTool = 'textselect'`, which fails all `tool === 'textSelect'` checks in `main.js` and `toolbar.js`, completely breaking canvas mouse drag selection and popover display during interactive UI use.
+- **Untested angles**: Hardware evdev stylus with multi-touch displays.
 
 ## Key Decisions Made
-- Confirmed full compliance with Milestone 1 specifications and plan requirements.
-- Issued APPROVE verdict.
+- Issue REQUEST_CHANGES verdict detailing the critical `textSelect` casing defect and providing exact remediation steps for worker_m1.
 
 ## Artifact Index
-- `d:\Own Programs\InkWell\.agents\reviewer_m1_2\handoff.md` — Final review report
+- `/mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2/DISPATCH.md` — Initial dispatch
+- `/mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2/BRIEFING.md` — Active briefing
+- `/mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2/progress.md` — Progress tracker
+- `/mnt/Work/Own Programs/InkWell/.agents/reviewer_m1_2/handoff.md` — Final review and challenge report

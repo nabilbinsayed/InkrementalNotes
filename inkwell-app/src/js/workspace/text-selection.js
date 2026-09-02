@@ -4,7 +4,77 @@
  * ========================================================================== */
 
 import { state, emit } from '../core/state.js';
+import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
+
+export async function ensurePageTextData(sheet) {
+  if (sheet == null || sheet < 0) return null;
+  if (state.pageTextData && state.pageTextData[sheet]) return state.pageTextData[sheet];
+  if (state.pageTextLoading && state.pageTextLoading[sheet]) {
+    return state.pageTextLoading[sheet];
+  }
+
+  if (!state.pageTextLoading) state.pageTextLoading = {};
+
+  const loadPromise = (async () => {
+    try {
+      const data = await ipc.invokeTauri('get_page_text_data', { pageIndex: sheet });
+      if (data) {
+        if (!state.pageTextData) state.pageTextData = {};
+        if (!state.pageTextSpans) state.pageTextSpans = {};
+        state.pageTextData[sheet] = data;
+        state.pageTextSpans[sheet] = data.spans || [];
+        return data;
+      }
+    } catch (err) {
+      console.warn('[inkwell/text-selection] get_page_text_data failed for page', sheet, err);
+    } finally {
+      if (state.pageTextLoading) {
+        delete state.pageTextLoading[sheet];
+      }
+    }
+    return null;
+  })();
+
+  state.pageTextLoading[sheet] = loadPromise;
+  return loadPromise;
+}
+
+export async function loadPageTextData(sheet) {
+  return ensurePageTextData(sheet);
+}
+
+export function preloadNearbyPageText(centerSheet, viewport = null) {
+  if (centerSheet == null || centerSheet < 0) centerSheet = state.leftSheet || 0;
+  const numPages = state.pageInfos ? state.pageInfos.length : 1;
+  const sheetsToLoad = new Set();
+
+  if (centerSheet >= 0 && centerSheet < numPages) {
+    sheetsToLoad.add(centerSheet);
+  }
+
+  if (viewport && typeof viewport.getVisiblePages === 'function') {
+    const visibleLeft = viewport.getVisiblePages('left', 200) || [];
+    for (const pl of visibleLeft) {
+      if (pl.sheet >= 0 && pl.sheet < numPages) sheetsToLoad.add(pl.sheet);
+    }
+    if (viewport.splitMode) {
+      const visibleRight = viewport.getVisiblePages('right', 200) || [];
+      for (const pl of visibleRight) {
+        if (pl.sheet >= 0 && pl.sheet < numPages) sheetsToLoad.add(pl.sheet);
+      }
+    }
+  }
+
+  if (centerSheet > 0) sheetsToLoad.add(centerSheet - 1);
+  if (centerSheet + 1 < numPages) sheetsToLoad.add(centerSheet + 1);
+
+  for (const s of sheetsToLoad) {
+    if (!state.pageTextData[s] && (!state.pageTextLoading || !state.pageTextLoading[s])) {
+      ensurePageTextData(s);
+    }
+  }
+}
 
 export function sortTextSpans(spans) {
   if (!spans || !spans.length) return [];
@@ -171,10 +241,10 @@ export function computeTextSelectionRanges(sheet, startCharIdx, endCharIdx) {
   const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
   if (!pageData || !pageData.chars || !pageData.chars.length) return null;
 
-  const minIdx = Math.max(0, Math.min(startCharIdx, endCharIdx));
-  const maxIdx = Math.min(pageData.chars.length - 1, Math.max(startCharIdx, endCharIdx));
+  const minIdx = Math.min(startCharIdx, endCharIdx);
+  const maxIdx = Math.max(startCharIdx, endCharIdx);
 
-  const selectedChars = pageData.chars.slice(minIdx, maxIdx + 1);
+  const selectedChars = pageData.chars.filter(c => c.char_index >= minIdx && c.char_index <= maxIdx);
   if (!selectedChars.length) return null;
 
   const selectedString = selectedChars.map(c => c.c).join('');
@@ -225,6 +295,47 @@ export function computeTextSelectionRanges(sheet, startCharIdx, endCharIdx) {
   };
 }
 
+export function expandSelectionToWord(sheet, charIndex) {
+  const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
+  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
+
+  let idx = pageData.chars.findIndex(c => c.char_index === charIndex);
+  if (idx < 0) idx = Math.max(0, Math.min(pageData.chars.length - 1, charIndex));
+
+  const initialLine = pageData.chars[idx].line_index;
+  let start = idx;
+  let end = idx;
+
+  const isWordChar = c => !/[\s\r\n\t.,!?;:()\[\]{}"'—–/\\]/.test(c);
+
+  while (start > 0 && pageData.chars[start - 1].line_index === initialLine && isWordChar(pageData.chars[start - 1].c)) {
+    start--;
+  }
+  while (end < pageData.chars.length - 1 && pageData.chars[end + 1].line_index === initialLine && isWordChar(pageData.chars[end + 1].c)) {
+    end++;
+  }
+
+  return computeTextSelectionRanges(sheet, pageData.chars[start].char_index, pageData.chars[end].char_index);
+}
+
+export function expandSelectionToLine(sheet, charIndex) {
+  const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
+  if (!pageData || !pageData.chars || !pageData.chars.length) return null;
+
+  let c = pageData.chars.find(ch => ch.char_index === charIndex);
+  if (!c) {
+    c = pageData.chars[Math.max(0, Math.min(pageData.chars.length - 1, charIndex))];
+  }
+  if (!c) return null;
+
+  const line = (pageData.lines || []).find(l => l.line_index === c.line_index);
+  if (!line || !line.chars || !line.chars.length) return null;
+
+  const start = line.chars[0].char_index;
+  const end = line.chars[line.chars.length - 1].char_index;
+  return computeTextSelectionRanges(sheet, start, end);
+}
+
 export function copySelectedPdfText() {
   if (!state.selectedTextString) return false;
   navigator.clipboard.writeText(state.selectedTextString)
@@ -238,6 +349,7 @@ export function copySelectedPdfText() {
 export function clearTextSelection() {
   state.textSelection = null;
   state.textSelectAnchor = null;
+  state.textSelectPending = null;
   state.selectedTextSpans = [];
   state.selectedTextString = '';
   state.isSelectingText = false;

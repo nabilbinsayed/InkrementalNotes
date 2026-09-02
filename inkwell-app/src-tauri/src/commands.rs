@@ -491,7 +491,7 @@ pub async fn render_tile(
     rect: [f64; 4],
     px: u32,
     state: State<'_, AppState>,
-) -> Result<Vec<u8>, String> {
+) -> Result<tauri::ipc::Response, String> {
     // Cap tile resolution to bound the IPC payload size (RGBA = w*h*4 bytes).
     let px = px.clamp(16, 2048);
     if !(rect[0].is_finite() && rect[1].is_finite() && rect[2].is_finite() && rect[3].is_finite())
@@ -623,7 +623,7 @@ pub async fn render_tile(
             ));
         }
 
-        Ok(rgba_data)
+        Ok(tauri::ipc::Response::new(rgba_data))
     })
     .await
     .map_err(|e| format!("Tile worker task failed: {e}"))?
@@ -637,6 +637,7 @@ pub async fn commit_stroke(
     rgb: [f64; 3],
     base_width: f64,
     samples: Vec<RawSampleInput>,
+    client_id: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let mut doc_guard = state.doc.lock().unwrap();
@@ -647,10 +648,14 @@ pub async fn commit_stroke(
         _ => ToolKind::Pen,
     };
 
-    let stroke_id = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let stroke_id = if let Some(ref cid) = client_id {
+        parse_stroke_id(cid)
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    };
 
     let brush = Brush {
         base_width,
@@ -684,7 +689,8 @@ pub async fn commit_stroke(
         let _ = tx.send(WalOp::Append(WalEntry::Added { sheet, stroke }));
     }
 
-    Ok(stroke_id.to_string())
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(client_id.unwrap_or_else(|| stroke_id.to_string()))
 }
 
 fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
@@ -731,6 +737,7 @@ pub async fn delete_stroke(stroke_id_str: String, state: State<'_, AppState>) ->
         if let Some(tx) = state.wal.lock().unwrap().as_ref() {
             let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
         }
+        state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(removed)
 }
@@ -761,6 +768,7 @@ pub async fn journal_image_mutation(
             }
         }
     }
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(true)
 }
 
@@ -794,6 +802,7 @@ pub async fn journal_text_mutation(
             }
         }
     }
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(true)
 }
 
@@ -802,10 +811,16 @@ pub async fn save_pdf(
     out_path_str: Option<String>,
     images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
     strokes: Option<Vec<FrontendStroke>>,
+    texts: Option<Vec<FrontendText>>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // If frontend provided the active stroke list, sync doc state completely
     if let Some(ref stroke_list) = strokes {
+        for fs in stroke_list {
+            if fs.sheet > 10_000 {
+                return Err("stroke sheet index out of bounds".to_string());
+            }
+        }
         let mut doc_guard = state.doc.lock().unwrap();
         if let Some(doc) = doc_guard.as_mut() {
             for sheet in &mut doc.sheets {
@@ -833,8 +848,8 @@ pub async fn save_pdf(
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
-    // Use the original pristine PDF bytes as the base for image embedding.
-    // This prevents compounding duplicate image objects across save cycles.
+    // Use the original pristine PDF bytes as the base for image and text embedding.
+    // This prevents compounding duplicate objects across save cycles.
     let orig_guard = state.original_pdf_bytes.lock().unwrap();
     let original_bytes = orig_guard.as_ref().ok_or("No original PDF loaded")?;
 
@@ -861,8 +876,6 @@ pub async fn save_pdf(
     };
 
     // 1. If images were provided, embed them into the ORIGINAL base PDF using PDFium.
-    //    We always start from original_pdf_bytes to avoid re-embedding images
-    //    from previous save cycles.
     let base_with_images = if let Some(ref img_list) = images {
         if !img_list.is_empty() {
             let pdfium_guard = state.pdfium.lock().unwrap();
@@ -876,16 +889,43 @@ pub async fn save_pdf(
         original_bytes.to_vec()
     };
 
-    // 2. Open PDF and append vector ink layers
-    let (_norm_bytes, mut pdf_file) = match PdfFile::open(base_with_images.clone()) {
-        Ok(f) => (base_with_images.clone(), f),
+    // 2. If sticky note text objects were provided, embed them as real PDF text objects.
+    let base_with_texts = if let Some(ref text_list) = texts {
+        if !text_list.is_empty() {
+            let annotations: Vec<inkwell_pdf::TextAnnotation> = text_list.iter()
+                .filter(|t| !t.text.trim().is_empty())
+                .map(|t| inkwell_pdf::TextAnnotation {
+                    sheet: t.sheet,
+                    x: t.x,
+                    y: t.y,
+                    text: t.text.clone(),
+                    font_size: t.font_size,
+                    color: t.color.clone(),
+                    bold: t.bold,
+                    italic: t.italic,
+                }).collect();
+            let pdfium_guard = state.pdfium.lock().unwrap();
+            let pdfium = pdfium_guard.as_ref()
+                .ok_or("PDFium is unavailable for text embedding")?;
+            inkwell_pdf::embed_texts_in_pdf(pdfium, &base_with_images, &annotations)
+                .map_err(|e| format!("Failed to embed text in PDF: {e:?}"))?
+        } else {
+            base_with_images
+        }
+    } else {
+        base_with_images
+    };
+
+    // 3. Open PDF and append vector ink layers
+    let (_norm_bytes, mut pdf_file) = match PdfFile::open(base_with_texts.clone()) {
+        Ok(f) => (base_with_texts.clone(), f),
         Err(e) => {
             eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
             let pdfium_guard = state.pdfium.lock().unwrap();
             let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
                 format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
             })?;
-            let nb = inkwell_pdf::normalise(pdfium, &base_with_images)
+            let nb = inkwell_pdf::normalise(pdfium, &base_with_texts)
                 .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
             let f = PdfFile::open(nb.clone())
                 .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
@@ -906,6 +946,8 @@ pub async fn save_pdf(
     *state.pdf_bytes.lock().unwrap() = Some(Arc::new(final_bytes));
     *state.pdf_path.lock().unwrap() = Some(target_path.clone());
 
+    state.is_dirty.store(false, std::sync::atomic::Ordering::Relaxed);
+
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Truncate);
     }
@@ -917,6 +959,7 @@ pub async fn save_pdf(
 pub async fn save_pdf_dialog(
     images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
     strokes: Option<Vec<FrontendStroke>>,
+    texts: Option<Vec<FrontendText>>,
     window: tauri::Window,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -933,7 +976,7 @@ pub async fn save_pdf_dialog(
     if let Some(path) = file_option {
         let path_buf = path.into_path().map_err(|e| e.to_string())?;
         let path_str = path_buf.to_string_lossy().to_string();
-        save_pdf(Some(path_str), images, strokes, state).await
+        save_pdf(Some(path_str), images, strokes, texts, state).await
     } else {
         Err("CANCELLED".to_string())
     }
@@ -956,6 +999,7 @@ pub async fn erase_strokes_near(
                 let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
             }
         }
+        state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(removed.into_iter().map(|id| id.to_string()).collect())
 }
@@ -978,6 +1022,7 @@ pub async fn erase_strokes_in_rect(
                 let _ = tx.send(WalOp::Append(WalEntry::Removed(id)));
             }
         }
+        state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(removed.into_iter().map(|id| id.to_string()).collect())
 }
@@ -1040,6 +1085,8 @@ pub async fn insert_blank_page(
             height_pt,
         }));
     }
+
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
 
     Ok(PageInfo {
         page_index: index,
@@ -1289,6 +1336,7 @@ pub async fn delete_page(
         let _ = tx.send(WalOp::Append(WalEntry::PageDeleted { index }));
     }
 
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(true)
 }
 
@@ -1339,6 +1387,8 @@ pub async fn duplicate_page(
         }));
     }
 
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+
     Ok(PageInfo {
         page_index: target_idx,
         width_pt: out_w,
@@ -1384,6 +1434,8 @@ pub async fn rotate_page(
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageRotated { index, clockwise }));
     }
+
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
 
     Ok(PageInfo {
         page_index: index,
@@ -1437,6 +1489,7 @@ pub async fn reorder_page(
         let _ = tx.send(WalOp::Append(WalEntry::PageReordered { from_index, to_index }));
     }
 
+    state.is_dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(true)
 }
 

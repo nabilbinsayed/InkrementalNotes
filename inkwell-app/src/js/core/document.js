@@ -31,12 +31,36 @@ function notifyMutation(type, payload) {
 
 // ---- Strokes Operations ----
 
+export function rebuildStrokesBySheet() {
+  const map = new Map();
+  for (const s of state.strokes || []) {
+    if (!s.deleted) {
+      const sheet = s.sheet || 0;
+      if (!map.has(sheet)) map.set(sheet, []);
+      map.get(sheet).push(s);
+    }
+  }
+  state._strokesBySheet = map;
+}
+
+export function getStrokesForSheet(sheetIndex) {
+  if (!state._strokesBySheet) {
+    rebuildStrokesBySheet();
+  }
+  return state._strokesBySheet.get(sheetIndex) || [];
+}
+
 export function addStroke(stroke, { recordHistory = true } = {}) {
   if (!stroke) return;
   if (!state.strokes) state.strokes = [];
   
   stroke.deleted = false;
   state.strokes.push(stroke);
+
+  if (!state._strokesBySheet) state._strokesBySheet = new Map();
+  const sheet = stroke.sheet || 0;
+  if (!state._strokesBySheet.has(sheet)) state._strokesBySheet.set(sheet, []);
+  state._strokesBySheet.get(sheet).push(stroke);
 
   if (recordHistory) {
     history.pushTransaction({
@@ -62,6 +86,7 @@ export function deleteStrokes(strokeIds, { recordHistory = true } = {}) {
   }
 
   if (deletedStrokes.length > 0) {
+    rebuildStrokesBySheet();
     if (recordHistory) {
       history.pushTransaction({
         type: 'erase_strokes',
@@ -81,6 +106,8 @@ export function clearPageInk(sheetIndex, { recordHistory = true } = {}) {
   for (const s of strokesOnSheet) {
     s.deleted = true;
   }
+
+  rebuildStrokesBySheet();
 
   if (recordHistory) {
     history.pushTransaction({
@@ -143,6 +170,25 @@ export function upsertTextObject(textObj, { recordHistory = true, isNew = false 
   if (!state.textObjects) state.textObjects = [];
 
   textObj.deleted = false;
+  if (!textObj.width || !textObj.height) {
+    const fontSize = textObj.fontSize || 16;
+    const lines = (textObj.text || '').split('\n');
+    let maxLineW = 100;
+    if (typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.font = `${fontSize}px Inter, system-ui, -apple-system, sans-serif`;
+        for (const line of lines) {
+          const w = ctx.measureText(line).width;
+          if (w > maxLineW) maxLineW = w;
+        }
+      }
+    }
+    textObj.width = Math.max(10, maxLineW + 16);
+    textObj.height = Math.max(20, lines.length * fontSize * 1.35 + 8);
+  }
+
   const existingIdx = state.textObjects.findIndex(t => String(t.id) === String(textObj.id));
   if (existingIdx >= 0) {
     state.textObjects[existingIdx] = textObj;
@@ -206,6 +252,7 @@ export function deleteObjectsBatch({ strokes = [], images = [], textObjects = []
   }
 
   if (deletedStrokes.length || deletedImages.length || deletedTexts.length) {
+    if (deletedStrokes.length) rebuildStrokesBySheet();
     if (recordHistory) {
       history.pushTransaction({
         type: 'delete_objects',
@@ -222,13 +269,16 @@ export function deleteObjectsBatch({ strokes = [], images = [], textObjects = []
   }
 }
 
-export function commitTransform({ initialStrokes = [], initialImages = [], initialTextObjects = [] }, { recordHistory = true } = {}) {
+export function commitTransform({ initialStrokes = [], initialImages = [], initialTextObjects = [], finalStrokes = [], finalImages = [], finalTextObjects = [] }, { recordHistory = true } = {}) {
   if (recordHistory) {
     history.pushTransaction({
       type: 'transform_objects',
       initialStrokes: initialStrokes.map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
       initialImages: initialImages.map(img => ({ id: img.id, x: img.x, y: img.y, width: img.width, height: img.height })),
       initialTextObjects: initialTextObjects.map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
+      finalStrokes: finalStrokes.map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
+      finalImages: finalImages.map(img => ({ id: img.id, x: img.x, y: img.y, width: img.width, height: img.height })),
+      finalTextObjects: finalTextObjects.map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
     });
   }
 
@@ -253,13 +303,14 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
   state.selectedTextObjects = [];
   state.isDirty = false;
 
+  rebuildStrokesBySheet();
   history.clearHistory();
   emit('documentLoaded', { pageInfos, strokesCount: strokes.length });
 }
 
-export function insertPage(afterIndex, pageInfo) {
+export function insertPageAtIndex(targetIndex, pageInfo) {
   if (!state.pageInfos) state.pageInfos = [];
-  const insertIdx = afterIndex + 1;
+  const insertIdx = Math.max(0, Math.min(state.pageInfos.length, targetIndex));
   state.pageInfos.splice(insertIdx, 0, pageInfo);
 
   // Shift sheet index of any existing strokes, images, text on or after insertIdx
@@ -273,8 +324,13 @@ export function insertPage(afterIndex, pageInfo) {
     if (t.sheet >= insertIdx) t.sheet += 1;
   }
 
+  rebuildStrokesBySheet();
   notifyMutation('insert_page', { pageIndex: insertIdx, pageInfo });
   return insertIdx;
+}
+
+export function insertPage(afterIndex, pageInfo) {
+  return insertPageAtIndex(afterIndex + 1, pageInfo);
 }
 
 // ---- Undo / Redo Domain Dispatches ----
@@ -285,22 +341,26 @@ export function performUndo() {
 
   if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = true;
+    rebuildStrokesBySheet();
     history.pushRedo(tx);
     notifyMutation('undo_add_stroke', { stroke: tx.stroke });
   } else if (tx.type === 'erase_strokes' && tx.strokes) {
     for (const s of tx.strokes) s.deleted = false;
+    rebuildStrokesBySheet();
     history.pushRedo(tx);
     notifyMutation('undo_erase_strokes', { strokes: tx.strokes });
   } else if (tx.type === 'delete_objects') {
     for (const s of (tx.strokes || [])) s.deleted = false;
     for (const img of (tx.images || [])) img.deleted = false;
     for (const t of (tx.textObjects || [])) t.deleted = false;
+    rebuildStrokesBySheet();
     history.pushRedo(tx);
     notifyMutation('undo_delete_objects', tx);
   } else if (tx.type === 'add_objects') {
     for (const s of (tx.strokes || [])) s.deleted = true;
     for (const img of (tx.images || [])) img.deleted = true;
     for (const t of (tx.textObjects || [])) t.deleted = true;
+    rebuildStrokesBySheet();
     history.pushRedo(tx);
     notifyMutation('undo_add_objects', tx);
   } else if (tx.type === 'add_image' && tx.image) {
@@ -330,6 +390,7 @@ export function performUndo() {
         }
       }
     }
+    rebuildStrokesBySheet();
     for (const init of (tx.initialImages || [])) {
       const img = (state.images || []).find(im => im.id === init.id);
       if (img) {
@@ -357,22 +418,26 @@ export function performRedo() {
 
   if (tx.type === 'add_stroke' && tx.stroke) {
     tx.stroke.deleted = false;
+    rebuildStrokesBySheet();
     history.pushUndoRaw(tx);
     notifyMutation('redo_add_stroke', { stroke: tx.stroke });
   } else if (tx.type === 'erase_strokes' && tx.strokes) {
     for (const s of tx.strokes) s.deleted = true;
+    rebuildStrokesBySheet();
     history.pushUndoRaw(tx);
     notifyMutation('redo_erase_strokes', { strokes: tx.strokes });
   } else if (tx.type === 'delete_objects') {
     for (const s of (tx.strokes || [])) s.deleted = true;
     for (const img of (tx.images || [])) img.deleted = true;
     for (const t of (tx.textObjects || [])) t.deleted = true;
+    rebuildStrokesBySheet();
     history.pushUndoRaw(tx);
     notifyMutation('redo_delete_objects', tx);
   } else if (tx.type === 'add_objects') {
     for (const s of (tx.strokes || [])) s.deleted = false;
     for (const img of (tx.images || [])) img.deleted = false;
     for (const t of (tx.textObjects || [])) t.deleted = false;
+    rebuildStrokesBySheet();
     history.pushUndoRaw(tx);
     notifyMutation('redo_add_objects', tx);
   } else if (tx.type === 'transform_objects') {
@@ -386,6 +451,7 @@ export function performRedo() {
         }
       }
     }
+    rebuildStrokesBySheet();
     for (const final of (tx.finalImages || [])) {
       const img = (state.images || []).find(im => im.id === final.id);
       if (img) {

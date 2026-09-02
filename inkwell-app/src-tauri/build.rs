@@ -49,7 +49,5 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../src/index.html");
     println!("cargo:rerun-if-changed=../src/styles.css");
-    println!("cargo:rerun-if-changed=../src/js/app.js");
-    println!("cargo:rerun-if-changed=../src/js/viewport.js");
-    println!("cargo:rerun-if-changed=../src/js/ink.js");
+    println!("cargo:rerun-if-changed=../src/js");
 }

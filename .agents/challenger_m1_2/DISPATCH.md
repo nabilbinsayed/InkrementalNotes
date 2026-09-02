@@ -1,21 +1,17 @@
-## 2026-08-14T13:26:22Z
-You are challenger_m1_2, conducting adversarial verification and empirical testing for Milestone 1 PDFium Worker Pipeline & Caching.
-Working directory: d:\Own Programs\InkWell\.agents\challenger_m1_2\
+## 2026-09-02T11:06:30Z
+You are challenger_m1_2, a teamwork_preview_challenger.
+Your working directory is /mnt/Work/Own Programs/InkWell/.agents/challenger_m1_2.
+
+Objective:
+Independently challenge and stress-test the tool state machine, clipboard copying, radial menu, and command palette navigation for Milestone 1.
 
 Instructions:
-1. Read:
-   - `d:\Own Programs\InkWell\ORIGINAL_REQUEST.md`
-   - `d:\Own Programs\InkWell\AGENTS.md`
-   - `d:\Own Programs\InkWell\plans\021-pdfium-document-handle-and-threadpool-offload.md`
-   - `d:\Own Programs\InkWell\.agents\sub_orch_m1_gen2\SCOPE.md`
-   - `d:\Own Programs\InkWell\.agents\worker_m1_1\handoff.md`
-
-2. Adversarially stress test:
-   - Non-blocking tile rasterization: Verify `spawn_blocking` properly decouples CPU rendering from Tokio runtime and mutex lock duration is minimal.
-   - LRU Page Bitmap Cache: Verify cached bitmap lookup avoids redundant `load_pdf_from_byte_slice` calls.
-   - Frontend tile error handling: Verify that tile load failures in `app.js` do not trigger recursive loop storms or continuous redraw scheduling.
-   - Run verification commands:
-     - `cd inkwell; cargo test -- --test-threads=1`
-     - `cd inkwell-m0; py -3 test_smoke.py`
-
-3. Produce a structured challenge report in `d:\Own Programs\InkWell\.agents\challenger_m1_2\handoff.md` with explicit verdict: `APPROVE` or `REQUEST_CHANGES`. Send a completion message when done.
+1. Read /mnt/Work/Own Programs/InkWell/.agents/ORIGINAL_REQUEST.md, /mnt/Work/Own Programs/InkWell/AGENTS.md, /mnt/Work/Own Programs/InkWell/PROJECT.md, and /mnt/Work/Own Programs/InkWell/.agents/worker_m1/handoff.md.
+2. Design and execute tests for:
+   - Tool switching sequences across all 9 tools (Pen -> Eraser -> Spacebar tap -> Lasso -> Spacebar tap -> Highlighter, etc.).
+   - Clipboard text copy execution and popover visibility.
+   - Radial menu clicking and ESC closing.
+   - Command palette boundary conditions (ArrowUp on first item, ArrowDown on last item, Enter on selected).
+3. Run `cd /mnt/Work/Own Programs/InkWell/inkwell-app && uv run --with playwright python3 test_app_smoke.py` and `test_m1_interactive.py`.
+4. Render a clear verdict: APPROVE or REQUEST_CHANGES.
+5. Write your report to `/mnt/Work/Own Programs/InkWell/.agents/challenger_m1_2/handoff.md` following standard format. Send a completion message with your verdict to the parent.

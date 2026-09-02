@@ -32,11 +32,13 @@
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       </button>
 
-      <button id="btnRailBookmarks" class="rail-btn" title="Bookmarks" aria-label="Bookmarks drawer">
+      <!-- Feature pending: Bookmarks drawer -->
+      <button id="btnRailBookmarks" class="rail-btn hidden" title="Bookmarks" aria-label="Bookmarks drawer">
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
       </button>
 
-      <button id="btnRailLayers" class="rail-btn" title="Ink Vector Layers" aria-label="Ink layers drawer">
+      <!-- Feature pending: Layers drawer -->
+      <button id="btnRailLayers" class="rail-btn hidden" title="Ink Vector Layers" aria-label="Ink layers drawer">
         <svg class="rail-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.9a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="m22 12.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 12.5"/><path d="m22 17.5-8.58 3.9a2 2 0 0 1-1.66 0L3.17 17.5"/></svg>
       </button>
 
@@ -112,7 +114,8 @@
         <div class="empty-state-icon">📑</div>
         <div class="empty-state-title">No Table of Contents</div>
         <div class="empty-state-desc">This PDF does not contain embedded bookmarks or chapter outlines. You can create custom bookmarks for fast navigation.</div>
-        <button id="btnOutlineAddBookmark" class="btn-add-bookmark-action">
+        <!-- Feature pending: Custom bookmarks -->
+        <button id="btnOutlineAddBookmark" class="btn-add-bookmark-action hidden">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
           <span>Bookmark Current Page</span>
         </button>
@@ -329,7 +332,7 @@
     <!-- Main Viewport Canvas Stage -->
     <div id="stage" class="stage">
       <!-- Welcome / Dropzone CTA Overlay -->
-      <div id="welcomeDropzone" class="welcome-dropzone">
+      <div id="welcomeDropzone" class="welcome-dropzone hidden">
         <div class="welcome-card">
           <div class="welcome-brand-badge">
             <div class="welcome-icon">🖋️</div>
@@ -369,16 +372,16 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           <span>Copy</span>
         </button>
-        <div class="popover-divider"></div>
-        <button id="btnTextHighlight" class="sel-action-btn" title="Highlight Text">
+        <!-- PDF annotation writing not yet implemented (Plan 044 follow-up) -->
+        <button id="btnTextHighlight" class="sel-action-btn hidden" title="Highlight Text">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11-6 6v3h3l6-6"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
           <span>Highlight</span>
         </button>
-        <button id="btnTextUnderline" class="sel-action-btn" title="Underline Text">
+        <button id="btnTextUnderline" class="sel-action-btn hidden" title="Underline Text">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v7a6 6 0 0 0 12 0V3"/><line x1="4" y1="21" x2="20" y2="21"/></svg>
           <span>Underline</span>
         </button>
-        <button id="btnTextStrikethrough" class="sel-action-btn" title="Strikethrough">
+        <button id="btnTextStrikethrough" class="sel-action-btn hidden" title="Strikethrough">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" y1="12" x2="20" y2="12"/></svg>
           <span>Strike</span>
         </button>
@@ -390,7 +393,7 @@
       </div>
 
       <!-- Direct In-Place Text Editor Overlay -->
-      <div id="inlineTextOverlay" class="inline-text-overlay hidden">
+      <div id="inlineTextEditor" class="inline-text-overlay inline-text-editor hidden">
         <div id="inlineTextToolbar" class="inline-text-toolbar">
           <div class="text-size-stepper">
             <button id="btnTextSizeDec" class="text-tb-btn" title="Decrease Size">-</button>
@@ -413,7 +416,7 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </div>
-        <textarea id="inlineTextInput" class="inline-text-input" placeholder="Type text here..." rows="1"></textarea>
+        <textarea id="inlineTextarea" class="inline-text-input" placeholder="Type text here..." rows="1"></textarea>
       </div>
 
       <!-- Page navigation hidden elements for test compatibility -->
@@ -588,7 +591,7 @@
       <!-- Canvases -->
       <canvas id="tiles"></canvas>
       <canvas id="dry"></canvas>
-      <canvas id="wet"></canvas>
+      <canvas id="wet" class="tool-pen"></canvas>
 
       <!-- 4. Bottom Floating Inking & Annotation Dock -->
       <div id="floatingDock" class="floating-dock" aria-label="Annotation Dock">
@@ -733,11 +736,11 @@
 </div>
 
 <!-- Export / Save Document Modal -->
-<div id="exportModal" class="modal-overlay hidden" aria-modal="true" role="dialog">
+<div id="exportModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-labelledby="exportModalTitle">
   <div class="modal-card">
     <div class="modal-header">
       <div class="modal-title-group">
-        <h3 class="modal-title">Save & Export PDF</h3>
+        <h3 id="exportModalTitle" class="modal-title">Save & Export PDF</h3>
         <p class="modal-subtitle">Choose how you would like to save your document</p>
       </div>
       <button id="btnCloseExportModal" class="drawer-close-btn" title="Close dialog" aria-label="Close dialog">✕</button>
@@ -780,7 +783,7 @@
 </div>
 
 <!-- Command Palette Modal -->
-<div id="cmdPaletteModal" class="modal-overlay hidden">
+<div id="cmdPaletteModal" class="modal-overlay hidden" aria-modal="true" role="dialog" aria-label="Command Palette">
   <div class="cmd-palette">
     <input type="text" id="cmdPaletteInput" placeholder="Type a command or search..." autocomplete="off">
     <div id="cmdPaletteResults" class="cmd-results"></div>
@@ -843,7 +846,7 @@
 
     <form id="insertPageForm" class="modal-form">
       <div class="modal-form-grid">
-        <!-- Position -->
+        <!-- Custom insertion position -->
         <div class="form-group">
           <label class="form-label" for="insertPositionSelect">Insertion Position</label>
           <select id="insertPositionSelect" class="form-select">
@@ -854,7 +857,7 @@
           </select>
         </div>
 
-        <!-- Paper Size Preset -->
+        <!-- Custom paper size preset -->
         <div class="form-group">
           <label class="form-label" for="insertPaperSizeSelect">Paper Size</label>
           <select id="insertPaperSizeSelect" class="form-select">
@@ -882,7 +885,7 @@
           </div>
         </div>
 
-        <!-- Orientation -->
+        <!-- Orientation selection -->
         <div class="form-group">
           <label class="form-label">Orientation</label>
           <div class="segmented-control">
@@ -897,7 +900,7 @@
           </div>
         </div>
 
-        <!-- Paper Template -->
+        <!-- Page template selection on insert -->
         <div class="form-group">
           <label class="form-label" for="insertTemplateSelect">Paper Template</label>
           <select id="insertTemplateSelect" class="form-select">
@@ -1002,7 +1005,7 @@
 </div>
 
 <!-- Confirm Close / Unsaved Changes Modal -->
-<div id="confirmCloseModal" class="modal-backdrop hidden">
+<div id="confirmCloseModal" class="modal-backdrop hidden" aria-modal="true" role="dialog" aria-labelledby="confirmCloseTitle">
   <div class="modal-card">
     <div class="modal-header">
       <h3 id="confirmCloseTitle">Save changes before closing?</h3>
@@ -1019,7 +1022,7 @@
 </div>
 
 <!-- Confirm Delete Page Modal -->
-<div id="confirmDeletePageModal" class="modal-backdrop hidden">
+<div id="confirmDeletePageModal" class="modal-backdrop hidden" aria-modal="true" role="dialog" aria-labelledby="confirmDeletePageTitle">
   <div class="modal-card modal-card-sm">
     <div class="modal-header">
       <h3 id="confirmDeletePageTitle">Delete Page</h3>
@@ -1270,10 +1273,10 @@
 </div>
 
 <!-- Toast Container -->
-<div id="toastContainer" class="toast-container"></div>
+<div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true" role="region" aria-label="Notifications"></div>
 
 <script src="js/ink.js"></script>
 <script src="js/viewport.js"></script>
-<script src="js/app.js"></script>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

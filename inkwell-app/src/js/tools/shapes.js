@@ -3,7 +3,7 @@
  * Generates exact vector rectangles, ellipses, and ruler lines without curve distortion.
  * ========================================================================== */
 
-import { state } from '../core/state.js';
+import { state, warnDurability } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
@@ -117,8 +117,12 @@ export function onShapeUp(e, viewport) {
   }
 
   documentOps.addStroke(stroke, { recordHistory: true });
-  ipc.commitStroke(stroke.sheet, stroke.kind, stroke.rgb, stroke.base_width, stroke.points)
-    .catch(() => {});
+  ipc.commitStroke(stroke.sheet, stroke.kind, stroke.rgb, stroke.base_width, stroke.points, stroke.id)
+    .then(serverId => { if (serverId) stroke.id = String(serverId); })
+    .catch(err => {
+      console.warn('[inkwell/shapes] commitStroke WAL error:', err);
+      warnDurability('Shape may not persist: ' + err);
+    });
 
   compositor.clearWet();
   compositor.redrawAll();

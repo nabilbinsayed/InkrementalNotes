@@ -5,6 +5,8 @@
 
 import { state, $ } from '../core/state.js';
 import * as toolManager from '../tools/tool-manager.js';
+import * as commandsModule from '../core/commands.js';
+import * as commandPalette from './command-palette.js';
 
 export function showRadialMenu(screenX, screenY) {
   const menu = $('radialMenu');
@@ -30,15 +32,36 @@ export function initRadialMenu() {
   const menu = $('radialMenu');
   if (!menu) return;
 
-  menu.querySelectorAll('.radial-slot').forEach(slot => {
-    slot.addEventListener('click', e => {
+  menu.querySelectorAll('.radial-item').forEach(item => {
+    item.addEventListener('click', e => {
       e.stopPropagation();
-      const tool = slot.getAttribute('data-tool');
+      const tool = item.getAttribute('data-tool');
+      const action = item.getAttribute('data-action');
       if (tool) {
         toolManager.setTool(tool);
         hideRadialMenu();
+      } else if (action === 'undo') {
+        hideRadialMenu();
+        commandsModule.commands.execute('edit.undo');
+      } else if (action === 'palette') {
+        hideRadialMenu();
+        commandPalette.openCommandPalette();
+      } else {
+        hideRadialMenu();
       }
     });
+  });
+
+  window.addEventListener('pointerdown', e => {
+    if (menu && !menu.contains(e.target) && !menu.classList.contains('hidden')) {
+      hideRadialMenu();
+    }
+  });
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && menu && !menu.classList.contains('hidden')) {
+      hideRadialMenu();
+    }
   });
 }
 
@@ -46,7 +69,7 @@ function updateRadialActiveTool() {
   const menu = $('radialMenu');
   if (!menu) return;
   const current = state.activeTool || 'pen';
-  menu.querySelectorAll('.radial-slot').forEach(slot => {
-    slot.classList.toggle('active', slot.getAttribute('data-tool') === current);
+  menu.querySelectorAll('.radial-item').forEach(item => {
+    item.classList.toggle('active', item.getAttribute('data-tool') === current);
   });
 }

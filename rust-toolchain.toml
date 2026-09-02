@@ -1,0 +1,7 @@
+# Pin the MSVC toolchain for ALL Rust builds in this repo.
+# Tauri v2 / windows-rs officially support only *-pc-windows-msvc on Windows;
+# the GNU toolchain stack-overflows compiling the `windows` crate and MinGW
+# linking is unsupported by Tauri.
+[toolchain]
+channel = "stable"
+targets = ["x86_64-pc-windows-msvc"]
