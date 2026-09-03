@@ -8,8 +8,13 @@ import * as documentOps from '../core/document.js';
 import * as ipc from '../core/ipc.js';
 import * as compositor from '../render/compositor.js';
 
+let erasedInGesture = new Set();
+let erasedStrokesInGesture = new Set();
+
 export function onEraserDown(e, ptWorld, pane, viewport) {
   state.isErasing = true;
+  erasedInGesture.clear();
+  erasedStrokesInGesture.clear();
   eraseStrokesAt(ptWorld, pane, viewport);
 }
 
@@ -20,19 +25,44 @@ export function onEraserMove(e, ptWorld, pane, viewport) {
 
 export function onEraserUp() {
   state.isErasing = false;
+  commitErasedStrokes();
+}
+
+function commitErasedStrokes() {
+  if (!erasedInGesture || erasedInGesture.size === 0) return;
+  const idsToErase = Array.from(erasedInGesture);
+  erasedInGesture.clear();
+
+  for (const s of erasedStrokesInGesture) {
+    s.deleted = false;
+  }
+  erasedStrokesInGesture.clear();
+
+  const deleted = documentOps.deleteStrokes(idsToErase, { recordHistory: true });
+  for (const d of deleted) {
+    ipc.deleteStroke(d.id).catch(err => {
+      console.warn('[inkwell/eraser] deleteStroke error:', err);
+      warnDurability('Erase may not persist: ' + err);
+    });
+  }
+  compositor.scheduleRedrawAll();
 }
 
 export function eraseStrokesAt(ptWorld, pane, viewport) {
-  if (!state.strokes || !state.strokes.length || !viewport) return;
+  if (!viewport) return;
   const wx = ptWorld[0];
   const wy = ptWorld[1];
 
+  const pageCoord = viewport.worldToPage(wx, wy);
+  const activeSheet = pageCoord ? pageCoord.sheet : 0;
+  const sheetStrokes = documentOps.getStrokesForSheet(activeSheet);
+  if (!sheetStrokes || !sheetStrokes.length) return;
+
   const z = (pane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
   const radius = Math.max(8, 14 / z);
+  let hitAny = false;
 
-  const strokesToErase = [];
-
-  for (const s of state.strokes) {
+  for (const s of sheetStrokes) {
     if (s.deleted) continue;
     const pl = viewport.getPageLayout(s.sheet || 0);
 
@@ -74,19 +104,19 @@ export function eraseStrokesAt(ptWorld, pane, viewport) {
     }
 
     if (hit) {
-      strokesToErase.push(s.id);
+      s.deleted = true;
+      erasedInGesture.add(s.id);
+      erasedStrokesInGesture.add(s);
+      hitAny = true;
     }
   }
 
-  if (strokesToErase.length > 0) {
-    const deleted = documentOps.deleteStrokes(strokesToErase, { recordHistory: true });
-    for (const d of deleted) {
-      ipc.deleteStroke(d.id).catch(err => {
-        console.warn('[inkwell/eraser] deleteStroke error:', err);
-        warnDurability('Erase may not persist: ' + err);
-      });
+  if (hitAny) {
+    if (!state.isErasing) {
+      commitErasedStrokes();
+    } else {
+      compositor.scheduleRedrawAll();
     }
-    compositor.redrawAll();
   }
 }
 

@@ -103,14 +103,19 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   const { wctx } = compositor.getContexts();
   if (!wctx || !state.cur) return;
 
-  const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
   const isHighlighter = state.cur.kind === 'highlighter';
-  const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
-  const w = isHighlighter ? baseW : baseW * (0.22 + 0.78 * c);
-
-  const pt = { x: px, y: py, p, w, t };
-  if (!state.cur.points) state.cur.points = [];
-  state.cur.points.push(pt);
+  let pt;
+  if (typeof state.cur.push === 'function') {
+    pt = state.cur.push(px, py, p, t);
+    if (!pt) return; // Deduplicated jitter
+  } else {
+    const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
+    const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
+    const w = isHighlighter ? baseW : baseW * (0.22 + 0.78 * c);
+    pt = { x: px, y: py, p, w, t };
+    if (!state.cur.points) state.cur.points = [];
+    state.cur.points.push(pt);
+  }
 
   const pl = viewport.getPageLayout(state.cur.sheet || 0);
   const [psx, psy] = viewport.worldToScreen(pl.x, pl.y, pane);
