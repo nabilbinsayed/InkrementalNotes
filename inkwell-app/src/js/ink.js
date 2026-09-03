@@ -209,6 +209,88 @@ function getChiselPath2D(rawPts, baseH = 16.0) {
   return path;
 }
 
+function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
+  if (!rawPts || !rawPts.length) return;
+
+  if (rawPts.length === 1) {
+    const p = rawPts[0];
+    const w = (p && p.w !== undefined && !isNaN(p.w)) ? p.w : ((p && p.p !== undefined) ? p.p * 2.0 : baseWidth);
+    const r = Math.max(0.1, w / 2);
+    target.moveTo(p.x + r, p.y);
+    target.arc(p.x, p.y, r, 0, Math.PI * 2);
+    return;
+  }
+
+  if (rawPts.length === 2) {
+    const a = rawPts[0], b = rawPts[1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1e-6;
+    const nx = -dy / l, ny = dx / l;
+    const wa = (a && a.w !== undefined && !isNaN(a.w)) ? a.w : ((a && a.p !== undefined) ? a.p * 2.0 : baseWidth);
+    const wb = (b && b.w !== undefined && !isNaN(b.w)) ? b.w : ((b && b.p !== undefined) ? b.p * 2.0 : baseWidth);
+    const ha = Math.max(0.05, wa / 2), hb = Math.max(0.05, wb / 2);
+    target.moveTo(a.x + nx * ha, a.y + ny * ha);
+    target.lineTo(b.x + nx * hb, b.y + ny * hb);
+    target.arc(b.x, b.y, hb, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
+    target.lineTo(a.x - nx * ha, a.y - ny * ha);
+    target.arc(a.x, a.y, ha, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
+    target.closePath();
+    return;
+  }
+
+  const pts = chaikinSubdivide(rawPts, 2);
+  const n = pts.length;
+  if (n < 2) return;
+
+  const left = [];
+  const right = [];
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(n - 1, i + 1)];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1e-6;
+    const nx = -dy / l, ny = dx / l;
+    const w = (pts[i].w !== undefined && !isNaN(pts[i].w)) ? pts[i].w : ((pts[i].p !== undefined) ? pts[i].p * 2.0 : baseWidth);
+    const h = Math.max(0.05, w / 2);
+    left.push({ x: pts[i].x + nx * h, y: pts[i].y + ny * h });
+    right.push({ x: pts[i].x - nx * h, y: pts[i].y - ny * h });
+  }
+
+  target.moveTo(left[0].x, left[0].y);
+  for (let i = 1; i < n; i++) {
+    const mx = (left[i - 1].x + left[i].x) / 2;
+    const my = (left[i - 1].y + left[i].y) / 2;
+    target.quadraticCurveTo(left[i - 1].x, left[i - 1].y, mx, my);
+  }
+  target.lineTo(left[n - 1].x, left[n - 1].y);
+
+  // End cap: round cap from left to right edge
+  const lastPt = pts[n - 1];
+  const lastW = (lastPt.w !== undefined && !isNaN(lastPt.w)) ? lastPt.w : baseWidth;
+  const endR = Math.max(0.05, lastW / 2);
+  const aLeftEnd = Math.atan2(left[n - 1].y - lastPt.y, left[n - 1].x - lastPt.x);
+  const aRightEnd = Math.atan2(right[n - 1].y - lastPt.y, right[n - 1].x - lastPt.x);
+  target.arc(lastPt.x, lastPt.y, endR, aLeftEnd, aRightEnd, false);
+
+  // Right edge in reverse
+  for (let i = n - 1; i > 0; i--) {
+    const mx = (right[i].x + right[i - 1].x) / 2;
+    const my = (right[i].y + right[i - 1].y) / 2;
+    target.quadraticCurveTo(right[i].x, right[i].y, mx, my);
+  }
+  target.lineTo(right[0].x, right[0].y);
+
+  // Start cap: round cap from right to left edge
+  const firstPt = pts[0];
+  const firstW = (firstPt.w !== undefined && !isNaN(firstPt.w)) ? firstPt.w : baseWidth;
+  const startR = Math.max(0.05, firstW / 2);
+  const aRightStart = Math.atan2(right[0].y - firstPt.y, right[0].x - firstPt.x);
+  const aLeftStart = Math.atan2(left[0].y - firstPt.y, left[0].x - firstPt.x);
+  target.arc(firstPt.x, firstPt.y, startR, aRightStart, aLeftStart, false);
+
+  target.closePath();
+}
+
 function getPath2D(stroke) {
   if (typeof Path2D === 'undefined') return null;
   const rawPts = stroke.points || stroke._pts;
@@ -219,44 +301,8 @@ function getPath2D(stroke) {
   }
 
   const path = new Path2D();
-  if (rawPts.length === 1) {
-    addDotToPath(path, rawPts[0]);
-    return path;
-  }
-  if (rawPts.length === 2) {
-    addDotToPath(path, rawPts[0]);
-    addSegmentToPath(path, rawPts[0], rawPts[1]);
-    return path;
-  }
-
-  const points = chaikinSubdivide(rawPts);
-  let pPrev = points[0];
-  addDotToPath(path, pPrev);
-
-  for (let i = 1; i < points.length - 1; i++) {
-    const start = pPrev;
-    const prevW = (points[i].w !== undefined && !isNaN(points[i].w)) ? points[i].w : 2.0;
-    const nextW = (points[i + 1].w !== undefined && !isNaN(points[i + 1].w)) ? points[i + 1].w : 2.0;
-    const end = {
-      x: (points[i].x + points[i + 1].x) / 2,
-      y: (points[i].y + points[i + 1].y) / 2,
-      w: (prevW + nextW) / 2,
-    };
-    const steps = 3;
-    for (let s = 1; s <= steps; s++) {
-      const pCurr = quadraticAt(start, points[i], end, s / steps);
-      addSegmentToPath(path, pPrev, pCurr);
-      pPrev = pCurr;
-    }
-  }
-  const last = points[points.length - 1];
-  const start = pPrev;
-  for (let s = 1; s <= 3; s++) {
-    const pCurr = quadraticAt(start, points[points.length - 2], last, s / 3);
-    addSegmentToPath(path, pPrev, pCurr);
-    pPrev = pCurr;
-  }
-
+  const baseW = stroke.base_width || stroke.baseWidth || 2.0;
+  traceRibbonContour(path, rawPts, baseW);
   return path;
 }
 
@@ -442,48 +488,13 @@ function drawStroke(ctx, stroke) {
     return;
   }
 
-  if (rawPts.length === 1) {
-    drawDot(ctx, rawPts[0]);
-    if (isHighlighter) ctx.restore();
-    return;
-  }
-  if (rawPts.length === 2) {
-    drawDot(ctx, rawPts[0]);
-    drawSegment(ctx, rawPts[0], rawPts[1]);
-    if (isHighlighter) ctx.restore();
-    return;
-  }
-
-  const points = chaikinSubdivide(rawPts);
-  let pPrev = points[0];
-  drawDot(ctx, pPrev);
-
-  // Midpoint quadratics are C1-continuous; sampling them into the existing
-  // variable-width ribbon preserves the pressure taper of the input stroke.
-  for (let i = 1; i < points.length - 1; i++) {
-    const start = pPrev;
-    const end = {
-      x: (points[i].x + points[i + 1].x) / 2,
-      y: (points[i].y + points[i + 1].y) / 2,
-      w: (points[i].w + points[i + 1].w) / 2,
-    };
-    const steps = 3;
-    for (let s = 1; s <= steps; s++) {
-      const pCurr = quadraticAt(start, points[i], end, s / steps);
-      drawSegment(ctx, pPrev, pCurr);
-      pPrev = pCurr;
-    }
-  }
-  const last = points[points.length - 1];
-  const start = pPrev;
-  for (let s = 1; s <= 3; s++) {
-    const pCurr = quadraticAt(start, points[points.length - 2], last, s / 3);
-    drawSegment(ctx, pPrev, pCurr);
-    pPrev = pCurr;
-  }
+  const baseW = stroke.base_width || stroke.baseWidth || 2.0;
+  ctx.beginPath();
+  traceRibbonContour(ctx, rawPts, baseW);
+  ctx.fill();
 
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour };
 

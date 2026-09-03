@@ -1135,6 +1135,19 @@ function attachKeyboardShortcuts() {
         e.preventDefault();
         return;
       }
+
+      if (state.selectedStrokes?.length || state.selectedImages?.length || state.selectedTextObjects?.length) {
+        state.selectedStrokes = [];
+        state.selectedImages = [];
+        state.selectedTextObjects = [];
+        state.transformMode = null;
+        state.lassoPath = null;
+        emit('selectionCleared', {});
+        compositor.clearWet();
+        compositor.redrawAll();
+        e.preventDefault();
+        return;
+      }
     }
 
     const isTyping = document.activeElement && (

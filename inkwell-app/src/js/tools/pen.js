@@ -104,17 +104,23 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   if (!wctx || !state.cur) return;
 
   const isHighlighter = state.cur.kind === 'highlighter';
-  let pt;
-  if (typeof state.cur.push === 'function') {
-    pt = state.cur.push(px, py, p, t);
-    if (!pt) return; // Deduplicated jitter
+  const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
+  const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
+  const w = isHighlighter ? baseW : baseW * (0.22 + 0.78 * c);
+  const pt = { x: px, y: py, p, w, t };
+  if (!state.cur.points) state.cur.points = [];
+  state.cur.points.push(pt);
+  if (state.cur.samples) {
+    state.cur.samples.push([+px.toFixed(3), +py.toFixed(3), +p.toFixed(4), +t.toFixed(1)]);
+  }
+  const r = w / 2;
+  if (!state.cur.bbox) {
+    state.cur.bbox = [px - r, py - r, px + r, py + r];
   } else {
-    const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
-    const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
-    const w = isHighlighter ? baseW : baseW * (0.22 + 0.78 * c);
-    pt = { x: px, y: py, p, w, t };
-    if (!state.cur.points) state.cur.points = [];
-    state.cur.points.push(pt);
+    if (px - r < state.cur.bbox[0]) state.cur.bbox[0] = px - r;
+    if (py - r < state.cur.bbox[1]) state.cur.bbox[1] = py - r;
+    if (px + r > state.cur.bbox[2]) state.cur.bbox[2] = px + r;
+    if (py + r > state.cur.bbox[3]) state.cur.bbox[3] = py + r;
   }
 
   const pl = viewport.getPageLayout(state.cur.sheet || 0);

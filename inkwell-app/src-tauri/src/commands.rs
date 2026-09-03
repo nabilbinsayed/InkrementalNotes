@@ -970,6 +970,7 @@ pub async fn save_pdf(
         current_path.as_ref() != Some(&target_path)
     };
     *state.pdf_path.lock().unwrap() = Some(target_path.clone());
+    state.page_bitmap_cache.lock().unwrap().clear();
 
     if is_save_as {
         if let Some(old_tx) = state.wal.lock().unwrap().take() {

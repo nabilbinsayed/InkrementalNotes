@@ -171,6 +171,43 @@ export function onLassoUp(e, viewport) {
       }
     }
 
+    // Stationary click without drag: deselect or select specific clicked object
+    if (mode === 'move' && Math.hypot(dx, dy) < 4) {
+      state.transformMode = null;
+      const startPt = state.transformStartPt;
+      state.transformStartPt = null;
+      state.transformInitialBounds = null;
+      state.transformInitialStrokes = null;
+      state.transformInitialImages = null;
+      state.transformInitialTextObjects = null;
+
+      const clicked = startPt ? findObjectAtWorld(startPt[0], startPt[1], viewport) : null;
+      if (!clicked) {
+        state.selectedStrokes = [];
+        state.selectedImages = [];
+        state.selectedTextObjects = [];
+        emit('selectionCleared', {});
+      } else {
+        if (clicked.type === 'stroke') {
+          state.selectedStrokes = [clicked.item];
+          state.selectedImages = [];
+          state.selectedTextObjects = [];
+        } else if (clicked.type === 'image') {
+          state.selectedStrokes = [];
+          state.selectedImages = [clicked.item];
+          state.selectedTextObjects = [];
+        } else if (clicked.type === 'text') {
+          state.selectedStrokes = [];
+          state.selectedImages = [];
+          state.selectedTextObjects = [clicked.item];
+        }
+        emit('selectionChanged', { strokes: state.selectedStrokes, images: state.selectedImages, textObjects: state.selectedTextObjects });
+      }
+      compositor.clearWet();
+      compositor.redrawAll();
+      return;
+    }
+
     // 1. Bake the affine transform into stroke points once
     if (state.transformInitialStrokes) {
       for (const init of state.transformInitialStrokes) {
@@ -187,7 +224,7 @@ export function onLassoUp(e, viewport) {
                 const wx = pl.x + p.x;
                 const wy = pl.y + p.y;
                 const rx = center[0] + (wx - center[0]) * cosA - (wy - center[1]) * sinA;
-                const ry = center[1] + (wx - center[0]) * sinA + (cy - center[1]) * cosA;
+                const ry = center[1] + (wx - center[0]) * sinA + (wy - center[1]) * cosA;
                 return { ...p, x: rx - pl.x, y: ry - pl.y };
               });
             }

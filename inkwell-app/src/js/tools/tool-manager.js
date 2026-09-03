@@ -98,6 +98,15 @@ export function setTool(toolName, { isUserSwitch = true } = {}) {
     state.lastActiveTool = state.activeTool;
   }
 
+  if (state.activeTool === 'lasso' && tool !== 'lasso') {
+    state.selectedStrokes = [];
+    state.selectedImages = [];
+    state.selectedTextObjects = [];
+    state.transformMode = null;
+    state.lassoPath = null;
+    emit('selectionCleared', {});
+  }
+
   if (tool === 'ruler') {
     state.activeTool = 'ruler';
     state.shapeKind = 'line';

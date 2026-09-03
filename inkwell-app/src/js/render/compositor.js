@@ -4,7 +4,7 @@
  * Reads document state; never mutates document state.
  * ========================================================================== */
 
-import { state } from '../core/state.js';
+import { state, on } from '../core/state.js';
 import * as documentOps from '../core/document.js';
 import * as templates from './templates.js';
 import * as tiles from './tiles.js';
@@ -28,6 +28,16 @@ export function initCompositor({ tilesCanvas, dryCanvas, wetCanvas, viewport }) 
   _tctx = makeCtx(_tilesCanvas);
   _dctx = makeCtx(_dryCanvas);
   _wctx = makeCtx(_wetCanvas);
+
+  on('documentLoaded', () => {
+    tiles.clearTileCache();
+  });
+
+  on('documentChanged', ({ type }) => {
+    if (type && type.includes('page')) {
+      tiles.clearTileCache();
+    }
+  });
 }
 
 export function getCanvases() {

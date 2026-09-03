@@ -43,6 +43,7 @@ export function clearTileCache() {
     }
   }
   tileCache.clear();
+  tilesPending.clear();
 }
 
 export function tileGridForRect(rx0, ry0, rx1, ry1) {
@@ -117,12 +118,22 @@ export async function fetchTile(page, rect, px) {
       }
 
       const imgData = new ImageData(rgbaData, tileW, tileH);
-      let bitmap = imgData;
+      let bitmap = null;
       if (typeof createImageBitmap === 'function') {
         try {
           bitmap = await createImageBitmap(imgData);
-        } catch (_) {
-          bitmap = imgData;
+        } catch (e) {
+          console.warn('[inkwell/tiles] createImageBitmap failed, falling back to canvas:', e);
+        }
+      }
+      if (!bitmap) {
+        const off = document.createElement('canvas');
+        off.width = tileW;
+        off.height = tileH;
+        const offCtx = off.getContext('2d');
+        if (offCtx) {
+          offCtx.putImageData(imgData, 0, 0);
+          bitmap = off;
         }
       }
       tileCache.set(key, bitmap);
