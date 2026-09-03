@@ -959,6 +959,12 @@ function attachPointerHandlers(wetCanvas) {
           }
         }
       } else if (tool === 'pen' || tool === 'highlighter') {
+        if (subEvt.buttons === 0) {
+          if (state.cur) {
+            penTool.onPenUp(subEvt, _viewport);
+          }
+          continue;
+        }
         penTool.onPenMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'eraser') {
         eraserTool.onEraserMove(subEvt, ptWorld, pane, _viewport);
@@ -1028,6 +1034,22 @@ function attachPointerHandlers(wetCanvas) {
     lassoTool.onLassoUp(e, _viewport);
     laserTool.clearLaser();
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  window.addEventListener('pointerup', e => {
+    if (state.cur) {
+      penTool.onPenUp(e, _viewport);
+    }
+    if (_panState.isDown) {
+      _panState.isDown = false;
+    }
+  });
+
+  window.addEventListener('pointercancel', () => {
+    if (state.cur) {
+      penTool.onPenCancel();
+    }
+    _panState.isDown = false;
   });
 }
 

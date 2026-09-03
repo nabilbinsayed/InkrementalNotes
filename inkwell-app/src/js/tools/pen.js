@@ -42,6 +42,10 @@ export function onPenDown(e, ptWorld, pane, viewport) {
 
 export function onPenMove(e, ptWorld, pane, viewport) {
   if (!state.cur) return;
+  if (e && e.buttons === 0) {
+    onPenUp(e, viewport);
+    return;
+  }
   consumeSample(e, ptWorld, pane, viewport);
 }
 
@@ -132,12 +136,28 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   wctx.translate(psx, psy);
   wctx.scale(z, z);
 
-  const prev = state.cur.points.length > 1 ? state.cur.points[state.cur.points.length - 2] : null;
-
   if (isHighlighter) {
+    compositor.clearWet();
+    wctx.save();
+    compositor.clipToPane(wctx, pane);
+    wctx.translate(psx, psy);
+    wctx.scale(z, z);
     wctx.globalCompositeOperation = 'multiply';
     wctx.globalAlpha = 0.42;
+    wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
+    wctx.beginPath();
+    if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {
+      window.Ink.traceRibbonContour(wctx, state.cur.points, baseW);
+    } else if (!prev) {
+      wctx.arc(px, py, baseW / 2, 0, Math.PI * 2);
+    }
+    wctx.fill();
+    wctx.restore();
+    return;
   }
+
+  const prev = state.cur.points.length > 1 ? state.cur.points[state.cur.points.length - 2] : null;
+
   wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
 
   if (window.Ink && typeof window.Ink.drawSegment === 'function') {
