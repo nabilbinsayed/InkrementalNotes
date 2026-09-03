@@ -190,6 +190,27 @@ function registerCoreCommands() {
     },
   });
 
+  reg.register({
+    id: 'file.exportPdf',
+    title: 'Export As New Copy...',
+    category: 'File',
+    shortcut: 'Ctrl+Shift+S',
+    execute: async () => {
+      try {
+        state.isSaving = true;
+        toolbar.updateSaveStatusUI('saving');
+        await ipc.savePdf(null, state.strokes, state.images, state.textObjects);
+        toolbar.updateSaveStatusUI('saved');
+        toast.showToast('Document exported successfully', 'success');
+      } catch (e) {
+        const msg = friendlyError(e);
+        if (msg) toast.showToast('Export failed: ' + msg, 'error');
+      } finally {
+        state.isSaving = false;
+      }
+    },
+  });
+
   // Edit commands
   reg.register({
     id: 'edit.undo',
@@ -404,6 +425,24 @@ function registerCoreCommands() {
     category: 'General',
     shortcut: ['Ctrl+K', 'Ctrl+Shift+P'],
     execute: () => commandPalette.openCommandPalette(),
+  });
+
+  reg.register({
+    id: 'modal.preferences',
+    title: 'Preferences',
+    category: 'General',
+    shortcut: 'Ctrl+,',
+    execute: () => toolbar.openSettingsModal(),
+  });
+
+  reg.register({
+    id: 'modal.shortcuts',
+    title: 'Keyboard Shortcuts',
+    category: 'General',
+    shortcut: ['?', 'F1'],
+    execute: () => {
+      $('shortcutsModal') && $('shortcutsModal').classList.remove('hidden');
+    },
   });
 }
 
@@ -737,9 +776,12 @@ function bindAllUIEvents() {
       textTool.commitEditing();
     });
   }
-  $('btnTextDeleteBox') && $('btnTextDeleteBox').addEventListener('click', () => {
-    textTool.cancelEditing();
-  });
+
+  const tb = $('inlineTextToolbar');
+  if (tb) {
+    tb.addEventListener('mousedown', (e) => e.preventDefault());
+    tb.addEventListener('pointerdown', (e) => e.preventDefault());
+  }
 
   // Drag and Drop PDF
   window.addEventListener('dragover', e => e.preventDefault());
@@ -762,6 +804,9 @@ function bindAllUIEvents() {
       if (msg) toast.showToast('Failed to open dropped PDF: ' + msg, 'error');
     }
   });
+
+  // Modal focus trapping and backdrop dismissal
+  initModalFocusTrap();
 }
 
 function updateTextSelectionPopover() {
@@ -986,8 +1031,112 @@ function attachPointerHandlers(wetCanvas) {
   });
 }
 
+function getFocusableElements(container) {
+  if (!container) return [];
+  const selector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return Array.from(container.querySelectorAll(selector)).filter(el => {
+    return el.offsetParent !== null || el.getClientRects().length > 0;
+  });
+}
+
+function initModalFocusTrap() {
+  const modalIds = [
+    'exportModal',
+    'settingsModal',
+    'shortcutsModal',
+    'goToPageModal',
+    'insertPageModal',
+    'confirmCloseModal',
+  ];
+
+  modalIds.forEach(id => {
+    const modal = $(id);
+    if (!modal) return;
+
+    // Backdrop click listener closes dialog
+    modal.addEventListener('click', e => {
+      if (e.target === modal) {
+        modal.classList.add('hidden');
+      }
+    });
+
+    // Tab key trapping within modal container
+    modal.addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const focusables = getFocusableElements(modal);
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first || !modal.contains(document.activeElement)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last || !modal.contains(document.activeElement)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    });
+
+    // Set initial focus when modal opens
+    if (typeof MutationObserver !== 'undefined') {
+      const observer = new MutationObserver(mutations => {
+        for (const m of mutations) {
+          if (m.type === 'attributes' && m.attributeName === 'class') {
+            if (!modal.classList.contains('hidden')) {
+              setTimeout(() => {
+                if (!modal.classList.contains('hidden') && !modal.contains(document.activeElement)) {
+                  const auto = modal.querySelector('[autofocus]');
+                  if (auto && typeof auto.focus === 'function') {
+                    auto.focus();
+                  } else {
+                    const focusables = getFocusableElements(modal);
+                    if (focusables.length > 0) focusables[0].focus();
+                  }
+                }
+              }, 10);
+            }
+          }
+        }
+      });
+      observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
+    }
+  });
+}
+
 function attachKeyboardShortcuts() {
   window.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      const openModals = [
+        'exportModal',
+        'settingsModal',
+        'shortcutsModal',
+        'goToPageModal',
+        'insertPageModal',
+        'confirmCloseModal',
+      ];
+      for (const id of openModals) {
+        const el = $(id);
+        if (el && !el.classList.contains('hidden')) {
+          el.classList.add('hidden');
+          e.preventDefault();
+          return;
+        }
+      }
+      const propPop = $('propPopover');
+      if (propPop && !propPop.classList.contains('hidden')) {
+        toolbar.hidePropPopover();
+        e.preventDefault();
+        return;
+      }
+    }
+
     const isTyping = document.activeElement && (
       document.activeElement.tagName === 'INPUT' ||
       document.activeElement.tagName === 'TEXTAREA' ||
@@ -995,17 +1144,16 @@ function attachKeyboardShortcuts() {
     );
     if (isTyping) return;
 
-    if (e.key === 'Escape') {
-      const insertModal = $('insertPageModal');
-      if (insertModal && !insertModal.classList.contains('hidden')) {
-        insertModal.classList.add('hidden');
-        return;
-      }
-      const propPop = $('propPopover');
-      if (propPop && !propPop.classList.contains('hidden')) {
-        toolbar.hidePropPopover();
-        return;
-      }
+    if ((e.ctrlKey || e.metaKey) && e.key === ',') {
+      e.preventDefault();
+      toolbar.openSettingsModal();
+      return;
+    }
+
+    if (e.key === '?' || e.key === 'F1') {
+      e.preventDefault();
+      $('shortcutsModal') && $('shortcutsModal').classList.remove('hidden');
+      return;
     }
 
     if (e.key === ' ' || e.code === 'Space') {

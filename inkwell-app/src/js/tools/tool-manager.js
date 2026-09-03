@@ -201,12 +201,14 @@ export function handleSpaceKeyUp(e) {
   state.spaceDidPan = false;
 }
 
+let eDownTime = 0;
 export function handleSpringKeyDown(key) {
   if (state.springKey) return;
   if (key === 'e' || key === 'E') {
     state.springKey = 'e';
+    eDownTime = performance.now();
     state.prevTool = state.activeTool;
-    setTool('eraser', { isUserSwitch: false });
+    setTool('eraser', { isUserSwitch: true });
   }
 }
 
@@ -214,13 +216,18 @@ export function handleSpringKeyUp(key) {
   if (!state.springKey) return;
   if ((key === 'e' || key === 'E') && state.springKey === 'e') {
     state.springKey = null;
-    setTool(state.prevTool || 'pen', { isUserSwitch: false });
+    const duration = performance.now() - eDownTime;
+    // Only revert if held for longer than 350ms (momentary hold)
+    if (duration > 350) {
+      setTool(state.prevTool || 'pen', { isUserSwitch: false });
+    }
   }
 }
 
 export function cancelSpringKeys() {
   if (state.springKey) {
     state.springKey = null;
+    eDownTime = 0;
     setTool(state.prevTool || 'pen', { isUserSwitch: false });
   }
   if (state.isSpacePressed) {

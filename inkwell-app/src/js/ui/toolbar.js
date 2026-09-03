@@ -384,6 +384,36 @@ function bindModals() {
   $('btnCloseExportModal') && $('btnCloseExportModal').addEventListener('click', () => {
     $('exportModal') && $('exportModal').classList.add('hidden');
   });
+
+  const btnSave = $('btnExportIncremental');
+  if (btnSave) {
+    const triggerSave = () => {
+      $('exportModal')?.classList.add('hidden');
+      commandsModule.commands.execute('file.save');
+    };
+    btnSave.addEventListener('click', triggerSave);
+    btnSave.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        triggerSave();
+      }
+    });
+  }
+
+  const btnExportNew = $('btnExportFlattened');
+  if (btnExportNew) {
+    const triggerExport = () => {
+      $('exportModal')?.classList.add('hidden');
+      commandsModule.commands.execute('file.exportPdf');
+    };
+    btnExportNew.addEventListener('click', triggerExport);
+    btnExportNew.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        triggerExport();
+      }
+    });
+  }
 }
 
 export function openSettingsModal() {
@@ -398,8 +428,10 @@ export function switchSettingsTab(tabName) {
   document.querySelectorAll('.settings-nav-item').forEach(btn => {
     btn.classList.toggle('active', btn.getAttribute('data-tab') === tabName);
   });
-  document.querySelectorAll('.settings-panel').forEach(panel => {
-    panel.classList.toggle('hidden', panel.getAttribute('data-panel') !== tabName);
+  document.querySelectorAll('.settings-tab-panel').forEach(panel => {
+    const isMatch = panel.id === tabName || panel.getAttribute('data-panel') === tabName;
+    panel.classList.toggle('active', isMatch);
+    panel.classList.toggle('hidden', !isMatch);
   });
 }
 
