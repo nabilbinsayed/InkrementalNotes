@@ -503,7 +503,8 @@ pub async fn render_tile(
 
     let rw = (rect[2] - rect[0]).max(1.0);
     let rh = (rect[3] - rect[1]).max(1.0);
-    let scale = ((px as f64) / rw.max(rh)).min(16.0);
+    let tile_pt = 256.0_f64;
+    let scale = ((px as f64) / tile_pt).clamp(0.1, 4.0);
 
     // Get an atomic Arc clone under a short-lived lock (zero heap allocation)
     let arc_bytes = state
@@ -519,8 +520,8 @@ pub async fn render_tile(
             dim_guard.get(&page).copied().unwrap_or((595.0, 842.0))
         };
 
-        let target_w = ((page_w * scale).round().max(1.0) as i32).min(8192);
-        let target_h = ((page_h * scale).round().max(1.0) as i32).min(8192);
+        let target_w = ((page_w * scale).round().max(1.0) as i32).min(4096);
+        let target_h = ((page_h * scale).round().max(1.0) as i32).min(4096);
 
         let cached = {
             let mut cache_guard = state.page_bitmap_cache.lock().map_err(|e| format!("Lock error: {e}"))?;
@@ -543,8 +544,8 @@ pub async fn render_tile(
             let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
             let actual_w = page_obj.width().value as f64;
             let actual_h = page_obj.height().value as f64;
-            let target_w = ((actual_w * scale).round().max(1.0) as i32).min(8192);
-            let target_h = ((actual_h * scale).round().max(1.0) as i32).min(8192);
+            let target_w = ((actual_w * scale).round().max(1.0) as i32).min(4096);
+            let target_h = ((actual_h * scale).round().max(1.0) as i32).min(4096);
 
             let config = PdfRenderConfig::new()
                 .set_target_width(target_w)

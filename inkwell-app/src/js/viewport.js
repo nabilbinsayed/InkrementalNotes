@@ -192,10 +192,16 @@ class ViewportManager {
     const stageW = this.splitMode ? totalW / 2 : totalW;
     const docW = this.maxDocWidth * z;
     const hMargin = Math.max(80, stageW * 0.15);
+    const offsetLeft = isRight ? stageW : 0;
 
-    // Allow panning up to hMargin past either edge of the document
-    const maxPanX = hMargin;
-    const minPanX = stageW - docW - hMargin;
+    if (docW + 2 * hMargin <= stageW) {
+      // Document fits horizontally with margin: clamp around centered position
+      const centerX = offsetLeft + (stageW - docW) / 2;
+      return Math.max(centerX - hMargin, Math.min(centerX + hMargin, x));
+    }
+
+    const minPanX = offsetLeft + stageW - docW - hMargin;
+    const maxPanX = offsetLeft + hMargin;
     return Math.max(minPanX, Math.min(maxPanX, x));
   }
 
@@ -336,6 +342,7 @@ class ViewportManager {
   }
 
   attachListeners(element) {
+    this.element = element;
     this.stageElement = element;
     this.updateStageRect();
     window.addEventListener('resize', () => this.updateStageRect());

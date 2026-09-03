@@ -118,9 +118,12 @@ export function resize() {
 export function scheduleRedrawTiles() {
   if (_redrawTilesPending) return;
   _redrawTilesPending = true;
-  requestAnimationFrame(() => {
-    _redrawTilesPending = false;
-    redrawTiles();
+  requestAnimationFrame(async () => {
+    try {
+      await redrawTiles();
+    } finally {
+      _redrawTilesPending = false;
+    }
   });
 }
 
@@ -142,6 +145,9 @@ export async function redrawTiles() {
         const pi = state.pageInfos[pl.sheet];
         return pi ? tiles.redrawTilesForPage(_tctx, pane, pi, pl, _viewport, state.dpr, bounds, clipToPane) : Promise.resolve();
       }));
+      if (drawEpoch !== _redrawTilesEpoch) {
+        return; // Stale render superseded by a newer draw request; drop
+      }
     }
   }
 
