@@ -1386,8 +1386,23 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }, true);
 
-  // Auto-initialize a blank note on startup if no document is loaded
-  if (!state.currentDocPath && (!state.pageInfos || state.pageInfos.length === 0)) {
-    createNewWhiteboard();
-  }
+  // Check for initial file passed via CLI argument
+  (async () => {
+    try {
+      const initFile = await ipc.invokeTauri('get_initial_file');
+      if (initFile) {
+        console.log('[inkwell] Opening initial file from CLI:', initFile);
+        const r = await ipc.openPdf(initFile);
+        const title = initFile.split('\\').pop().split('/').pop();
+        handlePdfLoadResult(title, initFile, r);
+        return;
+      }
+    } catch (e) {
+      console.warn('[inkwell] Failed to check initial file:', e);
+    }
+    // Auto-initialize a blank note on startup if no document is loaded
+    if (!state.currentDocPath && (!state.pageInfos || state.pageInfos.length === 0)) {
+      createNewWhiteboard();
+    }
+  })();
 });

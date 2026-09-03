@@ -1560,6 +1560,16 @@ pub async fn set_document_dirty(dirty: bool, state: State<'_, AppState>) -> Resu
     Ok(())
 }
 
+#[tauri::command]
+pub fn log_frontend(msg: String) {
+    eprintln!("[frontend] {msg}");
+}
+
+#[tauri::command]
+pub fn get_initial_file() -> Option<String> {
+    std::env::args().nth(1).filter(|p| !p.starts_with('-'))
+}
+
 
 
 

@@ -108,6 +108,8 @@ fn main() {
             commands::start_stylus_stream,
             commands::force_close_window,
             commands::set_document_dirty,
+            commands::log_frontend,
+            commands::get_initial_file,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

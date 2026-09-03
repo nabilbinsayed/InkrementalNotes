@@ -287,6 +287,11 @@ impl PdfFile {
         // appearance content: one fill per stroke
         let mut content = Vec::new();
         let mut needs_multiply = false;
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
         for s in strokes {
             let simplified_stroke;
             let s_ref = if s.samples.len() > 3 {
@@ -313,21 +318,45 @@ impl PdfFile {
                 }
                 ToolKind::Pen => "/GSn",
             };
+
             let _ = write!(
                 content,
                 "q\n{gs} gs\n{:.3} {:.3} {:.3} rg\n",
                 s_ref.rgb[0], s_ref.rgb[1], s_ref.rgb[2]
             );
-            // Transform y_canvas -> y_pdf = ury - y_canvas, x_canvas -> x_pdf = llx + x_canvas
+
+            // PDF user space: origin is bottom-left, y grows up.
+            // Canvas space: origin is top-left, y grows down.
+            // Map: x_pdf = llx + x_canvas, y_pdf = ury - y_canvas.
             for cmd in &path {
                 match cmd {
                     PathCmd::MoveTo(p) => {
-                        let _ = writeln!(content, "{} {} m", fmt_coord(llx + p.0), fmt_coord(ury - p.1));
+                        let xp = llx + p.0;
+                        let yp = ury - p.1;
+                        min_x = min_x.min(xp);
+                        max_x = max_x.max(xp);
+                        min_y = min_y.min(yp);
+                        max_y = max_y.max(yp);
+                        let _ = writeln!(content, "{} {} m", fmt_coord(xp), fmt_coord(yp));
                     }
                     PathCmd::LineTo(p) => {
-                        let _ = writeln!(content, "{} {} l", fmt_coord(llx + p.0), fmt_coord(ury - p.1));
+                        let xp = llx + p.0;
+                        let yp = ury - p.1;
+                        min_x = min_x.min(xp);
+                        max_x = max_x.max(xp);
+                        min_y = min_y.min(yp);
+                        max_y = max_y.max(yp);
+                        let _ = writeln!(content, "{} {} l", fmt_coord(xp), fmt_coord(yp));
                     }
                     PathCmd::CurveTo(c) => {
+                        for pt in c {
+                            let xp = llx + pt.0;
+                            let yp = ury - pt.1;
+                            min_x = min_x.min(xp);
+                            max_x = max_x.max(xp);
+                            min_y = min_y.min(yp);
+                            max_y = max_y.max(yp);
+                        }
                         let _ = writeln!(
                             content,
                             "{} {} {} {} {} {} c",
@@ -336,19 +365,31 @@ impl PdfFile {
                             fmt_coord(llx + c[1].0),
                             fmt_coord(ury - c[1].1),
                             fmt_coord(llx + c[2].0),
-                            fmt_coord(ury - c[2].1)
+                            fmt_coord(ury - c[2].1),
                         );
                     }
                     PathCmd::Close => {
-                        let _ = writeln!(content, "h");
+                        let _ = writeln!(content, "h f Q");
                     }
                 }
             }
-            let _ = write!(content, "f\nQ\n");
         }
+
         if content.is_empty() {
             return None;
         }
+
+        let annot_rect = if min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite() {
+            let pad = 1.0;
+            [
+                (min_x - pad).max(llx),
+                (min_y - pad).max(lly),
+                (max_x + pad).min(urx),
+                (max_y + pad).min(ury),
+            ]
+        } else {
+            page_rect
+        };
 
         let mut gstates = String::from("/GSn << /Type /ExtGState /BM /Normal /ca 1 >>");
         if needs_multiply {
@@ -357,7 +398,7 @@ impl PdfFile {
         let ap = self.add_stream(
             &format!(
                 "/Type /XObject /Subtype /Form /BBox [{}] /Resources << /ExtGState << {gstates} >> >>",
-                fmt_rect(&page_rect)
+                fmt_rect(&annot_rect)
             ),
             &content,
             true,
@@ -393,7 +434,7 @@ impl PdfFile {
                  /InkList [{inklist}] /C [{:.3} {:.3} {:.3}] \
                  /BS << /W {:.2} /S /S >> /T (Inkwell) /NM ({}) \
                  /AP << /N {ap} 0 R >> /Inkw_Sid ({}) /Inkw_N {} >>",
-                fmt_rect(&page_rect),
+                fmt_rect(&annot_rect),
                 head.rgb[0],
                 head.rgb[1],
                 head.rgb[2],

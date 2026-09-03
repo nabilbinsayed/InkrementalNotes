@@ -6,6 +6,35 @@
 <title>Inkwell — PDF-Native Ink Annotator</title>
 <meta name="description" content="Pressure-sensitive PDF annotation with ink that lives inside the PDF. Free and open source.">
 <link rel="stylesheet" href="styles.css">
+<script>
+  (function() {
+    function sendLog(prefix, args) {
+      try {
+        const msg = prefix + ' ' + args.map(a => {
+          if (a instanceof Error) return a.stack || a.message;
+          if (typeof a === 'object') {
+            try { return JSON.stringify(a); } catch (_) { return String(a); }
+          }
+          return String(a);
+        }).join(' ');
+        if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {
+          window.__TAURI__.core.invoke('log_frontend', { msg }).catch(() => {});
+        } else if (window.__TAURI__ && window.__TAURI__.invoke) {
+          window.__TAURI__.invoke('log_frontend', { msg }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+    ['error', 'warn'].forEach(level => {
+      const orig = console[level];
+      console[level] = function(...args) {
+        orig.apply(console, args);
+        sendLog(`[${level.toUpperCase()}]`, args);
+      };
+    });
+    window.addEventListener('error', e => sendLog('[FATAL]', [e.message, e.filename + ':' + e.lineno]));
+    window.addEventListener('unhandledrejection', e => sendLog('[REJECTION]', [e.reason]));
+  })();
+</script>
 </head>
 <body>
 <input type="file" id="pdfFileInput" accept="application/pdf,.pdf" style="display:none;">
