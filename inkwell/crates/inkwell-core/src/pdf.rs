@@ -173,7 +173,9 @@ impl PdfFile {
 
                 if let Some(r) = box_ref {
                     if let Some(nums) = self.resolve_rectangle(r) {
-                        return nums;
+                        let (llx, urx) = if nums[0] <= nums[2] { (nums[0], nums[2]) } else { (nums[2], nums[0]) };
+                        let (lly, ury) = if nums[1] <= nums[3] { (nums[1], nums[3]) } else { (nums[3], nums[1]) };
+                        return [llx, lly, urx, ury];
                     }
                 }
 

@@ -1250,7 +1250,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   });
   on('selectionChanged', updateTextSelectionPopover);
-  on('documentChanged', () => {
+  on('documentChanged', evt => {
     toolbar.updateSaveStatusUI('dirty');
     if (state.autosaveDelayMs > 0 && state.currentDocPath && !state.isSaving) {
       if (state.autosaveTimer) clearTimeout(state.autosaveTimer);
@@ -1259,6 +1259,45 @@ window.addEventListener('DOMContentLoaded', async () => {
           commandsModule.commands.execute('file.save');
         }
       }, state.autosaveDelayMs);
+    }
+
+    if (!evt) return;
+    const type = evt.type;
+    const data = evt.payload || {};
+
+    if (type === 'undo_add_stroke') {
+      if (data.stroke && data.stroke.id) {
+        ipc.deleteStroke(data.stroke.id).catch(err => {
+          console.warn('[inkwell/main] undo_add_stroke deleteStroke error:', err);
+        });
+      }
+    } else if (type === 'undo_erase_strokes') {
+      if (Array.isArray(data.strokes)) {
+        for (const s of data.strokes) {
+          if (s) {
+            ipc.commitStroke(s.sheet, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id).catch(err => {
+              console.warn('[inkwell/main] undo_erase_strokes commitStroke error:', err);
+            });
+          }
+        }
+      }
+    } else if (type === 'redo_add_stroke') {
+      if (data.stroke) {
+        const s = data.stroke;
+        ipc.commitStroke(s.sheet, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id).catch(err => {
+          console.warn('[inkwell/main] redo_add_stroke commitStroke error:', err);
+        });
+      }
+    } else if (type === 'redo_erase_strokes') {
+      if (Array.isArray(data.strokes)) {
+        for (const s of data.strokes) {
+          if (s && s.id) {
+            ipc.deleteStroke(s.id).catch(err => {
+              console.warn('[inkwell/main] redo_erase_strokes deleteStroke error:', err);
+            });
+          }
+        }
+      }
     }
   });
 

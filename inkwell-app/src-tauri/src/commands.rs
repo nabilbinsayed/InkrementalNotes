@@ -537,11 +537,30 @@ pub async fn render_tile(
                  PDF tiles cannot be rendered.".to_string()
             })?;
 
-            let doc = pdfium
+            let mut doc = pdfium
                 .load_pdf_from_byte_slice(&arc_bytes, None)
                 .map_err(|e| format!("PDFium load error: {e:?}"))?;
 
-            let page_obj = doc.pages().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+            let mut page_obj = doc.pages_mut().get(page as i32).map_err(|e| format!("PDFium page error: {e:?}"))?;
+
+            // Filter out InkWell-authored annotations in-memory so they are not baked into
+            // the background bitmap tile (avoiding ghosting and preserving full interactive erasing/selection).
+            // Third-party annotations (from Okular, Acrobat, Drawboard, etc.) are preserved and rendered.
+            let annot_count = page_obj.annotations().len();
+            for i in (0..annot_count).rev() {
+                let is_inkwell = if let Ok(annot) = page_obj.annotations().get(i) {
+                    annot.creator().as_deref() == Some("Inkwell")
+                } else {
+                    false
+                };
+                if is_inkwell {
+                    let annots = page_obj.annotations_mut();
+                    if let Ok(annot) = annots.get(i) {
+                        let _ = annots.delete_annotation(annot);
+                    }
+                }
+            }
+
             let actual_w = page_obj.width().value as f64;
             let actual_h = page_obj.height().value as f64;
             let target_w = ((actual_w * scale).round().max(1.0) as i32).min(4096);
@@ -551,7 +570,7 @@ pub async fn render_tile(
                 .set_target_width(target_w)
                 .set_maximum_height(target_h)
                 .set_clear_color(PdfColor::WHITE)
-                .render_annotations(false);
+                .render_annotations(true);
 
             let bitmap = page_obj.render_with_config(&config).map_err(|e| {
                 format!("PDFium failed to render page {page}: {e:?}")
@@ -945,7 +964,28 @@ pub async fn save_pdf(
     drop(orig_guard);
     drop(doc_guard);
     *state.pdf_bytes.lock().unwrap() = Some(Arc::new(final_bytes));
+
+    let is_save_as = {
+        let current_path = state.pdf_path.lock().unwrap();
+        current_path.as_ref() != Some(&target_path)
+    };
     *state.pdf_path.lock().unwrap() = Some(target_path.clone());
+
+    if is_save_as {
+        if let Some(old_tx) = state.wal.lock().unwrap().take() {
+            let _ = old_tx.send(WalOp::Close);
+        }
+        let wp = wal_path_for(&target_path);
+        match Wal::open(&wp) {
+            Ok(wal) => {
+                let tx = init_wal_worker(wal);
+                *state.wal.lock().unwrap() = Some(tx);
+            }
+            Err(e) => {
+                eprintln!("[inkwell] WAL init failed for Save As ({wp:?}): {e}");
+            }
+        }
+    }
 
     state.is_dirty.store(false, std::sync::atomic::Ordering::Relaxed);
 

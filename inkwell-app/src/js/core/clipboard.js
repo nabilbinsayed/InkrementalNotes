@@ -5,6 +5,7 @@
 
 import { state, emit } from './state.js';
 import * as documentOps from './document.js';
+import * as ipc from './ipc.js';
 
 let _clipboard = null;
 
@@ -75,6 +76,9 @@ export function pasteClipboard(activeSheet = 0, offset = 16) {
     clone.points.forEach(p => { p.x += offset; p.y += offset; });
     
     documentOps.addStroke(clone, { recordHistory: false });
+    ipc.commitStroke(clone.sheet, clone.kind || clone.tool || 'pen', clone.rgb, clone.base_width || clone.baseWidth || 1.6, clone.points, clone.id).catch(err => {
+      console.warn('[inkwell/clipboard] commitStroke error:', err);
+    });
     newStrokes.push(clone);
   }
 

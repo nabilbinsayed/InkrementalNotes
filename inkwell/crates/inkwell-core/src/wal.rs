@@ -19,6 +19,9 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static COUNTER: AtomicU64 = AtomicU64::new(0);
 
 use crate::codec;
 use crate::ink::Stroke;
@@ -355,16 +358,23 @@ impl FlushPolicy {
 /// people lose a semester of notes.
 pub fn atomic_write(target: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let nonce = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
     let tmp = dir.join(format!(
-        ".{}.inkwell-tmp",
-        target.file_name().and_then(|s| s.to_str()).unwrap_or("doc")
+        ".{}.inkwell-tmp-{}-{}",
+        target.file_name().unwrap().to_string_lossy(),
+        pid,
+        nonce
     ));
     {
         let mut f = File::create(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, target)?;
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     // fsync the directory so the rename itself is durable
     if let Ok(d) = File::open(dir) {
         let _ = d.sync_all();
