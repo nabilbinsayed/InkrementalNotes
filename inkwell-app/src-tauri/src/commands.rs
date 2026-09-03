@@ -503,8 +503,7 @@ pub async fn render_tile(
 
     let rw = (rect[2] - rect[0]).max(1.0);
     let rh = (rect[3] - rect[1]).max(1.0);
-    let tile_pt = 256.0_f64;
-    let scale = ((px as f64) / tile_pt).clamp(0.1, 4.0);
+    let scale = (px as f64) / rw.max(rh);
 
     // Get an atomic Arc clone under a short-lived lock (zero heap allocation)
     let arc_bytes = state

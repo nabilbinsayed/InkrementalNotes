@@ -231,9 +231,9 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
     const ha = Math.max(0.05, wa / 2), hb = Math.max(0.05, wb / 2);
     target.moveTo(a.x + nx * ha, a.y + ny * ha);
     target.lineTo(b.x + nx * hb, b.y + ny * hb);
-    target.arc(b.x, b.y, hb, Math.atan2(ny, nx), Math.atan2(-ny, -nx), false);
+    target.arc(b.x, b.y, hb, Math.atan2(ny, nx), Math.atan2(-ny, -nx), true);
     target.lineTo(a.x - nx * ha, a.y - ny * ha);
-    target.arc(a.x, a.y, ha, Math.atan2(-ny, -nx), Math.atan2(ny, nx), false);
+    target.arc(a.x, a.y, ha, Math.atan2(-ny, -nx), Math.atan2(ny, nx), true);
     target.closePath();
     return;
   }
@@ -241,6 +241,9 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   const pts = chaikinSubdivide(rawPts, 2);
   const n = pts.length;
   if (n < 2) return;
+
+  // Check if stroke is a closed loop (e.g. geometric rectangle or ellipse)
+  const isClosed = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 2.0;
 
   const left = [];
   const right = [];
@@ -256,6 +259,30 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
     right.push({ x: pts[i].x - nx * h, y: pts[i].y - ny * h });
   }
 
+  if (isClosed) {
+    // Outer loop (left boundary)
+    target.moveTo(left[0].x, left[0].y);
+    for (let i = 1; i < n; i++) {
+      const mx = (left[i - 1].x + left[i].x) / 2;
+      const my = (left[i - 1].y + left[i].y) / 2;
+      target.quadraticCurveTo(left[i - 1].x, left[i - 1].y, mx, my);
+    }
+    target.lineTo(left[0].x, left[0].y);
+    target.closePath();
+
+    // Inner loop (right boundary in reverse)
+    target.moveTo(right[0].x, right[0].y);
+    for (let i = n - 1; i >= 0; i--) {
+      const prev = right[(i + 1) % n];
+      const mx = (prev.x + right[i].x) / 2;
+      const my = (prev.y + right[i].y) / 2;
+      target.quadraticCurveTo(prev.x, prev.y, mx, my);
+    }
+    target.lineTo(right[0].x, right[0].y);
+    target.closePath();
+    return;
+  }
+
   target.moveTo(left[0].x, left[0].y);
   for (let i = 1; i < n; i++) {
     const mx = (left[i - 1].x + left[i].x) / 2;
@@ -264,13 +291,13 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   }
   target.lineTo(left[n - 1].x, left[n - 1].y);
 
-  // End cap: round cap from left to right edge
+  // End cap: round cap bulging OUTWARDS from left to right edge
   const lastPt = pts[n - 1];
   const lastW = (lastPt.w !== undefined && !isNaN(lastPt.w)) ? lastPt.w : baseWidth;
   const endR = Math.max(0.05, lastW / 2);
   const aLeftEnd = Math.atan2(left[n - 1].y - lastPt.y, left[n - 1].x - lastPt.x);
   const aRightEnd = Math.atan2(right[n - 1].y - lastPt.y, right[n - 1].x - lastPt.x);
-  target.arc(lastPt.x, lastPt.y, endR, aLeftEnd, aRightEnd, false);
+  target.arc(lastPt.x, lastPt.y, endR, aLeftEnd, aRightEnd, true);
 
   // Right edge in reverse
   for (let i = n - 1; i > 0; i--) {
@@ -280,13 +307,13 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   }
   target.lineTo(right[0].x, right[0].y);
 
-  // Start cap: round cap from right to left edge
+  // Start cap: round cap bulging OUTWARDS from right to left edge
   const firstPt = pts[0];
   const firstW = (firstPt.w !== undefined && !isNaN(firstPt.w)) ? firstPt.w : baseWidth;
   const startR = Math.max(0.05, firstW / 2);
   const aRightStart = Math.atan2(right[0].y - firstPt.y, right[0].x - firstPt.x);
   const aLeftStart = Math.atan2(left[0].y - firstPt.y, left[0].x - firstPt.x);
-  target.arc(firstPt.x, firstPt.y, startR, aRightStart, aLeftStart, false);
+  target.arc(firstPt.x, firstPt.y, startR, aRightStart, aLeftStart, true);
 
   target.closePath();
 }
@@ -296,12 +323,8 @@ function getPath2D(stroke) {
   const rawPts = stroke.points || stroke._pts;
   if (!rawPts || !rawPts.length) return null;
 
-  if (stroke.kind === 'highlighter') {
-    return getChiselPath2D(rawPts, stroke.base_width || stroke.baseWidth || 16.0);
-  }
-
   const path = new Path2D();
-  const baseW = stroke.base_width || stroke.baseWidth || 2.0;
+  const baseW = stroke.base_width || stroke.baseWidth || (stroke.kind === 'highlighter' ? 16.0 : 2.0);
   traceRibbonContour(path, rawPts, baseW);
   return path;
 }
@@ -481,14 +504,7 @@ function drawStroke(ctx, stroke) {
     return;
   }
 
-  if (isHighlighter) {
-    const p2d = getChiselPath2D(rawPts, stroke.base_width || stroke.baseWidth || 16.0);
-    if (p2d) ctx.fill(p2d);
-    ctx.restore();
-    return;
-  }
-
-  const baseW = stroke.base_width || stroke.baseWidth || 2.0;
+  const baseW = stroke.base_width || stroke.baseWidth || (isHighlighter ? 16.0 : 2.0);
   ctx.beginPath();
   traceRibbonContour(ctx, rawPts, baseW);
   ctx.fill();

@@ -69,6 +69,23 @@ export function updateToolbarUI() {
     if (btn) btn.classList.toggle('active', tool === activeTool);
   });
 
+  const shapesBtn = $('btnDockShapes');
+  if (shapesBtn) {
+    const iconSvg = shapesBtn.querySelector('.dock-icon');
+    if (iconSvg) {
+      if (activeTool === 'ellipse' || state.shapeKind === 'ellipse') {
+        iconSvg.innerHTML = '<circle cx="12" cy="12" r="8"/>';
+        shapesBtn.title = 'Shape: Ellipse (U)';
+      } else if (activeTool === 'ruler' || state.shapeKind === 'line') {
+        iconSvg.innerHTML = '<line x1="4" y1="20" x2="20" y2="4"/><line x1="8" y1="14" x2="10" y2="16"/><line x1="11" y1="11" x2="13" y2="13"/><line x1="14" y1="8" x2="16" y2="10"/>';
+        shapesBtn.title = 'Shape: Ruler Line (U)';
+      } else {
+        iconSvg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+        shapesBtn.title = 'Shape: Rectangle (U)';
+      }
+    }
+  }
+
   updateSaveStatusUI(state.isSaving ? 'saving' : (state.isDirty ? 'dirty' : 'saved'));
 }
 
