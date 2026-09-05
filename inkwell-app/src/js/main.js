@@ -688,7 +688,7 @@ function bindAllUIEvents() {
       documentOps.insertPageAtIndex(targetIndex, newPageInfo);
       if (_viewport) _viewport.updateDocumentLayout(state.pageInfos);
       navigation.goToPage(targetIndex, 'left', _viewport);
-      navigation.renderThumbnails(_viewport);
+      drawers.renderThumbnails();
       compositor.redrawAll();
 
       const templateName = $('insertTemplateSelect') && $('insertTemplateSelect').selectedOptions[0]

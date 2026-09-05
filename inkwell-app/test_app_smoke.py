@@ -8,7 +8,7 @@ Consolidated verification suite for all interaction, ergonomics, and accessibili
 - T6: Radial Tool Menu (.radial-item query selector & tool switching)
 - T7: Command Palette (Ctrl+K opening, ArrowDown/ArrowUp navigation, Escape dismissal)
 - T8: Touch Target & Accessibility Ergonomics (>=44x44px hit expansion, :focus-visible, toasts ARIA)
-- T9: Navigation Rail & Drawer Panels (Thumbnails, Outline, Search, DocInfo)
+- T9: Navigation Rail & Drawer Panels (Thumbnails, Outline, Search, DocInfo, Page Insertion)
 - T10: Synthetic Pen Input Pipeline (CDP mouse/pen input, state commit, dry canvas composite)
 - T11: Zoom Controls & Percentage Readout
 - T12: Console Hygiene (0 errors, 0 internal warnings)
@@ -136,6 +136,7 @@ with sync_playwright() as pw:
       search_pdf: async (args) => [],
       render_raster: async () => new Array(64 * 64 * 4).fill(255),
       get_document_outline: async () => [],
+      insert_blank_page: async (args) => true,
       wal_flush: async () => true,
     };
     window.__TAURI_INTERNALS__ = {
@@ -510,6 +511,32 @@ with sync_playwright() as pw:
             btn.click(force=True)
             pg.wait_for_timeout(60)
     check("drawers toggle cleanly without exceptions", not errors, str(errors[:2]))
+
+    # Page Insertion Modal & Thumbnail Synchronization
+    pg.locator("#btnRailThumbnails").click(force=True)
+    pg.wait_for_timeout(60)
+    initial_pages = pg.evaluate("window.state.pageInfos ? window.state.pageInfos.length : 0")
+    initial_thumbs = pg.locator("#thumbnailGrid .thumb-card").count()
+    check("initial thumbnail cards match page count", initial_thumbs == initial_pages,
+          f"pages={initial_pages} thumbs={initial_thumbs}")
+
+    pg.locator("#btnHeaderAddPage").click(force=True)
+    pg.wait_for_timeout(60)
+    check("insert page modal opens", pg.evaluate("!document.getElementById('insertPageModal').classList.contains('hidden')"))
+    pg.locator("#btnConfirmInsertPage").click(force=True)
+    pg.wait_for_timeout(300)
+
+    updated_pages = pg.evaluate("window.state.pageInfos ? window.state.pageInfos.length : 0")
+    updated_thumbs = pg.locator("#thumbnailGrid .thumb-card").count()
+    insert_error = any("Failed to insert page" in t for t in pg.locator(".toast-error").all_text_contents())
+
+    check("page insertion increments state.pageInfos length",
+          updated_pages == initial_pages + 1,
+          f"before={initial_pages} after={updated_pages}")
+    check("thumbnailGrid contains updated card count without TypeError",
+          updated_thumbs == updated_pages and not insert_error,
+          f"thumbs={updated_thumbs} pages={updated_pages} insertError={insert_error}")
+    check("page insertion runs with zero console errors", not errors, str(errors[:2]))
 
     # -------------------------------------------------------------
     # T10: Synthetic Pen Input Pipeline
