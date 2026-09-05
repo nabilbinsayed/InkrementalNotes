@@ -1118,6 +1118,9 @@ pub async fn insert_blank_page(
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+    if let Ok(mut dims) = state.page_dimensions.lock() {
+        dims.clear();
+    }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageInserted {
@@ -1372,6 +1375,9 @@ pub async fn delete_page(
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+    if let Ok(mut dims) = state.page_dimensions.lock() {
+        dims.clear();
+    }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageDeleted { index }));
@@ -1419,6 +1425,9 @@ pub async fn duplicate_page(
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+    if let Ok(mut dims) = state.page_dimensions.lock() {
+        dims.clear();
+    }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageInserted {
@@ -1471,6 +1480,9 @@ pub async fn rotate_page(
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+    if let Ok(mut dims) = state.page_dimensions.lock() {
+        dims.clear();
+    }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageRotated { index, clockwise }));
@@ -1525,6 +1537,9 @@ pub async fn reorder_page(
     }
 
     state.page_bitmap_cache.lock().unwrap().clear();
+    if let Ok(mut dims) = state.page_dimensions.lock() {
+        dims.clear();
+    }
 
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         let _ = tx.send(WalOp::Append(WalEntry::PageReordered { from_index, to_index }));
