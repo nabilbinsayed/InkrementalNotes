@@ -12,7 +12,8 @@ Consolidated verification suite for all interaction, ergonomics, and accessibili
 - T10: Synthetic Pen Input Pipeline (CDP mouse/pen input, state commit, dry canvas composite)
 - T11: Zoom Controls & Percentage Readout
 - T12: WAL Undo/Redo IPC Synchronization (Image, Text & Batch Mutations)
-- T13: Console Hygiene (0 errors, 0 internal warnings)
+- T13: Document Text Layer Isolation & Page Shift Cache
+- T14: Console Hygiene (0 errors, 0 internal warnings)
 """
 import math, pathlib, sys, time
 from playwright.sync_api import sync_playwright
@@ -769,9 +770,87 @@ with sync_playwright() as pw:
           f"img={tr_redo_img} txt={tr_redo_txt}")
 
     # -------------------------------------------------------------
-    # T13: Console Hygiene
+    # T13: Document Text Layer Isolation & Page Shift Cache
     # -------------------------------------------------------------
-    print("\n=== T13 Console Hygiene ===", flush=True)
+    print("\n=== T13 Document Text Layer Isolation & Page Shift Cache ===", flush=True)
+    # 1. Page text cache shifting on page insertion
+    pg.evaluate("""(() => {
+        window.state.pageTextData = {
+            0: { page_index: 0, text: 'Page 0 text' },
+            1: { page_index: 1, text: 'Page 1 text' }
+        };
+        window.state.pageTextSpans = {
+            0: [{ text: 'Page 0 span', rect: [0, 0, 10, 10], page_index: 0 }],
+            1: [{ text: 'Page 1 span', rect: [0, 0, 10, 10], page_index: 1 }]
+        };
+        window.documentOps.insertPageAtIndex(0, { page_index: 0, width_pt: 612, height_pt: 792 });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    shift_ok = pg.evaluate("""(() => {
+        const d0 = window.state.pageTextData[0];
+        const d1 = window.state.pageTextData[1];
+        const d2 = window.state.pageTextData[2];
+        const s0 = window.state.pageTextSpans[0];
+        const s1 = window.state.pageTextSpans[1];
+        const s2 = window.state.pageTextSpans[2];
+        return d0 === undefined && d1?.text === 'Page 0 text' && d2?.text === 'Page 1 text' &&
+               s0 === undefined && s1?.[0]?.text === 'Page 0 span' && s2?.[0]?.text === 'Page 1 span';
+    })()""")
+    check("inserting a page at index 0 shifts pageTextData and pageTextSpans", shift_ok)
+
+    # 2. Text layer, selection, and search isolation on setDocument
+    pg.evaluate("""(() => {
+        window.state.pageTextData = { 0: { page_index: 0, text: 'Old doc text' } };
+        window.state.pageTextSpans = { 0: [{ text: 'Old doc span' }] };
+        window.state.pageTextLoading = { 0: Promise.resolve() };
+        window.state.selectedTextSpans = [{ text: 'Old span' }];
+        window.state.selectedTextString = 'Old span';
+        window.state.textSelection = { sheet: 0, startCharIdx: 0, endCharIdx: 8, text: 'Old span' };
+        window.state.textSelectAnchor = { sheet: 0, charIndex: 0 };
+        window.state.textSelectPending = { sheet: 0 };
+        window.state.isSelectingText = true;
+        window.state.searchQuery = 'search term';
+        window.state.searchResults = [{ sheet: 0, rects: [] }];
+        window.state.activeSearchMatch = 1;
+        window.state.isSearching = true;
+
+        window.documentOps.setDocument({
+            pageInfos: [{ page_index: 0, width_pt: 612, height_pt: 792 }],
+            strokes: []
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    doc_reset_res = pg.evaluate("""(() => {
+        return {
+            textDataEmpty: Object.keys(window.state.pageTextData || {}).length === 0,
+            textSpansEmpty: Object.keys(window.state.pageTextSpans || {}).length === 0,
+            textLoadingEmpty: Object.keys(window.state.pageTextLoading || {}).length === 0,
+            selSpansEmpty: (window.state.selectedTextSpans || []).length === 0,
+            selStringEmpty: window.state.selectedTextString === '',
+            textSelNull: window.state.textSelection === null,
+            textAnchorNull: window.state.textSelectAnchor === null,
+            textPendingNull: window.state.textSelectPending === null,
+            isSelectingFalse: window.state.isSelectingText === false,
+            searchQueryEmpty: window.state.searchQuery === '',
+            searchResultsEmpty: (window.state.searchResults || []).length === 0,
+            activeSearchZero: window.state.activeSearchMatch === 0,
+            isSearchingFalse: window.state.isSearching === false,
+        };
+    })()""")
+    check("setDocument clears pageTextData and pageTextSpans cache",
+          doc_reset_res["textDataEmpty"] and doc_reset_res["textSpansEmpty"] and doc_reset_res["textLoadingEmpty"],
+          f"data={doc_reset_res}")
+    check("setDocument clears textSelection and selection state",
+          doc_reset_res["textSelNull"] and doc_reset_res["selStringEmpty"] and doc_reset_res["selSpansEmpty"] and doc_reset_res["isSelectingFalse"])
+    check("setDocument clears searchResults and search query",
+          doc_reset_res["searchResultsEmpty"] and doc_reset_res["searchQueryEmpty"] and doc_reset_res["isSearchingFalse"] and doc_reset_res["activeSearchZero"])
+
+    # -------------------------------------------------------------
+    # T14: Console Hygiene
+    # -------------------------------------------------------------
+    print("\n=== T14 Console Hygiene ===", flush=True)
     check("zero console errors throughout session", not errors, str(errors[:3]))
     inkwell_warnings = [w for w in warnings if "[inkwell/" in w]
     check("zero internal inkwell warnings", not inkwell_warnings, str(inkwell_warnings[:3]))

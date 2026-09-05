@@ -303,6 +303,21 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
   state.selectedTextObjects = [];
   state.isDirty = false;
 
+  // Clear PDF text layer caches, selection, and search state
+  state.pageTextData = {};
+  state.pageTextSpans = {};
+  state.pageTextLoading = {};
+  state.selectedTextSpans = [];
+  state.selectedTextString = '';
+  state.textSelection = null;
+  state.textSelectAnchor = null;
+  state.textSelectPending = null;
+  state.isSelectingText = false;
+  state.searchQuery = '';
+  state.searchResults = [];
+  state.activeSearchMatch = 0;
+  state.isSearching = false;
+
   rebuildStrokesBySheet();
   history.clearHistory();
   emit('documentLoaded', { pageInfos, strokesCount: strokes.length });
@@ -322,6 +337,27 @@ export function insertPageAtIndex(targetIndex, pageInfo) {
   }
   for (const t of state.textObjects || []) {
     if (t.sheet >= insertIdx) t.sheet += 1;
+  }
+
+  // Shift cached page text data for indices >= insertIdx
+  if (state.pageTextData && Object.keys(state.pageTextData).length > 0) {
+    const newPageTextData = {};
+    const newPageTextSpans = {};
+    for (const key of Object.keys(state.pageTextData).map(Number).sort((a, b) => b - a)) {
+      if (key >= insertIdx) {
+        newPageTextData[key + 1] = state.pageTextData[key];
+        if (state.pageTextSpans && state.pageTextSpans[key]) {
+          newPageTextSpans[key + 1] = state.pageTextSpans[key];
+        }
+      } else {
+        newPageTextData[key] = state.pageTextData[key];
+        if (state.pageTextSpans && state.pageTextSpans[key]) {
+          newPageTextSpans[key] = state.pageTextSpans[key];
+        }
+      }
+    }
+    state.pageTextData = newPageTextData;
+    state.pageTextSpans = newPageTextSpans;
   }
 
   rebuildStrokesBySheet();
