@@ -365,6 +365,32 @@ with sync_playwright() as pw:
           word_expand_res["w0"] == "Hello" and word_expand_res["w1"] == "InkWell" and word_expand_res["w2"] == "Second",
           f"w0='{word_expand_res.get('w0')}', w1='{word_expand_res.get('w1')}', w2='{word_expand_res.get('w2')}'")
 
+    # T4.1: Escape key dismisses text selection and closes popover
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(50)
+    esc_cleared = pg.evaluate("!window.state.textSelection && !window.state.selectedTextString && document.getElementById('textSelectionPopover').classList.contains('hidden')")
+    check("Escape key dismisses text selection and closes popover", esc_cleared)
+
+    # T4.2: Single click without drag does not leave a single-character selection trapped
+    pg.mouse.move(screen_pt["x0"], screen_pt["y0"])
+    pg.mouse.click(screen_pt["x0"], screen_pt["y0"])
+    pg.wait_for_timeout(50)
+    click_not_trapped = pg.evaluate("!window.state.textSelection && document.getElementById('textSelectionPopover').classList.contains('hidden')")
+    check("single click deselects and does not leave trapped character selection", click_not_trapped)
+
+    # T4.3: Switching tools away from textSelect clears selection and hides popover
+    pg.mouse.move(screen_pt["x0"], screen_pt["y0"])
+    pg.mouse.down()
+    pg.mouse.move(screen_pt["x1"], screen_pt["y1"])
+    pg.mouse.up()
+    pg.wait_for_timeout(50)
+    pg.locator("#btnDockPen").click()
+    pg.wait_for_timeout(50)
+    tool_switch_cleared = pg.evaluate("window.state.activeTool === 'pen' && !window.state.textSelection && document.getElementById('textSelectionPopover').classList.contains('hidden')")
+    check("switching tool away from textSelect clears selection and hides popover", tool_switch_cleared)
+    pg.locator("#btnDockTextSelect").click()
+    pg.wait_for_timeout(50)
+
     # -------------------------------------------------------------
     # T5: Canvas Context Menu & Tool Triggering
     # -------------------------------------------------------------
@@ -650,6 +676,38 @@ with sync_playwright() as pw:
     check("horizontal pan remains bounded by clampPanX during off-center focal zooms",
           pan_clamping["zoomInOk"] and pan_clamping["zoomOutOk"] and pan_clamping["extremeOk"],
           f"results={pan_clamping}")
+
+    # Touchpad pinch zoom test (WheelEvent with ctrlKey=true, deltaMode=0)
+    pinch_res = pg.evaluate("""(() => {
+        const vp = window.getViewport();
+        const z0 = vp.zoom;
+        // Two-finger pinch out (zoom in): deltaY is negative, deltaMode is 0 (pixel)
+        window.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 600,
+            clientY: 400,
+            deltaY: -20,
+            deltaMode: 0,
+            ctrlKey: true
+        }));
+        const zIn = vp.zoom;
+        // Two-finger pinch in (zoom out): deltaY is positive, deltaMode is 0 (pixel)
+        window.dispatchEvent(new WheelEvent('wheel', {
+            bubbles: true,
+            cancelable: true,
+            clientX: 600,
+            clientY: 400,
+            deltaY: 20,
+            deltaMode: 0,
+            ctrlKey: true
+        }));
+        const zOut = vp.zoom;
+        return { z0, zIn, zOut, inGain: zIn / z0, outRatio: zOut / zIn };
+    })()""")
+    check("touchpad pinch zoom scales smoothly and reversibly",
+          pinch_res["zIn"] > pinch_res["z0"] and 1.15 <= pinch_res["inGain"] <= 1.50 and abs(pinch_res["zOut"] - pinch_res["z0"]) < 0.05,
+          f"z0={pinch_res['z0']:.3f}, zIn={pinch_res['zIn']:.3f}, zOut={pinch_res['zOut']:.3f}, gain={pinch_res['inGain']:.2f}")
 
     # -------------------------------------------------------------
     # T12: WAL Undo/Redo IPC Synchronization

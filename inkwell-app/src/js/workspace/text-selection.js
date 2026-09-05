@@ -146,7 +146,7 @@ export function mergeTextSpansIntoLines(spans) {
   return lines;
 }
 
-export function findCharAndOffsetAtPageCoord(sheet, px, py) {
+export function findCharAndOffsetAtPageCoord(sheet, px, py, { maxDist = Infinity } = {}) {
   const pageData = state.pageTextData ? state.pageTextData[sheet] : null;
   if (!pageData || !pageData.lines || !pageData.lines.length || !pageData.chars || !pageData.chars.length) {
     return null;
@@ -174,8 +174,8 @@ export function findCharAndOffsetAtPageCoord(sheet, px, py) {
     }
   }
 
-  if (!bestLine) {
-    return { charIndex: 0, lineIndex: 0, char: pageData.chars[0] };
+  if (!bestLine || (Number.isFinite(maxDist) && bestLineDist > maxDist)) {
+    return null;
   }
 
   const chars = bestLine.chars;
@@ -353,6 +353,11 @@ export function clearTextSelection() {
   state.selectedTextSpans = [];
   state.selectedTextString = '';
   state.isSelectingText = false;
+  if (typeof document !== 'undefined') {
+    const pop = document.getElementById('textSelectionPopover');
+    if (pop) pop.classList.add('hidden');
+  }
+  emit('textSelectionCleared', {});
   compositor.redrawAll();
 }
 

@@ -369,15 +369,17 @@ class ViewportManager {
         window.state.activePane = pane;
       }
 
+      // NOTE [UNSOLVED]: On Windows WebView2, precision touchpad pinch gestures are
+      // handled/intercepted by DirectManipulation at the webview host level and may not
+      // dispatch WheelEvent(ctrlKey) to the DOM. Kept here as fallback when delivered.
       // Chromium reports a precision-touchpad pinch as a Ctrl+wheel event;
       // Command covers the equivalent gesture on macOS.
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         // Continuous smooth exponential zoom for touchpad pinch & Ctrl+wheel.
-        let delta = -e.deltaY;
-        if (e.deltaMode === 1) delta *= 24; // lines mode
-        else if (e.deltaMode === 2) delta *= 300; // pages mode
-        const zoomFactor = Math.pow(1.0025, delta);
+        // e.deltaMode: 0 = pixel (precision touchpad pinch), 1 = line (mouse wheel), 2 = page
+        const scaleFactor = e.deltaMode === 1 ? 0.06 : (e.deltaMode === 2 ? 0.6 : 0.015);
+        const zoomFactor = Math.exp(-e.deltaY * scaleFactor);
         const curZoom = pane === 'right' ? this.rightZoom : this.zoom;
         const newZoom = Math.max(0.15, Math.min(10.0, curZoom * zoomFactor));
         this.setZoom(newZoom, [relX, relY], pane);
@@ -404,6 +406,60 @@ class ViewportManager {
     };
 
     window.addEventListener('wheel', onWheel, { passive: false });
+
+
+
+    // Safari / WebKit native trackpad pinch-to-zoom support
+
+    let gestureStartZoom = 1.0;
+
+    const onGestureStart = e => {
+
+      e.preventDefault();
+
+      if (!this.stageRect) this.updateStageRect();
+
+      const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+
+      const relX = e.clientX - stageRect.left;
+
+      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+
+      gestureStartZoom = pane === 'right' ? this.rightZoom : this.zoom;
+
+    };
+
+    const onGestureChange = e => {
+
+      e.preventDefault();
+
+      if (!this.stageRect) this.updateStageRect();
+
+      const stageRect = this.stageRect || { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+
+      const relX = e.clientX - stageRect.left;
+
+      const pane = (this.splitMode && relX > stageRect.width / 2) ? 'right' : 'left';
+
+      const newZoom = Math.max(0.15, Math.min(10.0, gestureStartZoom * (e.scale || 1.0)));
+
+      this.setZoom(newZoom, [relX, relY], pane);
+
+    };
+
+    const onGestureEnd = e => {
+
+      e.preventDefault();
+
+    };
+
+
+
+    window.addEventListener('gesturestart', onGestureStart, { passive: false });
+
+    window.addEventListener('gesturechange', onGestureChange, { passive: false });
+
+    window.addEventListener('gestureend', onGestureEnd, { passive: false });
 
     // ---- Multi-touch gesture handling via Pointer Events ----
     const onPointerDownGlobal = e => {

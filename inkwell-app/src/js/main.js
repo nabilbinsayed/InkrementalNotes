@@ -813,13 +813,41 @@ function updateTextSelectionPopover() {
   const pop = $('textSelectionPopover');
   if (!pop) return;
   const sel = state.textSelection;
-  if (sel && sel.text && sel.text.trim() && (state.activeTool === 'textSelect' || state.activeTool === 'textselect')) {
-    const anchorRect = sel.rects && sel.rects.length > 0 ? sel.rects[sel.rects.length - 1].rect : null;
-    if (anchorRect && _viewport) {
+  if (sel && sel.text && sel.text.trim() && (state.activeTool === 'textSelect' || state.activeTool === 'textselect') && sel.rects && sel.rects.length > 0) {
+    if (_viewport) {
       const pl = _viewport.getPageLayout(sel.sheet);
-      const [sx, sy] = _viewport.worldToScreen(pl.x + anchorRect[2], pl.y + anchorRect[3], 'left');
-      pop.style.left = Math.max(10, Math.min(sx, window.innerWidth - 220)) + 'px';
-      pop.style.top = (sy + 12) + 'px';
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const r of sel.rects) {
+        if (r.rect) {
+          if (r.rect[0] < minX) minX = r.rect[0];
+          if (r.rect[1] < minY) minY = r.rect[1];
+          if (r.rect[2] > maxX) maxX = r.rect[2];
+          if (r.rect[3] > maxY) maxY = r.rect[3];
+        }
+      }
+      if (!Number.isFinite(minX)) {
+        pop.classList.add('hidden');
+        return;
+      }
+      const midX = (minX + maxX) / 2;
+      const [sx, syTop] = _viewport.worldToScreen(pl.x + midX, pl.y + minY, 'left');
+      const [, syBottom] = _viewport.worldToScreen(pl.x + midX, pl.y + maxY, 'left');
+
+      if (syBottom < 30 || syTop > window.innerHeight - 30) {
+        pop.classList.add('hidden');
+        return;
+      }
+
+      const clampedX = Math.max(120, Math.min(window.innerWidth - 120, sx));
+      if (syTop > 110) {
+        pop.style.left = clampedX + 'px';
+        pop.style.top = (syTop - 10) + 'px';
+        pop.style.transform = 'translate(-50%, -100%)';
+      } else {
+        pop.style.left = clampedX + 'px';
+        pop.style.top = (syBottom + 10) + 'px';
+        pop.style.transform = 'translate(-50%, 0)';
+      }
     }
     pop.classList.remove('hidden');
   } else {
@@ -900,27 +928,41 @@ function attachPointerHandlers(wetCanvas) {
 
       const performHit = (data) => {
         if (!data) return;
-        const hit = textSelection.findCharAndOffsetAtPageCoord(pageCoord.sheet, pageCoord.px, pageCoord.py);
+        const hit = textSelection.findCharAndOffsetAtPageCoord(pageCoord.sheet, pageCoord.px, pageCoord.py, { maxDist: 80 });
         if (hit) {
           const prevAnchor = state.textSelectAnchor;
           const isDouble = prevAnchor && (now - prevAnchor.time < 300) && (prevAnchor.sheet === pageCoord.sheet);
           const isTriple = prevAnchor && (now - prevAnchor.time < 600) && prevAnchor.clickCount === 2;
           if (isTriple) {
             state.textSelection = textSelection.expandSelectionToLine(pageCoord.sheet, hit.charIndex);
-            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 0 };
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, startX: e.clientX, startY: e.clientY, time: now, clickCount: 0 };
             state.isSelectingText = false;
+            if (state.textSelection) state.selectedTextString = state.textSelection.text;
+            compositor.redrawAll();
+            updateTextSelectionPopover();
           } else if (isDouble) {
             state.textSelection = textSelection.expandSelectionToWord(pageCoord.sheet, hit.charIndex);
-            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 2 };
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, startX: e.clientX, startY: e.clientY, time: now, clickCount: 2 };
             state.isSelectingText = false;
+            if (state.textSelection) state.selectedTextString = state.textSelection.text;
+            compositor.redrawAll();
+            updateTextSelectionPopover();
           } else {
+            // Single click: clear any previous selection so user can unselect
             textSelection.clearTextSelection();
             state.isSelectingText = true;
-            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, time: now, clickCount: 1 };
+            state.textSelectAnchor = { sheet: pageCoord.sheet, charIndex: hit.charIndex, startX: e.clientX, startY: e.clientY, time: now, clickCount: 1 };
             state.textSelection = textSelection.computeTextSelectionRanges(pageCoord.sheet, hit.charIndex, hit.charIndex);
+            if (state.textSelection) state.selectedTextString = state.textSelection.text;
+            compositor.redrawAll();
+            const pop = $('textSelectionPopover');
+            if (pop) pop.classList.add('hidden');
           }
-          if (state.textSelection) state.selectedTextString = state.textSelection.text;
-          compositor.redrawAll();
+        } else {
+          // Clicked outside text or on blank page margin: clear selection
+          textSelection.clearTextSelection();
+          state.isSelectingText = false;
+          state.textSelectAnchor = null;
           updateTextSelectionPopover();
         }
       };
@@ -928,7 +970,7 @@ function attachPointerHandlers(wetCanvas) {
       if (cachedData) {
         performHit(cachedData);
       } else {
-        state.textSelectPending = { sheet: pageCoord.sheet, px: pageCoord.px, py: pageCoord.py, now, isDown: true };
+        state.textSelectPending = { sheet: pageCoord.sheet, px: pageCoord.px, py: pageCoord.py, now, isDown: true, clientX: e.clientX, clientY: e.clientY };
         textSelection.ensurePageTextData(pageCoord.sheet).then(data => {
           if (state.textSelectPending && state.textSelectPending.isDown) {
             performHit(data);
@@ -936,8 +978,7 @@ function attachPointerHandlers(wetCanvas) {
           state.textSelectPending = null;
         });
       }
-    }
-  });
+    }  });
 
   const moveEvt = ('onpointerrawupdate' in window) ? 'pointerrawupdate' : 'pointermove';
   wetCanvas.addEventListener(moveEvt, e => {
@@ -1018,11 +1059,24 @@ function attachPointerHandlers(wetCanvas) {
         state.textSelectPending.isDown = false;
       }
       state.isSelectingText = false;
+      const anchor = state.textSelectAnchor;
+      // If it was a single click without drag (distance < 5px and single character selected):
+      if (anchor && anchor.clickCount === 1) {
+        const dist = Math.hypot(e.clientX - (anchor.startX || e.clientX), e.clientY - (anchor.startY || e.clientY));
+        if (dist < 5 && state.textSelection && state.textSelection.startCharIdx === state.textSelection.endCharIdx) {
+          // Pure single click: unselect completely!
+          textSelection.clearTextSelection();
+        }
+      }
       if (state.textSelection && state.textSelection.text && state.textSelection.text.trim()) {
         state.selectedTextString = state.textSelection.text;
+        updateTextSelectionPopover();
+      } else {
+        textSelection.clearTextSelection();
+        const pop = $('textSelectionPopover');
+        if (pop) pop.classList.add('hidden');
       }
       compositor.redrawAll();
-      updateTextSelectionPopover();
     }
     try { wetCanvas.releasePointerCapture(e.pointerId); } catch (_) {}
   });
@@ -1158,6 +1212,16 @@ function attachKeyboardShortcuts() {
         return;
       }
 
+      // Dismiss text selection on Escape
+      if (state.textSelection || state.selectedTextString) {
+        textSelection.clearTextSelection();
+        const pop = $('textSelectionPopover');
+        if (pop) pop.classList.add('hidden');
+        compositor.redrawAll();
+        e.preventDefault();
+        return;
+      }
+
       if (state.selectedStrokes?.length || state.selectedImages?.length || state.selectedTextObjects?.length) {
         state.selectedStrokes = [];
         state.selectedImages = [];
@@ -1232,6 +1296,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       compositor.scheduleRedrawTiles();
       compositor.scheduleRedrawAll();
       scrollbar.updateDocScrollbar(_viewport);
+      updateTextSelectionPopover();
     });
     _viewport.attachListeners($('stage'));
   }
@@ -1266,9 +1331,14 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
     if (payload && payload.tool !== 'lasso') {
       state.lassoPath = null;
-      compositor.clearWet();
-      compositor.redrawAll();
     }
+    if (payload && payload.tool !== 'textSelect' && payload.tool !== 'textselect') {
+      textSelection.clearTextSelection();
+      const pop = $('textSelectionPopover');
+      if (pop) pop.classList.add('hidden');
+    }
+    compositor.clearWet();
+    compositor.redrawAll();
   });
   on('historyChanged', () => toolbar.updateUndoRedoUI());
   on('pageChanged', payload => {

@@ -107,6 +107,18 @@ export function setTool(toolName, { isUserSwitch = true } = {}) {
     emit('selectionCleared', {});
   }
 
+  if ((state.activeTool === 'textSelect' || state.activeTool === 'textselect') && tool !== 'textSelect' && tool !== 'textselect') {
+    state.textSelection = null;
+    state.textSelectAnchor = null;
+    state.textSelectPending = null;
+    state.selectedTextSpans = [];
+    state.selectedTextString = '';
+    state.isSelectingText = false;
+    const pop = typeof document !== 'undefined' ? document.getElementById('textSelectionPopover') : null;
+    if (pop) pop.classList.add('hidden');
+    emit('textSelectionCleared', {});
+  }
+
   if (tool === 'ruler') {
     state.activeTool = 'ruler';
     state.shapeKind = 'line';
