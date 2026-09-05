@@ -8,7 +8,11 @@ export LD_LIBRARY_PATH="$DIR/bin:${LD_LIBRARY_PATH:-}"
 RELEASE_BIN="$DIR/inkwell-app/src-tauri/target/release/inkwell-app"
 DEBUG_BIN="$DIR/inkwell-app/src-tauri/target/debug/inkwell-app"
 
-if [ -f "$RELEASE_BIN" ] && [ -f "$DEBUG_BIN" ]; then
+if [ -f "$DIR/inkwell-app" ]; then
+    exec "$DIR/inkwell-app" "$@"
+elif [ -f "$DIR/Inkwell" ]; then
+    exec "$DIR/Inkwell" "$@"
+elif [ -f "$RELEASE_BIN" ] && [ -f "$DEBUG_BIN" ]; then
     if [ "$RELEASE_BIN" -nt "$DEBUG_BIN" ]; then
         exec "$RELEASE_BIN" "$@"
     else

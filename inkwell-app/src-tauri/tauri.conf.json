@@ -27,16 +27,28 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
-    "resources": [
-      "../../bin/*"
-    ],
+    "targets": ["nsis", "appimage", "deb"],
+    "resources": {
+      "../../bin/*": "",
+      "../../bin/pdfium.dll": "bin/pdfium.dll",
+      "../../bin/libpdfium.so": "bin/libpdfium.so"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": false
+      },
+      "nsis": {
+        "languages": ["en-US"],
+        "displayLanguageSelector": false
+      }
+    },
     "linux": {
       "deb": {
         "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"]

@@ -45,6 +45,8 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
         candidate_paths.push(p.join("lib").join("inkwell"));
         candidate_paths.push(p.join("lib").join("Inkwell").join("resources"));
         candidate_paths.push(p.join("lib").join("Inkwell").join("resources").join("bin"));
+        candidate_paths.push(p.join("_up_").join("_up_").join("bin"));
+        candidate_paths.push(p.join("resources").join("_up_").join("_up_").join("bin"));
     };
 
     if let Ok(exe) = std::env::current_exe() {
@@ -95,3 +97,39 @@ pub fn init_pdfium() -> Result<Pdfium, PdfiumError> {
         Err(e) => Err(e),
     }
 }
+
+/// Initialize PDFium binding by probing a specific directory and its standard subdirectories.
+pub fn init_pdfium_from_dir(dir: &std::path::Path) -> Result<Pdfium, PdfiumError> {
+    let candidate_paths = [
+        dir.to_path_buf(),
+        dir.join("bin"),
+        dir.join("lib"),
+        dir.join("lib64"),
+        dir.join("resources"),
+        dir.join("resources").join("bin"),
+        dir.join("resources").join("lib"),
+        dir.join("_up_").join("_up_").join("bin"),
+        dir.join("resources").join("_up_").join("_up_").join("bin"),
+    ];
+
+    for d in &candidate_paths {
+        for filename in PDFIUM_FILENAMES {
+            let lib_path = d.join(filename);
+            if lib_path.exists() {
+                match Pdfium::bind_to_library(&lib_path) {
+                    Ok(bindings) => {
+                        eprintln!("Successfully loaded PDFium library from {:?}", lib_path);
+                        return Ok(Pdfium::new(bindings));
+                    }
+                    Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => {
+                        return Ok(Pdfium::default());
+                    }
+                    Err(error) => eprintln!("Failed to load PDFium from {lib_path:?}: {error:?}"),
+                }
+            }
+        }
+    }
+
+    Pdfium::bind_to_library(dir.join(PDFIUM_FILENAMES[0])).map(Pdfium::new)
+}
+

@@ -41,6 +41,25 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .setup(|app| {
+            use tauri::Manager;
+            let state = app.state::<AppState>();
+            let mut pdfium_guard = state.pdfium.lock().unwrap();
+            if pdfium_guard.is_none() {
+                if let Ok(res_dir) = app.path().resource_dir() {
+                    match inkwell_pdf::init_pdfium_from_dir(&res_dir) {
+                        Ok(pdfium) => {
+                            eprintln!("[inkwell] PDFium initialized successfully from resource dir: {res_dir:?}");
+                            *pdfium_guard = Some(pdfium);
+                        }
+                        Err(e) => {
+                            eprintln!("[inkwell] Could not initialize PDFium from resource dir {res_dir:?}: {e:?}");
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 use tauri::Manager;

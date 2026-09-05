@@ -27,7 +27,7 @@ fn main() {
         .to_path_buf();
     let dst_lib = profile_dir.join(lib_filename);
 
-    if src_lib.exists() && !dst_lib.exists() {
+    if src_lib.exists() {
         if let Err(e) = std::fs::copy(&src_lib, &dst_lib) {
             // Non-fatal: warn but don't break the build.
             println!(
