@@ -1333,6 +1333,49 @@ window.addEventListener('DOMContentLoaded', async () => {
           }
         }
       }
+    } else if (type === 'undo_add_image' || type === 'redo_delete_image') {
+      if (data.image) ipc.journalImageMutation('delete', data.image);
+    } else if (type === 'undo_delete_image' || type === 'redo_add_image') {
+      if (data.image) ipc.journalImageMutation('upsert', data.image);
+    } else if (type === 'undo_add_text_object' || type === 'redo_delete_text_object') {
+      if (data.textObj) ipc.journalTextMutation('delete', data.textObj);
+    } else if (type === 'undo_delete_text_object' || type === 'redo_add_text_object') {
+      if (data.textObj) ipc.journalTextMutation('upsert', data.textObj);
+    } else if (type === 'undo_delete_objects' || type === 'redo_add_objects') {
+      for (const s of (data.strokes || [])) {
+        if (s) ipc.commitStroke(s.sheet, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
+      }
+      for (const img of (data.images || [])) {
+        if (img) ipc.journalImageMutation('upsert', img);
+      }
+      for (const t of (data.textObjects || [])) {
+        if (t) ipc.journalTextMutation('upsert', t);
+      }
+    } else if (type === 'redo_delete_objects' || type === 'undo_add_objects') {
+      for (const s of (data.strokes || [])) {
+        if (s && s.id) ipc.deleteStroke(s.id);
+      }
+      for (const img of (data.images || [])) {
+        if (img) ipc.journalImageMutation('delete', img);
+      }
+      for (const t of (data.textObjects || [])) {
+        if (t) ipc.journalTextMutation('delete', t);
+      }
+    } else if (type === 'undo_transform_objects' || type === 'redo_transform_objects') {
+      const isUndo = type === 'undo_transform_objects';
+      const strokeList = isUndo ? data.initialStrokes : data.finalStrokes;
+      const imageList = isUndo ? data.initialImages : data.finalImages;
+      const textList = isUndo ? data.initialTextObjects : data.finalTextObjects;
+
+      for (const s of (strokeList || [])) {
+        if (s) ipc.commitStroke(s.sheet || 0, s.kind || s.tool || 'pen', s.rgb, s.base_width || s.baseWidth || 1.6, s.points, s.id);
+      }
+      for (const img of (imageList || [])) {
+        if (img) ipc.journalImageMutation('upsert', img);
+      }
+      for (const t of (textList || [])) {
+        if (t) ipc.journalTextMutation('upsert', t);
+      }
     }
   });
 
@@ -1353,7 +1396,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Global compatibility bridges
   window.state = state;
   window.toolManager = toolManager;
-  window.documentOps = documentOps;
+  window.documentOps = Object.assign({}, documentOps, {
+    addTextObject: (textObj, opts) => documentOps.upsertTextObject(textObj, { recordHistory: true, isNew: true, ...opts }),
+    addImage: (imageObj, opts) => documentOps.upsertImage(imageObj, { recordHistory: true, isNew: true, ...opts }),
+  });
   window.compositor = compositor;
   window.overlays = overlays;
   window.lassoTool = lassoTool;

@@ -11,7 +11,8 @@ Consolidated verification suite for all interaction, ergonomics, and accessibili
 - T9: Navigation Rail & Drawer Panels (Thumbnails, Outline, Search, DocInfo, Page Insertion)
 - T10: Synthetic Pen Input Pipeline (CDP mouse/pen input, state commit, dry canvas composite)
 - T11: Zoom Controls & Percentage Readout
-- T12: Console Hygiene (0 errors, 0 internal warnings)
+- T12: WAL Undo/Redo IPC Synchronization (Image, Text & Batch Mutations)
+- T13: Console Hygiene (0 errors, 0 internal warnings)
 """
 import math, pathlib, sys, time
 from playwright.sync_api import sync_playwright
@@ -137,6 +138,16 @@ with sync_playwright() as pw:
       render_raster: async () => new Array(64 * 64 * 4).fill(255),
       get_document_outline: async () => [],
       insert_blank_page: async (args) => true,
+      journal_image_mutation: async (args) => {
+        window.__walImageMutations = window.__walImageMutations || [];
+        window.__walImageMutations.push(args);
+        return true;
+      },
+      journal_text_mutation: async (args) => {
+        window.__walTextMutations = window.__walTextMutations || [];
+        window.__walTextMutations.push(args);
+        return true;
+      },
       wal_flush: async () => true,
     };
     window.__TAURI_INTERNALS__ = {
@@ -606,9 +617,161 @@ with sync_playwright() as pw:
           f"zoomText='{custom_zoom_text}', zoomVal={cur_zoom_val}, popClosed={pop_closed}")
 
     # -------------------------------------------------------------
-    # T12: Console Hygiene
+    # T12: WAL Undo/Redo IPC Synchronization
     # -------------------------------------------------------------
-    print("\n=== T12 Console Hygiene ===", flush=True)
+    print("\n=== T12 WAL Undo/Redo IPC Synchronization ===", flush=True)
+
+    # 1. Text Object Undo / Redo
+    pg.evaluate("""(() => {
+        window.__walTextMutations = [];
+        window.documentOps.addTextObject({
+            id: 'txt_test_wal_1',
+            sheet: 0,
+            x: 120,
+            y: 150,
+            text: 'WAL undo/redo test note'
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    # Undo text addition -> expect journal_text_mutation op: 'delete'
+    pg.evaluate("window.documentOps.performUndo()")
+    pg.wait_for_timeout(60)
+
+    last_text_undo = pg.evaluate("""(() => {
+        const list = window.__walTextMutations || [];
+        return list.length > 0 ? list[list.length - 1] : null;
+    })()""")
+    check("text undo journals delete mutation to WAL IPC",
+          last_text_undo and last_text_undo.get("op") == "delete" and last_text_undo.get("textId") == "txt_test_wal_1",
+          f"last_text_undo={last_text_undo}")
+
+    # Redo text addition -> expect journal_text_mutation op: 'upsert'
+    pg.evaluate("window.documentOps.performRedo()")
+    pg.wait_for_timeout(60)
+
+    last_text_redo = pg.evaluate("""(() => {
+        const list = window.__walTextMutations || [];
+        return list.length > 0 ? list[list.length - 1] : null;
+    })()""")
+    check("text redo journals upsert mutation to WAL IPC",
+          last_text_redo and last_text_redo.get("op") == "upsert" and last_text_redo.get("text", {}).get("id") == "txt_test_wal_1",
+          f"last_text_redo={last_text_redo}")
+
+    # 2. Image Object Undo / Redo
+    pg.evaluate("""(() => {
+        window.__walImageMutations = [];
+        window.documentOps.addImage({
+            id: 'img_test_wal_1',
+            sheet: 0,
+            x: 200,
+            y: 200,
+            width: 100,
+            height: 80,
+            dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    # Undo image addition -> expect journal_image_mutation op: 'delete'
+    pg.evaluate("window.documentOps.performUndo()")
+    pg.wait_for_timeout(60)
+
+    last_image_undo = pg.evaluate("""(() => {
+        const list = window.__walImageMutations || [];
+        return list.length > 0 ? list[list.length - 1] : null;
+    })()""")
+    check("image undo journals delete mutation to WAL IPC",
+          last_image_undo and last_image_undo.get("op") == "delete" and last_image_undo.get("imageId") == "img_test_wal_1",
+          f"last_image_undo={last_image_undo}")
+
+    # Redo image addition -> expect journal_image_mutation op: 'upsert'
+    pg.evaluate("window.documentOps.performRedo()")
+    pg.wait_for_timeout(60)
+
+    last_image_redo = pg.evaluate("""(() => {
+        const list = window.__walImageMutations || [];
+        return list.length > 0 ? list[list.length - 1] : null;
+    })()""")
+    check("image redo journals upsert mutation to WAL IPC",
+          last_image_redo and last_image_redo.get("op") == "upsert" and last_image_redo.get("image", {}).get("id") == "img_test_wal_1",
+          f"last_image_redo={last_image_redo}")
+
+    # 3. Batch Delete Objects Undo / Redo
+    pg.evaluate("""(() => {
+        window.__walImageMutations = [];
+        window.__walTextMutations = [];
+        window.documentOps.deleteObjectsBatch({
+            strokes: [],
+            images: [{ id: 'img_batch_1', sheet: 0, x: 50, y: 50, width: 40, height: 40 }],
+            textObjects: [{ id: 'txt_batch_1', sheet: 0, x: 60, y: 60, text: 'batch item' }]
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    # Undo batch delete -> expect upsert for image and text
+    pg.evaluate("window.documentOps.performUndo()")
+    pg.wait_for_timeout(60)
+
+    batch_undo_img = pg.evaluate("window.__walImageMutations ? window.__walImageMutations.slice(-1)[0] : null")
+    batch_undo_txt = pg.evaluate("window.__walTextMutations ? window.__walTextMutations.slice(-1)[0] : null")
+    check("batch deletion undo journals upsert mutations to WAL IPC",
+          batch_undo_img and batch_undo_img.get("op") == "upsert" and
+          batch_undo_txt and batch_undo_txt.get("op") == "upsert",
+          f"img={batch_undo_img} txt={batch_undo_txt}")
+
+    # Redo batch delete -> expect delete for image and text
+    pg.evaluate("window.documentOps.performRedo()")
+    pg.wait_for_timeout(60)
+
+    batch_redo_img = pg.evaluate("window.__walImageMutations ? window.__walImageMutations.slice(-1)[0] : null")
+    batch_redo_txt = pg.evaluate("window.__walTextMutations ? window.__walTextMutations.slice(-1)[0] : null")
+    check("batch deletion redo journals delete mutations to WAL IPC",
+          batch_redo_img and batch_redo_img.get("op") == "delete" and batch_redo_img.get("imageId") == "img_batch_1" and
+          batch_redo_txt and batch_redo_txt.get("op") == "delete" and batch_redo_txt.get("textId") == "txt_batch_1",
+          f"img={batch_redo_img} txt={batch_redo_txt}")
+
+    # 4. Transform Objects Undo / Redo
+    pg.evaluate("""(() => {
+        window.__walImageMutations = [];
+        window.__walTextMutations = [];
+        window.documentOps.commitTransform({
+            initialStrokes: [],
+            initialImages: [{ id: 'img_tr_1', x: 10, y: 10, width: 50, height: 50 }],
+            initialTextObjects: [{ id: 'txt_tr_1', x: 20, y: 20, fontSize: 16 }],
+            finalStrokes: [],
+            finalImages: [{ id: 'img_tr_1', x: 100, y: 100, width: 80, height: 80 }],
+            finalTextObjects: [{ id: 'txt_tr_1', x: 120, y: 120, fontSize: 20 }]
+        });
+    })()""")
+    pg.wait_for_timeout(60)
+
+    # Undo transform -> expect initial values upserted
+    pg.evaluate("window.documentOps.performUndo()")
+    pg.wait_for_timeout(60)
+
+    tr_undo_img = pg.evaluate("window.__walImageMutations ? window.__walImageMutations.slice(-1)[0] : null")
+    tr_undo_txt = pg.evaluate("window.__walTextMutations ? window.__walTextMutations.slice(-1)[0] : null")
+    check("transform undo journals initial state upserts to WAL IPC",
+          tr_undo_img and tr_undo_img.get("op") == "upsert" and tr_undo_img.get("image", {}).get("x") == 10 and
+          tr_undo_txt and tr_undo_txt.get("op") == "upsert" and tr_undo_txt.get("text", {}).get("x") == 20,
+          f"img={tr_undo_img} txt={tr_undo_txt}")
+
+    # Redo transform -> expect final values upserted
+    pg.evaluate("window.documentOps.performRedo()")
+    pg.wait_for_timeout(60)
+
+    tr_redo_img = pg.evaluate("window.__walImageMutations ? window.__walImageMutations.slice(-1)[0] : null")
+    tr_redo_txt = pg.evaluate("window.__walTextMutations ? window.__walTextMutations.slice(-1)[0] : null")
+    check("transform redo journals final state upserts to WAL IPC",
+          tr_redo_img and tr_redo_img.get("op") == "upsert" and tr_redo_img.get("image", {}).get("x") == 100 and
+          tr_redo_txt and tr_redo_txt.get("op") == "upsert" and tr_redo_txt.get("text", {}).get("x") == 120,
+          f"img={tr_redo_img} txt={tr_redo_txt}")
+
+    # -------------------------------------------------------------
+    # T13: Console Hygiene
+    # -------------------------------------------------------------
+    print("\n=== T13 Console Hygiene ===", flush=True)
     check("zero console errors throughout session", not errors, str(errors[:3]))
     inkwell_warnings = [w for w in warnings if "[inkwell/" in w]
     check("zero internal inkwell warnings", not inkwell_warnings, str(inkwell_warnings[:3]))
