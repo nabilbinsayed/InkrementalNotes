@@ -617,6 +617,40 @@ with sync_playwright() as pw:
           pop_closed and abs(cur_zoom_val - 1.2) < 0.05 and not errors,
           f"zoomText='{custom_zoom_text}', zoomVal={cur_zoom_val}, popClosed={pop_closed}")
 
+    # Horizontal pan clamping on off-center focal zooms
+    pan_clamping = pg.evaluate('''(() => {
+        const vp = window.getViewport();
+        // Zoom in with focal point far to the right (Step 3 verification)
+        vp.setZoom(3.0, [2000, 500]);
+        const panX1 = vp.panX;
+        const clamped1 = vp.clampPanX(panX1, 'left');
+
+        // Zoom out with focal point far to the left
+        vp.setZoom(0.5, [-500, 0]);
+        const panX2 = vp.panX;
+        const clamped2 = vp.clampPanX(panX2, 'left');
+
+        // Extreme off-center zoom with focal point far to the right
+        vp.setZoom(4.0, [5000, 0]);
+        const panX3 = vp.panX;
+        const clamped3 = vp.clampPanX(panX3, 'left');
+
+        // Restore viewport to normal view
+        vp.fitPage(595, 842, 'left');
+
+        return {
+            zoomInOk: panX1 === clamped1,
+            zoomOutOk: panX2 === clamped2,
+            extremeOk: panX3 === clamped3,
+            panX1, clamped1,
+            panX2, clamped2,
+            panX3, clamped3
+        };
+    })()''')
+    check("horizontal pan remains bounded by clampPanX during off-center focal zooms",
+          pan_clamping["zoomInOk"] and pan_clamping["zoomOutOk"] and pan_clamping["extremeOk"],
+          f"results={pan_clamping}")
+
     # -------------------------------------------------------------
     # T12: WAL Undo/Redo IPC Synchronization
     # -------------------------------------------------------------

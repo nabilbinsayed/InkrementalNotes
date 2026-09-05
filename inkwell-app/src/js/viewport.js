@@ -231,19 +231,21 @@ class ViewportManager {
       const newPanY = centerPx[1] - (centerPx[1] - curPanY) * scale;
       if (isRight) {
         this.rightZoom = newZoom;
-        this.rightPanX = newPanX;
+        this.rightPanX = this.clampPanX(newPanX, 'right');
         this.rightPanY = this.clampPanY(newPanY, 'right');
       } else {
         this.zoom = newZoom;
-        this.panX = newPanX;
+        this.panX = this.clampPanX(newPanX, 'left');
         this.panY = this.clampPanY(newPanY, 'left');
       }
     } else {
       if (isRight) {
         this.rightZoom = newZoom;
+        this.rightPanX = this.clampPanX(this.rightPanX, 'right');
         this.rightPanY = this.clampPanY(this.rightPanY, 'right');
       } else {
         this.zoom = newZoom;
+        this.panX = this.clampPanX(this.panX, 'left');
         this.panY = this.clampPanY(this.panY, 'left');
       }
     }
@@ -474,11 +476,11 @@ class ViewportManager {
 
           if (pane === 'right' && this.splitMode) {
             this.rightZoom = newZoom;
-            this.rightPanX = targetPanX;
+            this.rightPanX = this.clampPanX(targetPanX, 'right');
             this.rightPanY = this.clampPanY(targetPanY, 'right');
           } else {
             this.zoom = newZoom;
-            this.panX = targetPanX;
+            this.panX = this.clampPanX(targetPanX, 'left');
             this.panY = this.clampPanY(targetPanY, 'left');
           }
           if (this.onChange) this.onChange();
