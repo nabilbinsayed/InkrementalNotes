@@ -4,12 +4,13 @@
   "description": "Desktop host for InkWell PDF-native ink annotator",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
+    "dev": "node node_modules/@tauri-apps/cli/tauri.js dev",
+    "build": "node node_modules/@tauri-apps/cli/tauri.js build",
     "test": "py -3 test_app_smoke.py",
     "lint:ci": "node --check src/js/main.js && node --check src/js/core/ipc.js"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4"
+    "@tauri-apps/cli": "^2.11.4",
+    "@tauri-apps/cli-linux-x64-gnu": "^2.11.4"
   }
 }

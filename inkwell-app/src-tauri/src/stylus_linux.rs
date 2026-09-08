@@ -101,6 +101,10 @@ const BTN_TOOL_PEN: u16 = 0x140;
 const BTN_TOOL_RUBBER: u16 = 0x141;
 #[cfg(target_os = "linux")]
 const BTN_TOUCH: u16 = 0x14a;
+#[cfg(target_os = "linux")]
+const BTN_STYLUS: u16 = 0x14b;
+#[cfg(target_os = "linux")]
+const BTN_STYLUS2: u16 = 0x14c;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NativeStylusSample {
@@ -153,7 +157,7 @@ fn get_kernel_monotonic_us() -> u64 {
 }
 
 #[cfg(target_os = "linux")]
-fn discover_best_tablet() -> Option<TargetDevice> {
+fn discover_best_tablet(has_permission_denied: &mut bool) -> Option<TargetDevice> {
     let mut candidates: Vec<TargetDevice> = Vec::new();
 
     let paths = match fs::read_dir("/dev/input") {
@@ -171,7 +175,12 @@ fn discover_best_tablet() -> Option<TargetDevice> {
         let path_str = path.to_string_lossy().to_string();
         let file = match OpenOptions::new().read(true).custom_flags(O_NONBLOCK).open(&path) {
             Ok(f) => f,
-            Err(_) => continue,
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::PermissionDenied {
+                    *has_permission_denied = true;
+                }
+                continue;
+            }
         };
         let fd = file.as_raw_fd();
 
@@ -225,7 +234,7 @@ fn discover_best_tablet() -> Option<TargetDevice> {
         });
     }
 
-    candidates.sort_by(|a, b| b.score.cmp(&a.score));
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.score));
     candidates.into_iter().next()
 }
 
@@ -235,10 +244,12 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
         .name("inkwell-evdev-stylus".into())
         .spawn(move || {
             let mut active_device: Option<TargetDevice> = None;
+            let mut permission_warned = false;
 
             while is_running.load(Ordering::Relaxed) {
                 if active_device.is_none() {
-                    active_device = discover_best_tablet();
+                    let mut had_perm_denied = false;
+                    active_device = discover_best_tablet(&mut had_perm_denied);
                     if let Some(ref dev) = active_device {
                         eprintln!(
                             "[inkwell/stylus] Connected to native tablet: '{}' at '{}' (pressure: {}..{})",
@@ -253,7 +264,20 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
                         };
                         let _ = channel.send(handshake);
                     } else {
-                        thread::sleep(Duration::from_millis(500));
+                        if had_perm_denied && !permission_warned {
+                            eprintln!(
+                                "[inkwell/stylus] Notice: Permission denied accessing /dev/input/event*. \
+                                Direct evdev stylus streaming is inactive (falling back to browser PointerEvents). \
+                                To enable native evdev streaming, add your user to the input group: 'sudo usermod -aG input $USER' and log back in."
+                            );
+                            permission_warned = true;
+                        }
+                        let sleep_duration = if permission_warned {
+                            Duration::from_secs(10)
+                        } else {
+                            Duration::from_millis(500)
+                        };
+                        thread::sleep(sleep_duration);
                         continue;
                     }
                 }
@@ -262,9 +286,22 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
                 let file = match OpenOptions::new().read(true).open(&dev.path) {
                     Ok(f) => f,
                     Err(err) => {
-                        eprintln!("[inkwell/stylus] Failed to open device {}: {err}. Retrying in 1s...", dev.path);
-                        active_device = None;
-                        thread::sleep(Duration::from_millis(1000));
+                        if err.kind() == std::io::ErrorKind::PermissionDenied {
+                            if !permission_warned {
+                                eprintln!(
+                                    "[inkwell/stylus] Permission denied accessing device {}. \
+                                    Run 'sudo usermod -aG input $USER' to grant access. Retrying in 10s...",
+                                    dev.path
+                                );
+                                permission_warned = true;
+                            }
+                            active_device = None;
+                            thread::sleep(Duration::from_secs(10));
+                        } else {
+                            eprintln!("[inkwell/stylus] Failed to open device {}: {err}. Retrying in 2s...", dev.path);
+                            active_device = None;
+                            thread::sleep(Duration::from_millis(2000));
+                        }
                         continue;
                     }
                 };
@@ -280,7 +317,6 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
                 let mut cur_x = 0i32;
                 let mut cur_y = 0i32;
                 let mut is_touch_down = false;
-                let mut has_btn_touch = false;
                 let mut cur_tool = 1u8; // 1 = pen, 2 = eraser
                 let mut state_changed = false;
 
@@ -311,13 +347,9 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
                                 EV_KEY => match ev.code {
                                     BTN_TOUCH => {
                                         is_touch_down = ev.value != 0;
-                                        has_btn_touch = true;
-                                        if !is_touch_down {
-                                            cur_raw_pressure = 0;
-                                        }
                                         state_changed = true;
                                     }
-                                    BTN_TOOL_RUBBER => {
+                                    BTN_TOOL_RUBBER | BTN_STYLUS | BTN_STYLUS2 => {
                                         cur_tool = if ev.value != 0 { 2 } else { 1 };
                                         state_changed = true;
                                     }
@@ -329,54 +361,50 @@ pub fn spawn_stylus_worker(channel: Channel<StylusMessage>, is_running: Arc<Atom
                                     }
                                     _ => {}
                                 },
-                                EV_SYN => {
-                                    if ev.code == SYN_REPORT && state_changed {
-                                        let is_now_down = if has_btn_touch {
-                                            is_touch_down
-                                        } else {
-                                            cur_raw_pressure > 0
+                                EV_SYN if ev.code == SYN_REPORT && state_changed => {
+                                    let is_now_down = is_touch_down || (cur_raw_pressure > dev.min_pressure);
+
+                                    let norm_p = if cur_raw_pressure > dev.min_pressure {
+                                        let raw_clamped = cur_raw_pressure.clamp(dev.min_pressure, dev.max_pressure);
+                                        let range = (dev.max_pressure - dev.min_pressure).max(1) as f32;
+                                        (raw_clamped - dev.min_pressure) as f32 / range
+                                    } else if is_touch_down {
+                                        0.1f32
+                                    } else {
+                                        0.0f32
+                                    };
+
+                                    let down_changed = is_now_down != last_sent_down;
+                                    let tool_changed = cur_tool != last_sent_tool;
+                                    let pressure_changed = (norm_p - last_sent_pressure).abs() >= 0.003;
+                                    let heartbeat_needed = is_now_down && last_sent_time.elapsed() >= Duration::from_millis(16);
+
+                                    if down_changed || tool_changed || pressure_changed || heartbeat_needed {
+                                        let ts_us = get_kernel_monotonic_us();
+
+                                        let sample = NativeStylusSample {
+                                            timestamp_us: ts_us,
+                                            pressure: norm_p,
+                                            x: cur_x,
+                                            y: cur_y,
+                                            down: is_now_down,
+                                            tool: cur_tool,
+                                            device_name: dev.name.clone(),
+                                            device_path: dev.path.clone(),
                                         };
 
-                                        let norm_p = if is_now_down && cur_raw_pressure > dev.min_pressure {
-                                            let raw_clamped = cur_raw_pressure.clamp(dev.min_pressure, dev.max_pressure);
-                                            let range = (dev.max_pressure - dev.min_pressure).max(1) as f32;
-                                            (raw_clamped - dev.min_pressure) as f32 / range
-                                        } else {
-                                            0.0f32
-                                        };
-
-                                        let down_changed = is_now_down != last_sent_down;
-                                        let tool_changed = cur_tool != last_sent_tool;
-                                        let pressure_changed = (norm_p - last_sent_pressure).abs() >= 0.003;
-                                        let heartbeat_needed = is_now_down && last_sent_time.elapsed() >= Duration::from_millis(16);
-
-                                        if down_changed || tool_changed || pressure_changed || heartbeat_needed {
-                                            let ts_us = get_kernel_monotonic_us();
-
-                                            let sample = NativeStylusSample {
-                                                timestamp_us: ts_us,
-                                                pressure: norm_p,
-                                                x: cur_x,
-                                                y: cur_y,
-                                                down: is_now_down,
-                                                tool: cur_tool,
-                                                device_name: dev.name.clone(),
-                                                device_path: dev.path.clone(),
-                                            };
-
-                                            if channel.send(StylusMessage::Sample(sample)).is_err() {
-                                                eprintln!("[inkwell/stylus] Channel closed by frontend. Exiting stream thread.");
-                                                return;
-                                            }
-
-                                            last_sent_pressure = norm_p;
-                                            last_sent_down = is_now_down;
-                                            last_sent_tool = cur_tool;
-                                            last_sent_time = std::time::Instant::now();
+                                        if channel.send(StylusMessage::Sample(sample)).is_err() {
+                                            eprintln!("[inkwell/stylus] Channel closed by frontend. Exiting stream thread.");
+                                            return;
                                         }
 
-                                        state_changed = false;
+                                        last_sent_pressure = norm_p;
+                                        last_sent_down = is_now_down;
+                                        last_sent_tool = cur_tool;
+                                        last_sent_time = std::time::Instant::now();
                                     }
+
+                                    state_changed = false;
                                 }
                                 _ => {}
                             }

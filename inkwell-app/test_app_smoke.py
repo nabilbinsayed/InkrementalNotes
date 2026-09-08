@@ -29,16 +29,21 @@ def check(name, cond, note=""):
     print(f"  [{status}] {name}" + (f"   {note}" if note else ""), flush=True)
 
 with sync_playwright() as pw:
-    b = pw.chromium.launch(
-        headless=True,
-        args=[
+    import shutil
+    chrome_bin = shutil.which("chromium") or shutil.which("google-chrome-stable") or shutil.which("chrome")
+    launch_opts = {
+        "headless": True,
+        "args": [
             "--allow-file-access-from-files",
             "--force-device-scale-factor=1",
             "--no-sandbox",
             "--disable-gpu",
             "--disable-dev-shm-usage"
         ]
-    )
+    }
+    if chrome_bin:
+        launch_opts["executable_path"] = chrome_bin
+    b = pw.chromium.launch(**launch_opts)
     ctx = b.new_context(
         viewport={"width": 1360, "height": 860},
         permissions=["clipboard-read", "clipboard-write"]
@@ -607,6 +612,38 @@ with sync_playwright() as pw:
 
     dry_pixels = pg.evaluate("document.getElementById('dry').toDataURL().length > 500")
     check("dry canvas composited ink bitmap", dry_pixels)
+
+    # Pressure resolution & velocity dynamics verification
+    browser_p = pg.evaluate("""() => {
+        return window.resolvePressure({ pointerType: 'pen', pressure: 0.72 });
+    }""")
+    check("resolvePressure resolves browser hardware pen pressure", abs(browser_p - 0.72) < 0.01, f"p={browser_p}")
+
+    velocity_dynamics = pg.evaluate("""() => {
+        window.resetPressureDynamics();
+        const pFast1 = window.resolvePressure({ clientX: 100, clientY: 100, timeStamp: 1000 });
+        const pFast2 = window.resolvePressure({ clientX: 350, clientY: 100, timeStamp: 1050 });
+        window.resetPressureDynamics();
+        const pSlow1 = window.resolvePressure({ clientX: 100, clientY: 100, timeStamp: 2000 });
+        const pSlow2 = window.resolvePressure({ clientX: 105, clientY: 100, timeStamp: 2100 });
+        return { fast: pFast2, slow: pSlow2 };
+    }""")
+    check("velocity dynamics adjusts pressure: fast strokes taper thinner than slow strokes",
+          velocity_dynamics['fast'] < velocity_dynamics['slow'],
+          f"fast={velocity_dynamics['fast']:.3f} slow={velocity_dynamics['slow']:.3f}")
+
+    page_label_check = pg.evaluate("""() => {
+        const btnText = document.getElementById('btnPageDropdown').innerText.replace(/\\s+/g, ' ').trim();
+        const num = document.getElementById('pageNumDisplay').textContent.trim();
+        const total = document.getElementById('pageTotalDisplay').textContent.trim();
+        return { btnText, num, total };
+    }""")
+    check("page dropdown displays clean non-duplicated 'Page X / Y' format",
+          "Page Page" not in page_label_check['btnText'] and page_label_check['num'].isdigit(),
+          f"text='{page_label_check['btnText']}' num={page_label_check['num']}")
+
+    stylus_native_tool_exposed = pg.evaluate("typeof window.getLiveNativeTool === 'function'")
+    check("stylus native tool accessor is exposed to window", stylus_native_tool_exposed)
 
     # -------------------------------------------------------------
     # T11: Zoom Controls & Percentage Readout

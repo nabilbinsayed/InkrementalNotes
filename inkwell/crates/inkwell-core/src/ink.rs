@@ -309,6 +309,54 @@ fn rdp(pts: &[Sample], first: usize, last: usize, tol: f64, keep: &mut [bool]) {
 // Variable-width ribbon outline  -- THE key geometry
 // ---------------------------------------------------------------------------
 
+/// Check whether a stroke's sample points represent an axis-aligned rectangle.
+pub fn is_axis_aligned_rect(pts: &[Sample]) -> Option<([f64; 4], f64)> {
+    if pts.len() < 4 {
+        return None;
+    }
+    let n = pts.len();
+    let is_closed = (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
+    if !is_closed {
+        return None;
+    }
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for p in pts {
+        min_x = min_x.min(p.x);
+        max_x = max_x.max(p.x);
+        min_y = min_y.min(p.y);
+        max_y = max_y.max(p.y);
+    }
+    if (max_x - min_x) < 4.0 || (max_y - min_y) < 4.0 {
+        return None;
+    }
+    let eps = 2.0;
+    let mut has_left = false;
+    let mut has_right = false;
+    let mut has_top = false;
+    let mut has_bottom = false;
+    for p in pts {
+        let on_left = (p.x - min_x).abs() < eps;
+        let on_right = (p.x - max_x).abs() < eps;
+        let on_top = (p.y - min_y).abs() < eps;
+        let on_bottom = (p.y - max_y).abs() < eps;
+        if !on_left && !on_right && !on_top && !on_bottom {
+            return None;
+        }
+        if on_left { has_left = true; }
+        if on_right { has_right = true; }
+        if on_top { has_top = true; }
+        if on_bottom { has_bottom = true; }
+    }
+    if has_left && has_right && has_top && has_bottom {
+        Some(([min_x, min_y, max_x, max_y], pts[0].p))
+    } else {
+        None
+    }
+}
+
 /// Build the closed outline polygon of a variable-width stroke.
 ///
 /// PDF's stroke operator (`S`) has exactly one line width, so pressure cannot
@@ -324,21 +372,30 @@ pub fn ribbon_outline(stroke: &Stroke, cap_steps: usize) -> Vec<(f64, f64)> {
     if pts.len() == 1 {
         return circle(pts[0].x, pts[0].y, stroke.brush.width_for(pts[0].p) / 2.0, cap_steps * 4);
     }
+    if let Some(([x0, y0, x1, y1], p)) = is_axis_aligned_rect(pts) {
+        let hw = stroke.brush.width_for(p) / 2.0;
+        return vec![
+            (x0 - hw, y0 - hw),
+            (x1 + hw, y0 - hw),
+            (x1 + hw, y1 + hw),
+            (x0 - hw, y1 + hw),
+            (x0 - hw, y0 - hw),
+            (x0 + hw, y0 + hw),
+            (x0 + hw, y1 - hw),
+            (x1 - hw, y1 - hw),
+            (x1 - hw, y0 + hw),
+            (x0 + hw, y0 + hw),
+        ];
+    }
 
     let n = pts.len();
-    let mut left = Vec::with_capacity(n);
-    let mut right = Vec::with_capacity(n);
-    // indexed on purpose: each offset point needs its neighbours i-1 and i+1
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..n {
-        let a = pts[i.saturating_sub(1)];
-        let b = pts[(i + 1).min(n - 1)];
-        let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let l = dx.hypot(dy).max(1e-9);
-        let (nx, ny) = (-dy / l, dx / l);
-        let h = stroke.brush.width_for(pts[i].p) / 2.0;
-        left.push((pts[i].x + nx * h, pts[i].y + ny * h));
-        right.push((pts[i].x - nx * h, pts[i].y - ny * h));
+    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
+    let (left, right) = ribbon_edges(stroke);
+
+    if is_closed {
+        let mut poly = left;
+        poly.extend(right.iter().rev().copied());
+        return poly;
     }
 
     let mut poly = left.clone();
@@ -509,6 +566,7 @@ pub enum PathCmd {
     MoveTo((f64, f64)),
     LineTo((f64, f64)),
     CurveTo(Cubic),
+    CloseSubpath,
     Close,
 }
 
@@ -528,8 +586,41 @@ pub fn ribbon_path(s: &Stroke, cap_steps: usize) -> Vec<PathCmd> {
         return out;
     }
 
+    if let Some(([x0, y0, x1, y1], p)) = is_axis_aligned_rect(pts) {
+        let hw = s.brush.width_for(p) / 2.0;
+        return vec![
+            // Outer rectangle (clockwise)
+            PathCmd::MoveTo((x0 - hw, y0 - hw)),
+            PathCmd::LineTo((x1 + hw, y0 - hw)),
+            PathCmd::LineTo((x1 + hw, y1 + hw)),
+            PathCmd::LineTo((x0 - hw, y1 + hw)),
+            PathCmd::CloseSubpath,
+            // Inner rectangle (counter-clockwise cutout hole)
+            PathCmd::MoveTo((x0 + hw, y0 + hw)),
+            PathCmd::LineTo((x0 + hw, y1 - hw)),
+            PathCmd::LineTo((x1 - hw, y1 - hw)),
+            PathCmd::LineTo((x1 - hw, y0 + hw)),
+            PathCmd::Close,
+        ];
+    }
+
+    let n = pts.len();
+    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
     let (left, right) = ribbon_edges(s);
-    let n = left.len();
+
+    if is_closed {
+        let mut out = Vec::with_capacity(2 * n + 4);
+        out.push(PathCmd::MoveTo(left[0]));
+        out.extend(open_polyline_to_cubics(&left).into_iter().map(PathCmd::CurveTo));
+        out.push(PathCmd::CloseSubpath);
+
+        let right_rev: Vec<(f64, f64)> = right.iter().rev().copied().collect();
+        out.push(PathCmd::MoveTo(right_rev[0]));
+        out.extend(open_polyline_to_cubics(&right_rev).into_iter().map(PathCmd::CurveTo));
+        out.push(PathCmd::Close);
+        return out;
+    }
+
     let end_cap = arc((pts[n - 1].x, pts[n - 1].y), left[n - 1], right[n - 1], cap_steps);
     let start_cap = arc((pts[0].x, pts[0].y), right[0], left[0], cap_steps);
     let right_rev: Vec<(f64, f64)> = right.iter().rev().copied().collect();
@@ -554,11 +645,20 @@ pub fn ribbon_path(s: &Stroke, cap_steps: usize) -> Vec<PathCmd> {
 pub fn ribbon_edges(s: &Stroke) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     let pts = &s.samples;
     let n = pts.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
     for i in 0..n {
-        let a = pts[i.saturating_sub(1)];
-        let b = pts[(i + 1).min(n - 1)];
+        let (a, b) = if is_closed {
+            let prev_idx = if i == 0 { n - 2 } else { i - 1 };
+            let next_idx = if i == n - 1 { 1 } else { i + 1 };
+            (pts[prev_idx], pts[next_idx])
+        } else {
+            (pts[i.saturating_sub(1)], pts[(i + 1).min(n - 1)])
+        };
         let (dx, dy) = (b.x - a.x, b.y - a.y);
         let l = dx.hypot(dy).max(1e-9);
         let (nx, ny) = (-dy / l, dx / l);

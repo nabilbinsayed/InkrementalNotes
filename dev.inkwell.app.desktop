@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=InkWell
+GenericName=PDF Ink Annotator
+Comment=Zero-latency vector ink and PDF annotator
+Exec="/mnt/Work/Own Programs/InkWell/Launch Inkwell.sh" %U
+Icon=dev.inkwell.app
+Terminal=false
+Type=Application
+Categories=Office;Graphics;Viewer;
+MimeType=application/pdf;
+StartupWMClass=inkwell-app
+Keywords=PDF;Ink;Annotation;Whiteboard;Stylus;Vector;

@@ -9,6 +9,14 @@ export const TOOL_NAMES = [
 let liveNativePressure = 0.0;
 let liveNativeDown = false;
 let liveNativeTool = 'pen';
+let lastNativeSampleTime = 0;
+
+let lastPointerTime = 0;
+let lastPointerX = 0;
+let lastPointerY = 0;
+let smoothedVelocityPressure = 0.5;
+let browserHasVariedPressure = false;
+
 const activeStylusDevice = {
   name: 'Scanning...',
   path: '',
@@ -16,11 +24,26 @@ const activeStylusDevice = {
   maxPressure: 65535,
 };
 
+export function getLiveNativeTool() {
+  const now = performance.now();
+  if ((now - lastNativeSampleTime) < 350) {
+    return liveNativeTool;
+  }
+  return null;
+}
+
+export function resetPressureDynamics() {
+  lastPointerTime = 0;
+  smoothedVelocityPressure = 0.5;
+}
+
 export function initStylusIntegration() {
   ipc.initNativeStylusStream((msg) => {
     if (!msg) return;
-    if (msg.type === 'handshake') {
-      const payload = msg.payload;
+    const type = msg.type || (msg.sample ? 'sample' : (msg.handshake ? 'handshake' : null));
+    const payload = msg.payload || msg.sample || msg.handshake || msg;
+
+    if (type === 'handshake') {
       if (payload) {
         activeStylusDevice.name = payload.device_name || 'Native Tablet';
         activeStylusDevice.path = payload.device_path || '';
@@ -34,12 +57,13 @@ export function initStylusIntegration() {
           pressure: liveNativePressure,
         });
       }
-    } else if (msg.type === 'sample') {
-      const s = msg.payload;
+    } else if (type === 'sample') {
+      const s = payload;
       if (!s) return;
-      liveNativePressure = s.pressure;
-      liveNativeDown = s.down;
+      liveNativePressure = typeof s.pressure === 'number' ? s.pressure : 0.0;
+      liveNativeDown = !!s.down;
       liveNativeTool = s.tool === 2 ? 'eraser' : 'pen';
+      lastNativeSampleTime = performance.now();
     }
   });
 }
@@ -60,21 +84,65 @@ function scheduleDiagnostics(pointerType, source, pressure) {
 }
 
 export function resolvePressure(e) {
-  if (liveNativeDown && liveNativePressure > 0.001) {
+  const now = performance.now();
+  const isNativeRecent = (now - lastNativeSampleTime) < 350;
+
+  // 1. Native Linux evdev hardware tablet stream
+  if (isNativeRecent && (liveNativeDown || liveNativePressure > 0.001)) {
     state.pressureSource = 'native';
     state.lastPointerType = liveNativeTool;
-    const p = Math.max(0.05, Math.min(1.0, liveNativePressure));
+    const p = Math.max(0.04, Math.min(1.0, liveNativePressure));
     scheduleDiagnostics(liveNativeTool, 'native', p);
     return p;
   }
 
-  if (e && e.pointerType === 'pen' && e.pressure > 0) {
-    state.pressureSource = 'browser';
-    state.lastPointerType = 'pen';
-    scheduleDiagnostics('pen', 'browser', e.pressure);
-    return e.pressure;
+  // 2. Browser hardware stylus PointerEvent
+  if (e && typeof e.pressure === 'number' && e.pressure > 0) {
+    if (Math.abs(e.pressure - 0.5) > 0.005) {
+      browserHasVariedPressure = true;
+    }
+    if (browserHasVariedPressure && (e.pointerType === 'pen' || e.pointerType === 'touch')) {
+      const pType = e.pointerType || 'pen';
+      state.pressureSource = 'browser';
+      state.lastPointerType = pType;
+      const p = Math.max(0.04, Math.min(1.0, e.pressure));
+      scheduleDiagnostics(pType, 'browser', p);
+      return p;
+    }
   }
 
+  // 3. Dynamic velocity-based pressure calculation
+  const clientX = (e && typeof e.clientX === 'number') ? e.clientX : null;
+  const clientY = (e && typeof e.clientY === 'number') ? e.clientY : null;
+  const evtTime = (e && typeof e.timeStamp === 'number' && e.timeStamp > 0) ? e.timeStamp : now;
+
+  if (clientX !== null && clientY !== null) {
+    const dt = Math.max(4, evtTime - lastPointerTime);
+    if (dt > 300 || lastPointerTime === 0) {
+      smoothedVelocityPressure = 0.5;
+    } else {
+      const dx = clientX - lastPointerX;
+      const dy = clientY - lastPointerY;
+      const dist = Math.hypot(dx, dy);
+      const speed = dist / dt; // pixels per millisecond
+      // Fast flick movements taper (~0.26), slow deliberate curves press thicker (~0.84)
+      const speedFactor = Math.exp(-speed / 0.9);
+      const targetPressure = 0.26 + 0.58 * speedFactor;
+      smoothedVelocityPressure = 0.65 * smoothedVelocityPressure + 0.35 * targetPressure;
+    }
+    lastPointerTime = evtTime;
+    lastPointerX = clientX;
+    lastPointerY = clientY;
+
+    const pType = (e && e.pointerType) ? e.pointerType : 'mouse';
+    state.pressureSource = 'velocity';
+    state.lastPointerType = pType;
+    const p = Math.max(0.04, Math.min(1.0, smoothedVelocityPressure));
+    scheduleDiagnostics(pType, 'velocity', p);
+    return p;
+  }
+
+  // 4. Default fallback
   state.pressureSource = 'fallback';
   state.lastPointerType = (e && e.pointerType) ? e.pointerType : 'mouse';
   scheduleDiagnostics(state.lastPointerType, 'fallback', 0.5);
@@ -83,6 +151,8 @@ export function resolvePressure(e) {
 
 if (typeof window !== 'undefined') {
   window.resolvePressure = resolvePressure;
+  window.resetPressureDynamics = resetPressureDynamics;
+  window.getLiveNativeTool = getLiveNativeTool;
 }
 
 export function getActiveTool() {

@@ -267,8 +267,8 @@
 
   <!-- 3. Main Application Stage & Header Area -->
   <main id="mainContent" class="main-content">
-    <!-- Top Header Bar -->
-    <header id="topHeader" class="top-header">
+    <!-- Top Header Bar (Frameless Drag Region) -->
+    <header id="topHeader" class="top-header" data-tauri-drag-region>
       <!-- Left history & navigation controls -->
       <div class="header-left">
         <button id="btnNavBack" class="header-icon-btn" title="Back in navigation history" aria-label="Back">
@@ -279,11 +279,11 @@
         </button>
         <button id="btnHeaderNewNote" class="btn-primary-accent" title="Start New Blank Whiteboard (Ctrl+N)" aria-label="New Whiteboard">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-          <span>New Note</span>
+          <span class="btn-label">New Note</span>
         </button>
         <button id="btnHeaderOpen" class="btn-secondary-pill" title="Open PDF File (Ctrl+O)" aria-label="Open PDF File">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 8 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/></svg>
-          <span>Open PDF</span>
+          <span class="btn-label">Open PDF</span>
         </button>
       </div>
 
@@ -354,6 +354,19 @@
         <div id="docStatusBadge" class="doc-status-badge" title="Vector Engine & WAL Journal Active">
           <span class="status-indicator-dot"></span>
           <span id="docStatusText">Vector Ready</span>
+        </div>
+
+        <!-- Sleek Frameless Window Controls -->
+        <div id="windowControls" class="window-controls" aria-label="Window Controls">
+          <button id="btnWinMin" class="win-control-btn win-min" title="Minimize" aria-label="Minimize Window">
+            <svg width="10" height="2" viewBox="0 0 10 2"><rect width="10" height="2" fill="currentColor"/></svg>
+          </button>
+          <button id="btnWinMax" class="win-control-btn win-max" title="Maximize or Restore" aria-label="Maximize Window">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="0.65" y="0.65" width="8.7" height="8.7" rx="1.5"/></svg>
+          </button>
+          <button id="btnWinClose" class="win-control-btn win-close" title="Close" aria-label="Close Window">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.3"><line x1="1" y1="1" x2="9" y2="9"/><line x1="9" y1="1" x2="1" y2="9"/></svg>
+          </button>
         </div>
       </div>
     </header>

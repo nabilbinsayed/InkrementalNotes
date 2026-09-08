@@ -32,10 +32,10 @@ class OneEuro {
   }
 }
 
-// A light trailing spring removes digitizer tremor without trying to predict
-// the pen. The first point is kept exact so a stroke never visibly starts late.
+// Dynamic velocity-responsive streamline:
+// Damps low-speed digitizer tremor while dynamically opening up for fast cursive handwriting.
 class Streamline {
-  constructor(positionLerp = 0.45, pressureLerp = 0.35) {
+  constructor(positionLerp = 0.55, pressureLerp = 0.35) {
     this.positionLerp = positionLerp;
     this.pressureLerp = pressureLerp;
     this.curX = null;
@@ -49,13 +49,51 @@ class Streamline {
       this.curY = y;
       this.curP = p;
     } else {
-      this.curX += (x - this.curX) * this.positionLerp;
-      this.curY += (y - this.curY) * this.positionLerp;
+      const dist = Math.hypot(x - this.curX, y - this.curY);
+      // Fast handwriting / flicks: lerp opens to 0.92 (near-zero lag, full loop fidelity)
+      // Slow deliberate strokes: stays at 0.55 (kills hand tremor)
+      const dynamicLerp = Math.min(0.92, Math.max(this.positionLerp, this.positionLerp + dist * 0.04));
+      this.curX += (x - this.curX) * dynamicLerp;
+      this.curY += (y - this.curY) * dynamicLerp;
       this.curP += (p - this.curP) * this.pressureLerp;
     }
     return { x: this.curX, y: this.curY, p: this.curP };
   }
 }
+
+function smoothStrokePoints(pts, passes = 2) {
+  if (!pts || pts.length < 3) return pts ? pts.slice() : [];
+  if (typeof isAxisAlignedRect === 'function' && isAxisAlignedRect(pts)) return pts.slice();
+  let cur = pts.slice();
+  const n = cur.length;
+  const isClosed = Math.hypot(cur[0].x - cur[n - 1].x, cur[0].y - cur[n - 1].y) < 2.0;
+
+  for (let pass = 0; pass < passes; pass++) {
+    const next = [];
+    for (let i = 0; i < n; i++) {
+      if (!isClosed && (i === 0 || i === n - 1)) {
+        next.push(cur[i]);
+        continue;
+      }
+      const p0 = isClosed ? cur[(i - 1 + n) % n] : cur[i - 1];
+      const p1 = cur[i];
+      const p2 = isClosed ? cur[(i + 1) % n] : cur[i + 1];
+      const w0 = p0.w !== undefined ? p0.w : (p0.p !== undefined ? p0.p * 2.0 : 2.0);
+      const w1 = p1.w !== undefined ? p1.w : (p1.p !== undefined ? p1.p * 2.0 : 2.0);
+      const w2 = p2.w !== undefined ? p2.w : (p2.p !== undefined ? p2.p * 2.0 : 2.0);
+      next.push({
+        x: 0.25 * p0.x + 0.5 * p1.x + 0.25 * p2.x,
+        y: 0.25 * p0.y + 0.5 * p1.y + 0.25 * p2.y,
+        w: 0.25 * w0 + 0.5 * w1 + 0.25 * w2,
+        p: p1.p,
+        t: p1.t,
+      });
+    }
+    cur = next;
+  }
+  return cur;
+}
+
 
 function computeStrokeBbox(pts, baseWidth = 2.0) {
   if (!pts || !pts.length) return [0, 0, 0, 0];
@@ -209,6 +247,40 @@ function getChiselPath2D(rawPts, baseH = 16.0) {
   return path;
 }
 
+function isAxisAlignedRect(pts) {
+  if (!pts || pts.length < 4) return null;
+  const n = pts.length;
+  const isClosed = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 2.0;
+  if (!isClosed) return null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  if ((maxX - minX) < 4 || (maxY - minY) < 4) return null;
+  const eps = 2.0;
+  let hasLeft = false, hasRight = false, hasTop = false, hasBottom = false;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const onLeft = Math.abs(p.x - minX) < eps;
+    const onRight = Math.abs(p.x - maxX) < eps;
+    const onTop = Math.abs(p.y - minY) < eps;
+    const onBottom = Math.abs(p.y - maxY) < eps;
+    if (!onLeft && !onRight && !onTop && !onBottom) return null;
+    if (onLeft) hasLeft = true;
+    if (onRight) hasRight = true;
+    if (onTop) hasTop = true;
+    if (onBottom) hasBottom = true;
+  }
+  if (hasLeft && hasRight && hasTop && hasBottom) {
+    return [minX, minY, maxX, maxY];
+  }
+  return null;
+}
+
 function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   if (!rawPts || !rawPts.length) return;
 
@@ -238,18 +310,45 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
     return;
   }
 
+  const rect = isAxisAlignedRect(rawPts);
+  if (rect) {
+    const [x0, y0, x1, y1] = rect;
+    const w = (rawPts[0] && rawPts[0].w !== undefined && !isNaN(rawPts[0].w))
+      ? rawPts[0].w
+      : ((rawPts[0] && rawPts[0].p !== undefined) ? rawPts[0].p * 2.0 : baseWidth);
+    const hw = Math.max(0.05, w / 2);
+    // Outer rect (clockwise)
+    target.moveTo(x0 - hw, y0 - hw);
+    target.lineTo(x1 + hw, y0 - hw);
+    target.lineTo(x1 + hw, y1 + hw);
+    target.lineTo(x0 - hw, y1 + hw);
+    target.closePath();
+    // Inner rect (counter-clockwise)
+    target.moveTo(x0 + hw, y0 + hw);
+    target.lineTo(x0 + hw, y1 - hw);
+    target.lineTo(x1 - hw, y1 - hw);
+    target.lineTo(x1 - hw, y0 + hw);
+    target.closePath();
+    return;
+  }
+
   const pts = chaikinSubdivide(rawPts, 2);
   const n = pts.length;
   if (n < 2) return;
 
-  // Check if stroke is a closed loop (e.g. geometric rectangle or ellipse)
+  // Check if stroke is a closed loop (e.g. geometric ellipse or closed polygon)
   const isClosed = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 2.0;
+  const step = n >= 16 ? 4 : (n >= 8 ? 2 : 1);
 
   const left = [];
   const right = [];
   for (let i = 0; i < n; i++) {
-    const a = pts[Math.max(0, i - 1)];
-    const b = pts[Math.min(n - 1, i + 1)];
+    const a = isClosed
+      ? pts[(i - step + n) % n]
+      : pts[Math.max(0, i - step)];
+    const b = isClosed
+      ? pts[(i + step) % n]
+      : pts[Math.min(n - 1, i + step)];
     const dx = b.x - a.x, dy = b.y - a.y;
     const l = Math.hypot(dx, dy) || 1e-6;
     const nx = -dy / l, ny = dx / l;
@@ -512,5 +611,5 @@ function drawStroke(ctx, stroke) {
   if (isHighlighter) ctx.restore();
 }
 
-window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour };
+window.Ink = { OneEuro, Streamline, Stroke, drawSegment, drawDot, drawStroke, openPolylineToCubics, cubicAt, chaikinSubdivide, quadraticAt, getPath2D, getChiselPath2D, computeStrokeBbox, traceRibbonContour, isAxisAlignedRect, smoothStrokePoints };
 

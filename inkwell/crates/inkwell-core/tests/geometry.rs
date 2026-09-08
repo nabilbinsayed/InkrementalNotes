@@ -26,7 +26,7 @@ fn flatten_path(path: &[PathCmd], per_seg: usize) -> Vec<(f64, f64)> {
                 }
                 cur = c[2];
             }
-            PathCmd::Close => {}
+            PathCmd::CloseSubpath | PathCmd::Close => {}
         }
     }
     out
@@ -226,3 +226,88 @@ fn degenerate_polygons_do_not_panic() {
         }
     }
 }
+
+#[test]
+fn test_rectangle_corners_stay_sharp_without_deformation() {
+    let brush = Brush { base_width: 2.0, gamma: 1.0, min_ratio: 0.22 };
+    let mut b = StrokeBuilder::new(1, ToolKind::Pen, [0.0; 3], brush, false);
+    // 40 points tracing a 100x50 rectangle from (10, 10) to (110, 60)
+    let px0 = 10.0;
+    let py0 = 10.0;
+    let dx = 100.0;
+    let dy = 50.0;
+    let px1 = px0 + dx;
+    let py1 = py0 + dy;
+    let samples = 40;
+    for i in 0..=samples {
+        let t = i as f64 / samples as f64;
+        let (x, y) = if t <= 0.25 {
+            let u = t / 0.25;
+            (px0 + u * dx, py0)
+        } else if t <= 0.5 {
+            let u = (t - 0.25) / 0.25;
+            (px1, py0 + u * dy)
+        } else if t <= 0.75 {
+            let u = (t - 0.5) / 0.25;
+            (px1 - u * dx, py1)
+        } else {
+            let u = (t - 0.75) / 0.25;
+            (px0, py1 - u * dy)
+        };
+        b.push(x, y, 0.8, i as f64 * 10.0);
+    }
+    let s = b.finish(0.0);
+
+    // Verify detection
+    let rect_opt = is_axis_aligned_rect(&s.samples);
+    assert!(rect_opt.is_some(), "is_axis_aligned_rect should identify the rectangle");
+    let ([min_x, min_y, max_x, max_y], _) = rect_opt.unwrap();
+    assert!((min_x - 10.0).abs() < 1e-4);
+    assert!((min_y - 10.0).abs() < 1e-4);
+    assert!((max_x - 110.0).abs() < 1e-4);
+    assert!((max_y - 60.0).abs() < 1e-4);
+
+    // Verify ribbon_path emits straight lines (LineTo) and CloseSubpath + Close, without CurveTo
+    let path = ribbon_path(&s, 16);
+    let mut has_curve = false;
+    let mut has_close_subpath = false;
+    let mut has_close = false;
+    for cmd in &path {
+        match cmd {
+            PathCmd::CurveTo(_) => has_curve = true,
+            PathCmd::CloseSubpath => has_close_subpath = true,
+            PathCmd::Close => has_close = true,
+            _ => {}
+        }
+    }
+    assert!(!has_curve, "Rectangle should not have curved segments or pillowing");
+    assert!(has_close_subpath, "Rectangle should have CloseSubpath for outer loop");
+    assert!(has_close, "Rectangle should have Close for inner loop");
+}
+
+#[test]
+fn test_closed_stroke_has_no_end_caps() {
+    let brush = Brush { base_width: 2.0, gamma: 1.0, min_ratio: 0.22 };
+    let mut b = StrokeBuilder::new(1, ToolKind::Pen, [0.0; 3], brush, false);
+    let steps = 32;
+    for i in 0..=steps {
+        let theta = i as f64 / steps as f64 * std::f64::consts::TAU;
+        b.push(50.0 + 30.0 * theta.cos(), 50.0 + 30.0 * theta.sin(), 0.8, i as f64 * 10.0);
+    }
+    let s = b.finish(0.0);
+
+    let path = ribbon_path(&s, 16);
+    // Closed loop should have CloseSubpath and Close, and no LineTo chords from arc caps
+    let mut close_subpath_count = 0;
+    let mut close_count = 0;
+    for cmd in &path {
+        match cmd {
+            PathCmd::CloseSubpath => close_subpath_count += 1,
+            PathCmd::Close => close_count += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(close_subpath_count, 1, "Closed loop must have outer subpath close");
+    assert_eq!(close_count, 1, "Closed loop must have inner subpath close");
+}
+

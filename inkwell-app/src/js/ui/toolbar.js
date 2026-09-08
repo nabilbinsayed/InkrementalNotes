@@ -314,7 +314,21 @@ function bindZoomControls() {
 
   $('btnZoomFit') && $('btnZoomFit').addEventListener('click', () => {
     if (_viewport && state.pageInfos && state.pageInfos[0]) {
-      _viewport.fitPage(state.pageInfos[0].width_pt, state.pageInfos[0].height_pt, 'left');
+      const pi = state.pageInfos[0];
+      const r = _viewport.stageRect || { width: 800, height: 600 };
+      const availW = Math.max(100, r.width - 48);
+      const availH = Math.max(100, r.height - 48);
+      const pageW = pi.width_pt || 595.0;
+      const pageH = pi.height_pt || 842.0;
+      const pageZoom = Math.min(availW / pageW, availH / pageH);
+      const widthZoom = availW / pageW;
+
+      // Toggle to fitWidth if already in fitPage, allowing widescreen displays to fill the page
+      if (Math.abs(_viewport.zoom - pageZoom) < 0.05 && widthZoom > pageZoom * 1.1) {
+        _viewport.fitWidth(pageW, 'left');
+      } else {
+        _viewport.fitPage(pageW, pageH, 'left');
+      }
       emit('zoomChanged', { zoom: _viewport.zoom });
     }
   });

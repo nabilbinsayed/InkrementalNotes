@@ -293,8 +293,9 @@ impl PdfFile {
         let mut max_y = f64::NEG_INFINITY;
 
         for s in strokes {
+            let is_rect = crate::ink::is_axis_aligned_rect(&s.samples).is_some();
             let simplified_stroke;
-            let s_ref = if s.samples.len() > 3 {
+            let s_ref = if !is_rect && s.samples.len() > 3 {
                 simplified_stroke = Stroke {
                     id: s.id,
                     kind: s.kind,
@@ -368,8 +369,11 @@ impl PdfFile {
                             fmt_coord(ury - c[2].1),
                         );
                     }
+                    PathCmd::CloseSubpath => {
+                        let _ = writeln!(content, "h");
+                    }
                     PathCmd::Close => {
-                        let _ = writeln!(content, "h f Q");
+                        let _ = writeln!(content, "h f* Q");
                     }
                 }
             }
@@ -407,7 +411,8 @@ impl PdfFile {
         // /InkList: decimated centrelines converted to PDF user space (x_pdf = llx + x_canvas, y_pdf = ury - y_canvas)
         let mut inklist = String::new();
         for s in strokes {
-            let simplified = if s.samples.len() > 3 {
+            let is_rect = crate::ink::is_axis_aligned_rect(&s.samples).is_some();
+            let simplified = if !is_rect && s.samples.len() > 3 {
                 crate::ink::simplify(&s.samples, 0.5)
             } else {
                 s.samples.clone()

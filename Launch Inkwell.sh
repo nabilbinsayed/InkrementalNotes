@@ -3,10 +3,13 @@
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export LD_LIBRARY_PATH="$DIR/bin:${LD_LIBRARY_PATH:-}"
+export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
+export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-0}"
 
 RELEASE_BIN="$DIR/inkwell-app/src-tauri/target/release/inkwell-app"
 DEBUG_BIN="$DIR/inkwell-app/src-tauri/target/debug/inkwell-app"
+
+export LD_LIBRARY_PATH="$DIR/bin:$DIR/inkwell-app/src-tauri/target/release:$DIR/inkwell-app/src-tauri/target/debug:${LD_LIBRARY_PATH:-}"
 
 if [ -f "$DIR/inkwell-app" ]; then
     exec "$DIR/inkwell-app" "$@"

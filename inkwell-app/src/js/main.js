@@ -13,6 +13,7 @@ import * as ipc from './core/ipc.js';
 import * as compositor from './render/compositor.js';
 import * as tiles from './render/tiles.js';
 import * as overlays from './render/overlays.js';
+import * as templates from './render/templates.js';
 
 import * as toolManager from './tools/tool-manager.js';
 import * as penTool from './tools/pen.js';
@@ -147,6 +148,14 @@ async function createNewWhiteboard() {
   });
 }
 
+function prepareAllImagesForSave() {
+  const templateImages = (state.pageInfos || [])
+    .map((pi, idx) => (pi && pi.template && pi.template !== 'blank') ? templates.renderPageTemplateBackgroundToDataUrl(pi, idx) : null)
+    .filter(Boolean);
+  const nonDeletedImages = (state.images || []).filter(img => !img.deleted);
+  return [...templateImages, ...nonDeletedImages];
+}
+
 function registerCoreCommands() {
   const reg = commandsModule.commands;
 
@@ -176,7 +185,8 @@ function registerCoreCommands() {
       try {
         state.isSaving = true;
         toolbar.updateSaveStatusUI('saving');
-        await ipc.savePdf(state.currentDocPath, state.strokes, state.images, state.textObjects);
+        const imagesToSave = prepareAllImagesForSave();
+        await ipc.savePdf(state.currentDocPath, state.strokes, imagesToSave, state.textObjects);
         state.isDirty = false;
         toolbar.updateSaveStatusUI('saved');
         toast.showToast('Document saved successfully', 'success');
@@ -199,7 +209,8 @@ function registerCoreCommands() {
       try {
         state.isSaving = true;
         toolbar.updateSaveStatusUI('saving');
-        await ipc.savePdf(null, state.strokes, state.images, state.textObjects);
+        const imagesToSave = prepareAllImagesForSave();
+        await ipc.savePdf(null, state.strokes, imagesToSave, state.textObjects);
         toolbar.updateSaveStatusUI('saved');
         toast.showToast('Document exported successfully', 'success');
       } catch (e) {
@@ -418,6 +429,19 @@ function registerCoreCommands() {
     },
   });
 
+  reg.register({
+    id: 'view.fitWidth',
+    title: 'Fit Width to Window',
+    category: 'View',
+    shortcut: 'Ctrl+9',
+    execute: () => {
+      if (_viewport && state.pageInfos && state.pageInfos[0]) {
+        _viewport.fitWidth(state.pageInfos[0].width_pt, 'left');
+        if (typeof window.emitZoomChanged === 'function') window.emitZoomChanged(_viewport);
+      }
+    },
+  });
+
   // Modal commands
   reg.register({
     id: 'modal.commandPalette',
@@ -463,6 +487,11 @@ function bindAllUIEvents() {
   // Save triggers
   $('btnHeaderSave') && $('btnHeaderSave').addEventListener('click', () => commandsModule.commands.execute('file.save'));
   $('btnExportShare') && $('btnExportShare').addEventListener('click', () => commandsModule.commands.execute('file.save'));
+
+  // Window Controls (minimize, maximize, close)
+  $('btnWinMin') && $('btnWinMin').addEventListener('click', () => ipc.minimizeWindow().catch(() => {}));
+  $('btnWinMax') && $('btnWinMax').addEventListener('click', () => ipc.toggleMaximizeWindow().catch(() => {}));
+  $('btnWinClose') && $('btnWinClose').addEventListener('click', () => ipc.closeWindow().catch(() => {}));
 
   // File Input handler
   const fileInput = $('pdfFileInput');
@@ -869,7 +898,8 @@ function attachPointerHandlers(wetCanvas) {
 
   function localXY(e) {
     const pane = compositor.paneForEvent(e);
-    const r = compositor.getStageRect() || wetCanvas.getBoundingClientRect();
+    const stageEl = $('stage');
+    const r = compositor.getStageRect() || (stageEl ? stageEl.getBoundingClientRect() : wetCanvas.getBoundingClientRect());
     const wx = _viewport.screenToWorld(e.clientX - r.left, e.clientY - r.top, pane);
     return { ptWorld: wx, pane, screenPt: [e.clientX - r.left, e.clientY - r.top] };
   }
@@ -899,7 +929,11 @@ function attachPointerHandlers(wetCanvas) {
       if (pop) pop.classList.add('hidden');
     }
 
-    if (tool === 'pan') {
+    const isStylusEraser = (e && (e.buttons === 32 || e.button === 5)) ||
+      (typeof toolManager.getLiveNativeTool === 'function' && toolManager.getLiveNativeTool() === 'eraser');
+    const effectiveTool = isStylusEraser ? 'eraser' : tool;
+
+    if (effectiveTool === 'pan') {
       const isRight = (pane === 'right' && _viewport && _viewport.splitMode);
       _panState = {
         isDown: true,
@@ -909,13 +943,13 @@ function attachPointerHandlers(wetCanvas) {
         startPanY: _viewport ? (isRight ? _viewport.rightPanY : _viewport.panY) : 0,
         pane,
       };
-    } else if (tool === 'pen' || tool === 'highlighter') {
+    } else if (effectiveTool === 'pen' || effectiveTool === 'highlighter') {
       penTool.onPenDown(e, ptWorld, pane, _viewport);
-    } else if (tool === 'eraser') {
+    } else if (effectiveTool === 'eraser') {
       eraserTool.onEraserDown(e, ptWorld, pane, _viewport);
-    } else if (tool === 'lasso') {
+    } else if (effectiveTool === 'lasso') {
       lassoTool.onLassoDown(e, ptWorld, screenPt, pane, _viewport);
-    } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
+    } else if (effectiveTool === 'rect' || effectiveTool === 'ellipse' || effectiveTool === 'ruler') {
       shapesTool.onShapeDown(e, ptWorld, pane, _viewport);
     } else if (tool === 'laser') {
       laserTool.onLaserDown(e, ptWorld, pane, _viewport);
@@ -990,7 +1024,9 @@ function attachPointerHandlers(wetCanvas) {
       const subEvt = events[i];
       const { ptWorld, pane, screenPt } = localXY(subEvt);
 
-      if (tool === 'pan') {
+      if (state.isErasing) {
+        eraserTool.onEraserMove(subEvt, ptWorld, pane, _viewport);
+      } else if (tool === 'pan') {
         if (_panState.isDown && _viewport) {
           const dx = subEvt.clientX - _panState.startClientX;
           const dy = subEvt.clientY - _panState.startClientY;
@@ -1042,12 +1078,15 @@ function attachPointerHandlers(wetCanvas) {
   wetCanvas.addEventListener('pointerup', e => {
     const tool = state.activeTool || 'pen';
 
+    if (state.isErasing) {
+      eraserTool.onEraserUp();
+    }
     if (tool === 'pan') {
       _panState.isDown = false;
     } else if (tool === 'pen' || tool === 'highlighter') {
       penTool.onPenUp(e, _viewport);
     } else if (tool === 'eraser') {
-      eraserTool.onEraserUp();
+      if (!state.isErasing) eraserTool.onEraserUp();
     } else if (tool === 'lasso') {
       lassoTool.onLassoUp(e, _viewport);
     } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
@@ -1322,6 +1361,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.addEventListener('resize', () => compositor.resize());
   window.addEventListener('scroll', () => compositor.updateStageRect(), { passive: true });
 
+  const stageEl = $('stage');
+  if (typeof ResizeObserver !== 'undefined' && stageEl) {
+    new ResizeObserver(() => compositor.resize()).observe(stageEl);
+  }
+
   // Passive state listeners
   on('toast', payload => toast.showToast(payload.message, payload.type));
   on('toolChanged', payload => {
@@ -1344,7 +1388,11 @@ window.addEventListener('DOMContentLoaded', async () => {
   on('pageChanged', payload => {
     const pageDisplay = $('pageNumDisplay');
     if (pageDisplay) {
-      pageDisplay.textContent = `Page ${payload.pageIndex + 1} / ${payload.totalPages || 1}`;
+      pageDisplay.textContent = `${payload.pageIndex + 1}`;
+    }
+    const totalDisplay = $('pageTotalDisplay');
+    if (totalDisplay) {
+      totalDisplay.textContent = `${payload.totalPages || 1}`;
     }
     scrollbar.updateDocScrollbar(_viewport);
   });

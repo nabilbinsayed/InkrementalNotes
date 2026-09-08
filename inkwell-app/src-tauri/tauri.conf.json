@@ -12,11 +12,12 @@
       {
         "label": "main",
         "title": "Inkwell — PDF-Native Ink Annotator",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 900,
-        "minHeight": 600,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 460,
+        "minHeight": 360,
         "resizable": true,
+        "decorations": false,
         "theme": "Dark",
         "devtools": true
       }

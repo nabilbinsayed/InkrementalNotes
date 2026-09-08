@@ -18,7 +18,12 @@ def check(name, cond, note=""):
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}" + (f"   {note}" if note else ""), flush=True)
 
 with sync_playwright() as pw:
-    b = pw.chromium.launch(headless=True, args=["--force-device-scale-factor=1", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"])
+    import shutil
+    chrome_bin = shutil.which("chromium") or shutil.which("google-chrome-stable") or shutil.which("chrome")
+    launch_opts = {"headless": True, "args": ["--force-device-scale-factor=1", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]}
+    if chrome_bin:
+        launch_opts["executable_path"] = chrome_bin
+    b = pw.chromium.launch(**launch_opts)
     ctx = b.new_context(viewport={"width": 1360, "height": 860})
     pg = ctx.new_page()
     pg.on("console", lambda m: (errors if m.type == "error" else

@@ -236,3 +236,16 @@ export function initNativeStylusStream(onMessage) {
   }
 }
 
+// ---- Frameless Window Actions ----
+
+export async function minimizeWindow() {
+  return await invokeTauri('minimize_window');
+}
+
+export async function toggleMaximizeWindow() {
+  return await invokeTauri('toggle_maximize_window');
+}
+
+export async function closeWindow() {
+  return await invokeTauri('close_window');
+}

@@ -54,7 +54,10 @@ export function makeCtx(canvas) {
 }
 
 export function updateStageRect() {
-  if (_wetCanvas) {
+  const stageEl = (typeof document !== 'undefined') ? document.getElementById('stage') : null;
+  if (stageEl) {
+    _stageRect = stageEl.getBoundingClientRect();
+  } else if (_wetCanvas) {
     _stageRect = _wetCanvas.getBoundingClientRect();
   }
   if (_viewport && _viewport.updateStageRect) {
@@ -67,9 +70,10 @@ export function getStageRect() {
 }
 
 export function paneBounds(pane = 'left') {
-  if (!_tilesCanvas) return { x: 0, y: 0, width: 800, height: 600 };
-  const width = _tilesCanvas.width / state.dpr;
-  const height = _tilesCanvas.height / state.dpr;
+  const stageEl = (typeof document !== 'undefined') ? document.getElementById('stage') : null;
+  const r = stageEl ? stageEl.getBoundingClientRect() : (_stageRect || { width: 800, height: 600 });
+  const width = r.width > 0 ? r.width : 800;
+  const height = r.height > 0 ? r.height : 600;
   if (!_viewport || !_viewport.splitMode) return { x: 0, y: 0, width, height };
   const half = width / 2;
   return pane === 'right' ? { x: half, y: 0, width: half, height } : { x: 0, y: 0, width: half, height };
@@ -80,7 +84,8 @@ export function visiblePanes() {
 }
 
 export function paneForEvent(e) {
-  const r = _stageRect || (_wetCanvas ? (_stageRect = _wetCanvas.getBoundingClientRect()) : { left: 0, width: window.innerWidth });
+  const stageEl = (typeof document !== 'undefined') ? document.getElementById('stage') : null;
+  const r = _stageRect || (stageEl ? stageEl.getBoundingClientRect() : { left: 0, width: window.innerWidth });
   return _viewport && _viewport.splitMode && (e.clientX - r.left > r.width / 2) ? 'right' : 'left';
 }
 
@@ -109,8 +114,8 @@ export function resize() {
     if (!c) continue;
     c.width = Math.round(r.width * state.dpr);
     c.height = Math.round(r.height * state.dpr);
-    c.style.width = r.width + 'px';
-    c.style.height = r.height + 'px';
+    c.style.width = '100%';
+    c.style.height = '100%';
   }
 
   _tctx = makeCtx(_tilesCanvas);

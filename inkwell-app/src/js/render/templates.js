@@ -122,7 +122,7 @@ export function drawPageTemplateGuidelines(ctx, template, width, height) {
 
 export function renderPageTemplateBackgroundToDataUrl(pi, sheetIdx) {
   const canvas = document.createElement('canvas');
-  const dpr = 1;
+  const dpr = 2; // Crisp 2x rasterization for PDF vector export
   const width = (pi && pi.width_pt) || 595.0;
   const height = (pi && pi.height_pt) || 842.0;
 
@@ -134,11 +134,15 @@ export function renderPageTemplateBackgroundToDataUrl(pi, sheetIdx) {
   if (pi && pi.template === 'dark') {
     ctx.fillStyle = '#0f172a';
     ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
   }
 
   drawPageTemplateGuidelines(ctx, pi ? pi.template : 'blank', width, height);
 
   return {
+    id: `template_bg_${sheetIdx}`,
     sheet: sheetIdx,
     x: 0,
     y: 0,

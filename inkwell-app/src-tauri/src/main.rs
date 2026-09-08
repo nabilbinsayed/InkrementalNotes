@@ -22,6 +22,14 @@ fn main() {
          --disable-background-timer-throttling",
     );
 
+    // Linux Wayland & GTK tuning for Hyprland and modern compositors
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("GDK_BACKEND").is_err() {
+            std::env::set_var("GDK_BACKEND", "wayland,x11");
+        }
+    }
+
     // Initialize PDFium once at startup and store in AppState.
     // All commands that need PDFium will borrow this cached instance.
     let app_state = AppState::default();
@@ -129,6 +137,9 @@ fn main() {
             commands::set_document_dirty,
             commands::log_frontend,
             commands::get_initial_file,
+            commands::minimize_window,
+            commands::toggle_maximize_window,
+            commands::close_window,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

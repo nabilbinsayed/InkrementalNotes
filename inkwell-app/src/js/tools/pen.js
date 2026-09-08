@@ -34,7 +34,10 @@ export function onPenDown(e, ptWorld, pane, viewport) {
   state.cur.sheet = activeSheet;
   state.drawingPane = pane;
   if (window.Ink && typeof window.Ink.Streamline === 'function') {
-    state.streamline = new window.Ink.Streamline(0.45, 0.35);
+    state.streamline = new window.Ink.Streamline(0.55, 0.35);
+  }
+  if (typeof window !== 'undefined' && window.resetPressureDynamics) {
+    window.resetPressureDynamics();
   }
 
   consumeSample(e, ptWorld, pane, viewport);
@@ -107,6 +110,13 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   const { wctx } = compositor.getContexts();
   if (!wctx || !state.cur) return;
 
+  const pts = state.cur.points;
+  const lastPt = pts && pts.length > 0 ? pts[pts.length - 1] : null;
+  // Deduplicate points clustered within 0.8px to eliminate micro-beading and normal oscillation
+  if (lastPt && Math.hypot(px - lastPt.x, py - lastPt.y) < 0.8) {
+    return;
+  }
+
   const isHighlighter = state.cur.kind === 'highlighter';
   const baseW = state.cur.base_width || state.cur.baseWidth || state.baseWidth || 1.6;
   const c = Math.pow(Math.max(0, Math.min(1, p)), 1.0);
@@ -148,7 +158,7 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
     wctx.beginPath();
     if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {
       window.Ink.traceRibbonContour(wctx, state.cur.points, baseW);
-    } else if (!prev) {
+    } else if (!lastPt) {
       wctx.arc(px, py, baseW / 2, 0, Math.PI * 2);
     }
     wctx.fill();

@@ -730,7 +730,8 @@ fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
         t: p.t,
     }).collect();
 
-    let samples = if raw_samples.len() > 3 {
+    let is_rect = inkwell_core::ink::is_axis_aligned_rect(&raw_samples).is_some();
+    let samples = if !is_rect && raw_samples.len() > 3 {
         inkwell_core::ink::simplify(&raw_samples, 0.4)
     } else {
         raw_samples
@@ -1585,6 +1586,22 @@ pub fn get_initial_file() -> Option<String> {
     std::env::args().nth(1).filter(|p| !p.starts_with('-'))
 }
 
+#[tauri::command]
+pub async fn minimize_window(window: tauri::Window) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
 
+#[tauri::command]
+pub async fn toggle_maximize_window(window: tauri::Window) -> Result<(), String> {
+    let is_max = window.is_maximized().map_err(|e| e.to_string())?;
+    if is_max {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
+}
 
-
+#[tauri::command]
+pub async fn close_window(window: tauri::Window) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}

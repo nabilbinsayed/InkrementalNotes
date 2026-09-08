@@ -168,18 +168,11 @@ class ViewportManager {
     const isRight = pane === 'right' && this.splitMode;
     const z = isRight ? this.rightZoom : this.zoom;
     const totalH = this.totalDocHeight * z;
-    const topMargin = 40;
-    const bottomMargin = 80;
+    const minMargin = Math.min(40, stageH * 0.1);
 
-    // Top boundary: Cannot pan below topMargin (first page top)
-    const maxPanY = topMargin;
-
-    // Bottom boundary:
-    // If total document height is smaller than stage: pin top at topMargin
-    // If document is taller than stage: bottom of last page cannot go above stageH - bottomMargin
-    const minPanY = totalH < stageH
-      ? topMargin
-      : stageH - totalH - bottomMargin;
+    // Allow vertical scrolling/panning smoothly while keeping at least minMargin visible
+    const minPanY = minMargin - totalH;
+    const maxPanY = stageH - minMargin;
 
     return Math.max(minPanY, Math.min(maxPanY, y));
   }
@@ -191,17 +184,14 @@ class ViewportManager {
     const totalW = this.stageRect ? this.stageRect.width : 800;
     const stageW = this.splitMode ? totalW / 2 : totalW;
     const docW = this.maxDocWidth * z;
-    const hMargin = Math.max(80, stageW * 0.15);
     const offsetLeft = isRight ? stageW : 0;
+    const minMargin = Math.min(60, stageW * 0.1);
 
-    if (docW + 2 * hMargin <= stageW) {
-      // Document fits horizontally with margin: clamp around centered position
-      const centerX = offsetLeft + (stageW - docW) / 2;
-      return Math.max(centerX - hMargin, Math.min(centerX + hMargin, x));
-    }
+    // Keep at least minMargin of the document visible on stage,
+    // allowing the user full freedom to pan smoothly to the right and left.
+    const minPanX = offsetLeft + minMargin - docW;
+    const maxPanX = offsetLeft + stageW - minMargin;
 
-    const minPanX = offsetLeft + stageW - docW - hMargin;
-    const maxPanX = offsetLeft + hMargin;
     return Math.max(minPanX, Math.min(maxPanX, x));
   }
 
@@ -278,7 +268,9 @@ class ViewportManager {
 
     const offsetLeft = isRight ? stageW : 0;
     const targetPanX = Math.round(offsetLeft + (stageW - docW * z) / 2);
-    const targetPanY = 30;
+    const docH = (pageHeightPt || (this.pageLayouts && this.pageLayouts[0] ? this.pageLayouts[0].height : 842.0)) * z;
+    const stageH = this.stageRect ? this.stageRect.height : 600;
+    const targetPanY = docH < stageH ? Math.max(30, Math.round((stageH - docH) / 2)) : 30;
     this.setPan(targetPanX, targetPanY, pane);
   }
 
