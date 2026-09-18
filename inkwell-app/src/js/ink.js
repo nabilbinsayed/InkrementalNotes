@@ -32,10 +32,11 @@ class OneEuro {
   }
 }
 
-// Dynamic velocity-responsive streamline:
-// Damps low-speed digitizer tremor while dynamically opening up for fast cursive handwriting.
+// Responsive streamline stabilizer:
+// Direct 1:1 positional tracking preserves true stylus coordinate accuracy without lag or loop shrinkage,
+// while exponential moving average (EMA) on pressure ensures smoothly tapering stroke width.
 class Streamline {
-  constructor(positionLerp = 0.55, pressureLerp = 0.35) {
+  constructor(positionLerp = 1.0, pressureLerp = 0.35) {
     this.positionLerp = positionLerp;
     this.pressureLerp = pressureLerp;
     this.curX = null;
@@ -49,12 +50,8 @@ class Streamline {
       this.curY = y;
       this.curP = p;
     } else {
-      const dist = Math.hypot(x - this.curX, y - this.curY);
-      // Fast handwriting / flicks: lerp opens to 0.92 (near-zero lag, full loop fidelity)
-      // Slow deliberate strokes: stays at 0.55 (kills hand tremor)
-      const dynamicLerp = Math.min(0.92, Math.max(this.positionLerp, this.positionLerp + dist * 0.04));
-      this.curX += (x - this.curX) * dynamicLerp;
-      this.curY += (y - this.curY) * dynamicLerp;
+      this.curX += (x - this.curX) * this.positionLerp;
+      this.curY += (y - this.curY) * this.positionLerp;
       this.curP += (p - this.curP) * this.pressureLerp;
     }
     return { x: this.curX, y: this.curY, p: this.curP };
@@ -332,66 +329,54 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
     return;
   }
 
-  const pts = chaikinSubdivide(rawPts, 2);
-  const n = pts.length;
-  if (n < 2) return;
-
-  // Check if stroke is a closed loop (e.g. geometric ellipse or closed polygon)
-  const isClosed = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y) < 2.0;
-  const step = n >= 16 ? 4 : (n >= 8 ? 2 : 1);
+  const n = rawPts.length;
+  const isClosed = n >= 4 && Math.hypot(rawPts[0].x - rawPts[n - 1].x, rawPts[0].y - rawPts[n - 1].y) < 2.0;
 
   const left = [];
   const right = [];
   for (let i = 0; i < n; i++) {
-    const a = isClosed
-      ? pts[(i - step + n) % n]
-      : pts[Math.max(0, i - step)];
-    const b = isClosed
-      ? pts[(i + step) % n]
-      : pts[Math.min(n - 1, i + step)];
+    const a = isClosed ? rawPts[(i - 1 + n) % n] : rawPts[Math.max(0, i - 1)];
+    const b = isClosed ? rawPts[(i + 1) % n] : rawPts[Math.min(n - 1, i + 1)];
     const dx = b.x - a.x, dy = b.y - a.y;
     const l = Math.hypot(dx, dy) || 1e-6;
     const nx = -dy / l, ny = dx / l;
-    const w = (pts[i].w !== undefined && !isNaN(pts[i].w)) ? pts[i].w : ((pts[i].p !== undefined) ? pts[i].p * 2.0 : baseWidth);
+    const w = (rawPts[i].w !== undefined && !isNaN(rawPts[i].w))
+      ? rawPts[i].w
+      : ((rawPts[i].p !== undefined) ? rawPts[i].p * 2.0 : baseWidth);
     const h = Math.max(0.05, w / 2);
-    left.push({ x: pts[i].x + nx * h, y: pts[i].y + ny * h });
-    right.push({ x: pts[i].x - nx * h, y: pts[i].y - ny * h });
+    left.push({ x: rawPts[i].x + nx * h, y: rawPts[i].y + ny * h, w: h });
+    right.push({ x: rawPts[i].x - nx * h, y: rawPts[i].y - ny * h, w: h });
   }
 
+  const leftCubics = openPolylineToCubics(left);
+  const rightRev = right.slice().reverse();
+  const rightCubics = openPolylineToCubics(rightRev);
+
   if (isClosed) {
-    // Outer loop (left boundary)
     target.moveTo(left[0].x, left[0].y);
-    for (let i = 1; i < n; i++) {
-      const mx = (left[i - 1].x + left[i].x) / 2;
-      const my = (left[i - 1].y + left[i].y) / 2;
-      target.quadraticCurveTo(left[i - 1].x, left[i - 1].y, mx, my);
+    for (let i = 0; i < leftCubics.length; i++) {
+      const c = leftCubics[i];
+      target.bezierCurveTo(c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y);
     }
-    target.lineTo(left[0].x, left[0].y);
     target.closePath();
 
-    // Inner loop (right boundary in reverse)
-    target.moveTo(right[0].x, right[0].y);
-    for (let i = n - 1; i >= 0; i--) {
-      const prev = right[(i + 1) % n];
-      const mx = (prev.x + right[i].x) / 2;
-      const my = (prev.y + right[i].y) / 2;
-      target.quadraticCurveTo(prev.x, prev.y, mx, my);
+    target.moveTo(rightRev[0].x, rightRev[0].y);
+    for (let i = 0; i < rightCubics.length; i++) {
+      const c = rightCubics[i];
+      target.bezierCurveTo(c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y);
     }
-    target.lineTo(right[0].x, right[0].y);
     target.closePath();
     return;
   }
 
   target.moveTo(left[0].x, left[0].y);
-  for (let i = 1; i < n; i++) {
-    const mx = (left[i - 1].x + left[i].x) / 2;
-    const my = (left[i - 1].y + left[i].y) / 2;
-    target.quadraticCurveTo(left[i - 1].x, left[i - 1].y, mx, my);
+  for (let i = 0; i < leftCubics.length; i++) {
+    const c = leftCubics[i];
+    target.bezierCurveTo(c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y);
   }
-  target.lineTo(left[n - 1].x, left[n - 1].y);
 
   // End cap: round cap bulging OUTWARDS from left to right edge
-  const lastPt = pts[n - 1];
+  const lastPt = rawPts[n - 1];
   const lastW = (lastPt.w !== undefined && !isNaN(lastPt.w)) ? lastPt.w : baseWidth;
   const endR = Math.max(0.05, lastW / 2);
   const aLeftEnd = Math.atan2(left[n - 1].y - lastPt.y, left[n - 1].x - lastPt.x);
@@ -399,15 +384,13 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   target.arc(lastPt.x, lastPt.y, endR, aLeftEnd, aRightEnd, true);
 
   // Right edge in reverse
-  for (let i = n - 1; i > 0; i--) {
-    const mx = (right[i].x + right[i - 1].x) / 2;
-    const my = (right[i].y + right[i - 1].y) / 2;
-    target.quadraticCurveTo(right[i].x, right[i].y, mx, my);
+  for (let i = 0; i < rightCubics.length; i++) {
+    const c = rightCubics[i];
+    target.bezierCurveTo(c[0].x, c[0].y, c[1].x, c[1].y, c[2].x, c[2].y);
   }
-  target.lineTo(right[0].x, right[0].y);
 
   // Start cap: round cap bulging OUTWARDS from right to left edge
-  const firstPt = pts[0];
+  const firstPt = rawPts[0];
   const firstW = (firstPt.w !== undefined && !isNaN(firstPt.w)) ? firstPt.w : baseWidth;
   const startR = Math.max(0.05, firstW / 2);
   const aRightStart = Math.atan2(right[0].y - firstPt.y, right[0].x - firstPt.x);
@@ -528,6 +511,8 @@ function openPolylineToCubics(p) {
   }
   return cubics;
 }
+
+
 
 function cubicAt(p0, cubic, t) {
   const u = 1 - t;

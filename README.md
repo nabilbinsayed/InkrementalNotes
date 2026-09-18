@@ -48,8 +48,9 @@ Pre-compiled standalone packages and installers are available directly on the **
 
 ### 🖋️ Ultra-Low Latency Inking Engine
 - **Dual-Canvas Wet/Dry Pipeline**: Dedicated wet layer for instantaneous stylus sampling (up to 240Hz+ via `pointerrawupdate` / CDP) and dry vector layer for committed geometry.
-- **Sub-Pixel Analogue Pressure**: 10-bit pressure curve resolution with customizable gamma response, dynamic taper, and One-Euro noise filtering.
-- **Cubic Bézier Ribbon Outlines**: Generates smooth vector ribbon boundaries with true $C^1$ continuity, completely eliminating angular faceting at high zoom.
+- **1:1 Responsive Stylus Tracking**: Direct, sub-pixel coordinate capture preserves handwriting fidelity, cursive loops, and stroke endpoints with zero phase lag or loop shrinkage.
+- **Sub-Pixel Analogue Pressure**: Smooth exponential moving average pressure transitions with customizable gamma response, dynamic taper, and One-Euro noise filtering.
+- **Cubic Bézier Ribbon Outlines**: Generates smooth vector ribbon boundaries via centripetal Catmull-Rom splines with true $C^1$ continuity, completely eliminating straight-line faceting at high zoom.
 - **Chisel-Tip Rectangular Highlighter**: Authentic calligraphic chisel marker geometry with flat horizontal bounds, clean vertical end caps, and multiply color blending.
 - **Geometric Shapes Tool**: Precise linear sampling preserves crisp 90° rectangle corners, circles, and ruler guidelines without curve distortion.
 - **Precision Multi-Page Eraser**: Continuous coordinate proximity hit-testing across all visible pages with live visual cursor feedback.
@@ -145,13 +146,23 @@ cd inkwell-app/src-tauri
 cargo run
 ```
 
+### Running on Linux
+```bash
+# Execute desktop launcher (Wayland / X11):
+./Launch\ Inkwell.sh
+
+# Or build and launch directly via Cargo:
+cd inkwell-app/src-tauri
+cargo run
+```
+
 ---
 
 ## 🧪 Verification & Test Suite
 
 InkWell maintains a strict verification baseline across the Rust workspace and desktop frontend:
 
-```powershell
+```bash
 # 1. Run all Rust Core, Geometry, WAL, Outline, and PDFium tests (72 tests)
 cd inkwell
 cargo test --workspace -- --test-threads=1
@@ -160,13 +171,13 @@ cargo test --workspace -- --test-threads=1
 cd inkwell
 cargo clippy --all-targets
 
-# 3. Run production desktop frontend Playwright smoke suite (20/20 checks)
+# 3. Run production desktop frontend Playwright smoke suite (73/73 checks)
 cd inkwell-app
-py -3 test_app_smoke.py
+py -3 test_app_smoke.py  # or python3 test_app_smoke.py
 
 # 4. (Optional) Run M0 latency spike prototype smoke tests (prototype only, 18/18 checks)
 cd inkwell-m0
-py -3 test_smoke.py
+py -3 test_smoke.py      # or python3 test_smoke.py
 ```
 
 ---

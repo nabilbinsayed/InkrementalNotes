@@ -34,7 +34,7 @@ export function onPenDown(e, ptWorld, pane, viewport) {
   state.cur.sheet = activeSheet;
   state.drawingPane = pane;
   if (window.Ink && typeof window.Ink.Streamline === 'function') {
-    state.streamline = new window.Ink.Streamline(0.55, 0.35);
+    state.streamline = new window.Ink.Streamline(1.0, 0.35);
   }
   if (typeof window !== 'undefined' && window.resetPressureDynamics) {
     window.resetPressureDynamics();
@@ -112,8 +112,8 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
 
   const pts = state.cur.points;
   const lastPt = pts && pts.length > 0 ? pts[pts.length - 1] : null;
-  // Deduplicate points clustered within 0.8px to eliminate micro-beading and normal oscillation
-  if (lastPt && Math.hypot(px - lastPt.x, py - lastPt.y) < 0.8) {
+  // Deduplicate redundant events within 0.25px to eliminate identical jitter while preserving curve fidelity
+  if (lastPt && Math.hypot(px - lastPt.x, py - lastPt.y) < 0.25) {
     return;
   }
 
@@ -141,56 +141,23 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
   const [psx, psy] = viewport.worldToScreen(pl.x, pl.y, pane);
   const z = pane === 'right' && viewport.splitMode ? viewport.rightZoom : viewport.zoom;
 
+  compositor.clearWet();
   wctx.save();
   compositor.clipToPane(wctx, pane);
   wctx.translate(psx, psy);
   wctx.scale(z, z);
 
   if (isHighlighter) {
-    compositor.clearWet();
-    wctx.save();
-    compositor.clipToPane(wctx, pane);
-    wctx.translate(psx, psy);
-    wctx.scale(z, z);
     wctx.globalCompositeOperation = 'multiply';
     wctx.globalAlpha = 0.42;
-    wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
-    wctx.beginPath();
-    if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {
-      window.Ink.traceRibbonContour(wctx, state.cur.points, baseW);
-    } else if (!lastPt) {
-      wctx.arc(px, py, baseW / 2, 0, Math.PI * 2);
-    }
-    wctx.fill();
-    wctx.restore();
-    return;
   }
-
-  const prev = state.cur.points.length > 1 ? state.cur.points[state.cur.points.length - 2] : null;
-
   wctx.fillStyle = state.cur.cssColor || `rgb(${state.cur.rgb.map(v => Math.round(v * 255)).join(',')})`;
-
-  if (window.Ink && typeof window.Ink.drawSegment === 'function') {
-    if (prev) {
-      window.Ink.drawSegment(wctx, prev, pt);
-    } else {
-      window.Ink.drawDot(wctx, pt);
-    }
-  } else {
-    // Fallback line rendering
-    wctx.strokeStyle = wctx.fillStyle;
-    wctx.lineWidth = (state.cur.base_width || 1.6) * p;
-    wctx.lineCap = 'round';
-    wctx.beginPath();
-    if (!prev) {
-      wctx.arc(px, py, wctx.lineWidth / 2, 0, Math.PI * 2);
-      wctx.fill();
-    } else {
-      wctx.moveTo(prev.x, prev.y);
-      wctx.lineTo(px, py);
-      wctx.stroke();
-    }
+  wctx.beginPath();
+  if (window.Ink && typeof window.Ink.traceRibbonContour === 'function') {
+    window.Ink.traceRibbonContour(wctx, state.cur.points, baseW);
+  } else if (!lastPt) {
+    wctx.arc(px, py, (state.cur.points[0]?.w || baseW) / 2, 0, Math.PI * 2);
   }
-
+  wctx.fill();
   wctx.restore();
 }

@@ -645,6 +645,36 @@ with sync_playwright() as pw:
     stylus_native_tool_exposed = pg.evaluate("typeof window.getLiveNativeTool === 'function'")
     check("stylus native tool accessor is exposed to window", stylus_native_tool_exposed)
 
+    # Verify smooth cubic Bezier ribbon contour & corner preservation
+    spline_contour_check = pg.evaluate("""() => {
+        const pathOps = [];
+        const mockTarget = {
+            moveTo: (x, y) => pathOps.push(['moveTo', x, y]),
+            lineTo: (x, y) => pathOps.push(['lineTo', x, y]),
+            bezierCurveTo: (c1x, c1y, c2x, c2y, x, y) => pathOps.push(['bezierCurveTo', c1x, c1y, c2x, c2y, x, y]),
+            arc: (x, y, r, a0, a1, ccw) => pathOps.push(['arc', x, y, r]),
+            closePath: () => pathOps.push(['closePath']),
+        };
+        const arcPts = [
+            { x: 10, y: 10, w: 2 }, { x: 30, y: 25, w: 2.5 },
+            { x: 60, y: 30, w: 3 }, { x: 90, y: 20, w: 2.5 }, { x: 105, y: 5, w: 2 }
+        ];
+        window.Ink.traceRibbonContour(mockTarget, arcPts, 2.0);
+        const hasBezier = pathOps.some(op => op[0] === 'bezierCurveTo');
+
+        // Corner check: V shape
+        const vPts = [
+            { x: 10, y: 10, w: 2 }, { x: 20, y: 30, w: 2 },
+            { x: 30, y: 50, w: 2 }, { x: 40, y: 30, w: 2 }, { x: 50, y: 10, w: 2 }
+        ];
+        const cubics = window.Ink.openPolylineToCubics(vPts);
+        const vertexPreserved = cubics.length === 4 && Math.abs(cubics[1][2].y - 50) < 1e-4 && cubics[1][1].y <= 50;
+        return { hasBezier, vertexPreserved, opsCount: pathOps.length };
+    }""")
+    check("curve interpolation emits cubic Beziers and preserves sharp vertices",
+          spline_contour_check['hasBezier'] and spline_contour_check['vertexPreserved'],
+          f"hasBezier={spline_contour_check['hasBezier']} vertexPreserved={spline_contour_check['vertexPreserved']}")
+
     # -------------------------------------------------------------
     # T11: Zoom Controls & Percentage Readout
     # -------------------------------------------------------------
