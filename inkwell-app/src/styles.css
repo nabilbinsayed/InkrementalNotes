@@ -3448,6 +3448,12 @@ body.welcome-active .top-header {
   color: #ffffff;
 }
 
+.ctx-menu-item.disabled {
+  opacity: 0.38;
+  pointer-events: none;
+  cursor: default;
+}
+
 .ctx-menu-item.danger:hover {
   background: rgba(239, 68, 68, 0.25);
   color: #fca5a5;

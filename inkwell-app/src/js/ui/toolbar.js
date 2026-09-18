@@ -3,7 +3,7 @@
  * Binds floating dock, tool switches, color pickers, width sliders, modals & zoom.
  * ========================================================================== */
 
-import { state, $, emit } from '../core/state.js';
+import { state, $, emit, on } from '../core/state.js';
 import * as toolManager from '../tools/tool-manager.js';
 import * as commandsModule from '../core/commands.js';
 import * as history from '../core/history.js';
@@ -23,6 +23,7 @@ export function initToolbar(viewport) {
   bindModals();
   updateToolbarUI();
   updateUndoRedoUI();
+  on('toolPropertyChanged', () => syncColorUI());
 }
 
 export function updateToolbarUI() {
@@ -39,6 +40,7 @@ export function updateToolbarUI() {
     rect: $('btnDockShapes'),
     ellipse: $('btnDockShapes'),
     ruler: $('btnDockShapes'),
+    line: $('btnDockShapes'),
     text: $('btnDockText'),
     textSelect: $('btnDockTextSelect'),
     textselect: $('btnDockTextSelect'),
@@ -64,6 +66,7 @@ export function updateToolbarUI() {
     rect: $('btnRect'),
     ellipse: $('btnEllipse'),
     ruler: $('btnRuler'),
+    line: $('btnRuler'),
   };
   Object.entries(legacyMap).forEach(([tool, btn]) => {
     if (btn) btn.classList.toggle('active', tool === activeTool);
@@ -72,20 +75,23 @@ export function updateToolbarUI() {
   const shapesBtn = $('btnDockShapes');
   if (shapesBtn) {
     const iconSvg = shapesBtn.querySelector('.dock-icon');
-    if (iconSvg) {
-      if (activeTool === 'ellipse' || state.shapeKind === 'ellipse') {
-        iconSvg.innerHTML = '<circle cx="12" cy="12" r="8"/>';
-        shapesBtn.title = 'Shape: Ellipse (U)';
-      } else if (activeTool === 'ruler' || state.shapeKind === 'line') {
-        iconSvg.innerHTML = '<line x1="4" y1="20" x2="20" y2="4"/><line x1="8" y1="14" x2="10" y2="16"/><line x1="11" y1="11" x2="13" y2="13"/><line x1="14" y1="8" x2="16" y2="10"/>';
-        shapesBtn.title = 'Shape: Ruler Line (U)';
-      } else {
-        iconSvg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
-        shapesBtn.title = 'Shape: Rectangle (U)';
-      }
+    const shortcutSpan = shapesBtn.querySelector('.dock-shortcut');
+    if (activeTool === 'ellipse' || state.shapeKind === 'ellipse') {
+      if (iconSvg) iconSvg.innerHTML = '<circle cx="12" cy="12" r="8"/>';
+      shapesBtn.title = 'Shape: Ellipse (O)';
+      if (shortcutSpan) shortcutSpan.textContent = 'O';
+    } else if (activeTool === 'line' || activeTool === 'ruler' || state.shapeKind === 'line') {
+      if (iconSvg) iconSvg.innerHTML = '<line x1="4" y1="20" x2="20" y2="4"/><line x1="8" y1="14" x2="10" y2="16"/><line x1="11" y1="11" x2="13" y2="13"/><line x1="14" y1="8" x2="16" y2="10"/>';
+      shapesBtn.title = 'Shape: Line (L)';
+      if (shortcutSpan) shortcutSpan.textContent = 'L';
+    } else {
+      if (iconSvg) iconSvg.innerHTML = '<rect x="4" y="4" width="16" height="16" rx="2"/>';
+      shapesBtn.title = 'Shape: Rectangle (R)';
+      if (shortcutSpan) shortcutSpan.textContent = 'R';
     }
   }
 
+  syncColorUI();
   updateSaveStatusUI(state.isSaving ? 'saving' : (state.isDirty ? 'dirty' : 'saved'));
 }
 
@@ -180,13 +186,13 @@ function bindDockButtons() {
   $('btnDockShapes') && $('btnDockShapes').addEventListener('click', () => {
     if (state.activeTool === 'rect') {
       toolManager.setTool('ellipse');
-      emit('toast', { message: 'Shape: Ellipse', type: 'info' });
+      emit('toast', { message: 'Shape: Ellipse (O)', type: 'info' });
     } else if (state.activeTool === 'ellipse') {
-      toolManager.setTool('ruler');
-      emit('toast', { message: 'Shape: Ruler Line', type: 'info' });
+      toolManager.setTool('line');
+      emit('toast', { message: 'Shape: Line (L)', type: 'info' });
     } else {
       toolManager.setTool('rect');
-      emit('toast', { message: 'Shape: Rectangle', type: 'info' });
+      emit('toast', { message: 'Shape: Rectangle (R)', type: 'info' });
     }
     updateToolbarUI();
   });
@@ -219,7 +225,12 @@ function bindDockButtons() {
 
 export function togglePropPopover() {
   const pop = $('propPopover');
-  if (pop) pop.classList.toggle('hidden');
+  if (pop) {
+    pop.classList.toggle('hidden');
+    if (!pop.classList.contains('hidden')) {
+      syncColorUI();
+    }
+  }
 }
 
 export function hidePropPopover() {
@@ -487,3 +498,106 @@ function hexToRgb(hex) {
     parseInt(result[3], 16) / 255
   ] : null;
 }
+
+export function rgbToHex(rgb) {
+  if (!rgb || !Array.isArray(rgb) || rgb.length < 3) return '#141724';
+  return '#' + rgb.map(v => Math.round(Math.max(0, Math.min(255, v * 255))).toString(16).padStart(2, '0')).join('');
+}
+
+export function drawStrokePreview() {
+  const canvas = $('strokePreviewCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const midY = h / 2;
+  const isHighlighter = state.activeTool === 'highlighter';
+  const baseW = state.baseWidth || (isHighlighter ? 16.0 : 1.6);
+  const rgb = state.color || [0.08, 0.09, 0.14];
+  const colorStr = `rgb(${rgb.map(v => Math.round(v * 255)).join(',')})`;
+
+  ctx.save();
+  if (isHighlighter) {
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = colorStr;
+    ctx.lineWidth = Math.min(h - 6, baseW);
+    ctx.lineCap = 'square';
+  } else {
+    ctx.strokeStyle = colorStr;
+    ctx.lineWidth = Math.min(h - 4, baseW);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(20, midY);
+  ctx.bezierCurveTo(w * 0.35, midY - 7, w * 0.65, midY + 7, w - 20, midY);
+  ctx.stroke();
+  ctx.restore();
+}
+
+export function syncColorUI(rgb) {
+  const color = rgb || state.color || [0.08, 0.09, 0.14];
+  const hex = rgbToHex(color);
+
+  // 1. Sync custom color picker inputs
+  const customPicker = $('popoverCustomColorPicker');
+  if (customPicker && customPicker.value.toLowerCase() !== hex.toLowerCase()) {
+    customPicker.value = hex;
+  }
+  const colorPicker = $('colorPicker');
+  if (colorPicker && colorPicker.value.toLowerCase() !== hex.toLowerCase()) {
+    colorPicker.value = hex;
+  }
+
+  // 2. Sync curated and custom color swatches
+  document.querySelectorAll('.color-swatches-grid .swatch, .dock-preset-chip, .settings-color-swatch').forEach(s => {
+    const sColor = s.getAttribute('data-color');
+    const isMatch = sColor && sColor.toLowerCase() === hex.toLowerCase();
+    s.classList.toggle('active', !!isMatch);
+  });
+
+  // 3. Sync width sliders & labels
+  const activeWidth = state.baseWidth || 1.6;
+  const popSlider = $('popoverWidthSlider');
+  if (popSlider) popSlider.value = String(activeWidth);
+  const propSlider = $('propWidthSlider');
+  if (propSlider) propSlider.value = String(activeWidth);
+  const mainSlider = $('widthSlider');
+  if (mainSlider) mainSlider.value = String(activeWidth);
+
+  const popWidthVal = $('popoverWidthVal');
+  if (popWidthVal) popWidthVal.textContent = activeWidth + ' pt';
+  const widthVal = $('widthVal');
+  if (widthVal) widthVal.textContent = activeWidth + ' pt';
+
+  document.querySelectorAll('.btn-width-preset').forEach(b => {
+    const pw = parseFloat(b.getAttribute('data-width'));
+    b.classList.toggle('active', Math.abs(pw - activeWidth) < 0.1);
+  });
+
+  // 4. Update popover title according to active tool
+  const toolTitle = $('popoverToolTitle');
+  if (toolTitle) {
+    const toolTitles = {
+      pen: 'Pen Properties',
+      highlighter: 'Highlighter Properties',
+      rect: 'Rectangle Properties',
+      ellipse: 'Ellipse Properties',
+      ruler: 'Line Properties',
+      line: 'Line Properties',
+      text: 'Text Note Properties',
+      laser: 'Laser Properties',
+      eraser: 'Eraser Properties',
+      lasso: 'Lasso Properties',
+    };
+    toolTitle.textContent = toolTitles[state.activeTool] || 'Tool Properties';
+  }
+
+  // 5. Draw live stroke preview
+  drawStrokePreview();
+}
+

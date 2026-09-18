@@ -282,11 +282,37 @@ function registerCoreCommands() {
     title: 'Paste',
     category: 'Edit',
     shortcut: 'Ctrl+V',
-    execute: () => {
-      const activeSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
-      if (clipboard.pasteClipboard(activeSheet)) {
-        compositor.redrawAll();
-        toast.showToast('Pasted objects', 'info');
+    execute: async () => {
+      const ctxTarget = contextMenu.getLastContextMenuTarget();
+      const activeSheet = (ctxTarget && typeof ctxTarget.sheet === 'number')
+        ? ctxTarget.sheet
+        : (_viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0);
+
+      let targetPagePt = null;
+      if (ctxTarget && ctxTarget.worldPt && _viewport) {
+        const pl = _viewport.getPageLayout(activeSheet);
+        if (pl) {
+          targetPagePt = {
+            px: ctxTarget.worldPt[0] - pl.x,
+            py: ctxTarget.worldPt[1] - pl.y,
+          };
+        }
+      }
+
+      if (clipboard.hasClipboardContent()) {
+        if (clipboard.pasteClipboard(activeSheet, 16, targetPagePt)) {
+          compositor.redrawAll();
+          toast.showToast('Pasted objects', 'info');
+        }
+      } else {
+        const pasted = await clipboard.pasteFromSystemClipboard(activeSheet, targetPagePt);
+        if (pasted) {
+          compositor.redrawAll();
+          toast.showToast('Pasted from clipboard', 'info');
+        }
+      }
+      if (ctxTarget) {
+        contextMenu.clearLastContextMenuTarget();
       }
     },
   });
@@ -331,10 +357,18 @@ function registerCoreCommands() {
   reg.register({ id: 'tool.highlighter', title: 'Highlighter', category: 'Tools', shortcut: 'M', execute: () => { toolManager.setTool('highlighter'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.eraser', title: 'Eraser', category: 'Tools', shortcut: 'E', execute: () => { toolManager.setTool('eraser'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.lasso', title: 'Lasso Select', category: 'Tools', shortcut: 'V', execute: () => { toolManager.setTool('lasso'); toolbar.updateToolbarUI(); } });
-  reg.register({ id: 'tool.shapes', title: 'Shapes', category: 'Tools', shortcut: 'U', execute: () => { toolManager.setTool('rect'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.rect', title: 'Rectangle Shape', category: 'Tools', shortcut: 'R', execute: () => { toolManager.setTool('rect'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.ellipse', title: 'Ellipse Shape', category: 'Tools', shortcut: 'O', execute: () => { toolManager.setTool('ellipse'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.line', title: 'Line / Ruler', category: 'Tools', shortcut: 'L', execute: () => { toolManager.setTool('line'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.shapes', title: 'Shapes Toggle', category: 'Tools', execute: () => {
+    if (state.activeTool === 'rect') toolManager.setTool('ellipse');
+    else if (state.activeTool === 'ellipse') toolManager.setTool('line');
+    else toolManager.setTool('rect');
+    toolbar.updateToolbarUI();
+  } });
   reg.register({ id: 'tool.text', title: 'Sticky Note', category: 'Tools', shortcut: 'T', execute: () => { toolManager.setTool('text'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.textSelect', title: 'Text Selection', category: 'Tools', shortcut: 'S', execute: () => { toolManager.setTool('textSelect'); toolbar.updateToolbarUI(); } });
-  reg.register({ id: 'tool.laser', title: 'Laser Pointer', category: 'Tools', shortcut: 'L', execute: () => { toolManager.setTool('laser'); toolbar.updateToolbarUI(); } });
+  reg.register({ id: 'tool.laser', title: 'Laser Pointer', category: 'Tools', shortcut: 'K', execute: () => { toolManager.setTool('laser'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.pan', title: 'Hand / Pan Canvas', category: 'Tools', shortcut: 'H', execute: () => { toolManager.setTool('pan'); toolbar.updateToolbarUI(); } });
   reg.register({ id: 'tool.palette', title: 'Ink Color & Width Palette', category: 'Tools', shortcut: 'C', execute: () => { toolbar.togglePropPopover(); } });
 
@@ -904,20 +938,79 @@ function attachPointerHandlers(wetCanvas) {
     return { ptWorld: wx, pane, screenPt: [e.clientX - r.left, e.clientY - r.top] };
   }
 
-  wetCanvas.addEventListener('contextmenu', e => {
+  function handleCanvasContextMenu(e) {
     e.preventDefault();
-    contextMenu.showContextMenu(e.clientX, e.clientY);
-  });
+    const { ptWorld, pane, screenPt } = localXY(e);
+    const bounds = overlays.getSelectionBounds(state, _viewport);
+    const hasSelection = !!((state.selectedStrokes && state.selectedStrokes.length) ||
+                            (state.selectedImages && state.selectedImages.length) ||
+                            (state.selectedTextObjects && state.selectedTextObjects.length));
 
-  const stage = $('stage');
-  if (stage) {
-    stage.addEventListener('contextmenu', e => {
-      e.preventDefault();
-      contextMenu.showContextMenu(e.clientX, e.clientY);
+    let isInsideExistingSelection = false;
+    if (bounds && hasSelection) {
+      const pad = 8;
+      if (ptWorld[0] >= bounds.x0 - pad && ptWorld[0] <= bounds.x1 + pad &&
+          ptWorld[1] >= bounds.y0 - pad && ptWorld[1] <= bounds.y1 + pad) {
+        isInsideExistingSelection = true;
+      }
+    }
+
+    if (!isInsideExistingSelection) {
+      // Check if user right-clicked on an unselected object
+      const clicked = lassoTool.findObjectAtWorld(ptWorld[0], ptWorld[1], _viewport);
+      if (clicked) {
+        toolManager.setTool('lasso', { isUserSwitch: false });
+        toolbar.updateToolbarUI();
+        if (clicked.type === 'stroke') {
+          state.selectedStrokes = [clicked.item];
+          state.selectedImages = [];
+          state.selectedTextObjects = [];
+        } else if (clicked.type === 'image') {
+          state.selectedStrokes = [];
+          state.selectedImages = [clicked.item];
+          state.selectedTextObjects = [];
+        } else if (clicked.type === 'text') {
+          state.selectedStrokes = [];
+          state.selectedImages = [];
+          state.selectedTextObjects = [clicked.item];
+        }
+        emit('selectionChanged', { strokes: state.selectedStrokes, images: state.selectedImages, textObjects: state.selectedTextObjects });
+        compositor.clearWet();
+        compositor.redrawAll();
+      } else {
+        // Right-clicked on empty canvas: clear object selection
+        if (hasSelection) {
+          state.selectedStrokes = [];
+          state.selectedImages = [];
+          state.selectedTextObjects = [];
+          emit('selectionCleared', {});
+          compositor.clearWet();
+          compositor.redrawAll();
+        }
+      }
+    }
+
+    const pageCoord = _viewport ? _viewport.worldToPage(ptWorld[0], ptWorld[1]) : { sheet: 0 };
+    contextMenu.showContextMenu(e.clientX, e.clientY, {
+      worldPt: ptWorld,
+      screenPt,
+      sheet: pageCoord.sheet,
+      viewport: _viewport,
     });
   }
 
+  wetCanvas.addEventListener('contextmenu', handleCanvasContextMenu);
+
+  const stage = $('stage');
+  if (stage) {
+    stage.addEventListener('contextmenu', handleCanvasContextMenu);
+  }
+
   wetCanvas.addEventListener('pointerdown', e => {
+    if (e.button === 2) {
+      // Right-click: do not initiate drawing, erasing, or lasso drag
+      return;
+    }
     compositor.updateStageRect();
     toolbar.hidePropPopover();
     try { wetCanvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -949,7 +1042,7 @@ function attachPointerHandlers(wetCanvas) {
       eraserTool.onEraserDown(e, ptWorld, pane, _viewport);
     } else if (effectiveTool === 'lasso') {
       lassoTool.onLassoDown(e, ptWorld, screenPt, pane, _viewport);
-    } else if (effectiveTool === 'rect' || effectiveTool === 'ellipse' || effectiveTool === 'ruler') {
+    } else if (effectiveTool === 'rect' || effectiveTool === 'ellipse' || effectiveTool === 'ruler' || effectiveTool === 'line') {
       shapesTool.onShapeDown(e, ptWorld, pane, _viewport);
     } else if (tool === 'laser') {
       laserTool.onLaserDown(e, ptWorld, pane, _viewport);
@@ -1052,7 +1145,7 @@ function attachPointerHandlers(wetCanvas) {
           const handle = overlays.getSelectionHandleAt(screenPt[0], screenPt[1], state, _viewport, pane);
           wetCanvas.style.cursor = handle ? handle.cursor : 'crosshair';
         }
-      } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
+      } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler' || tool === 'line') {
         shapesTool.onShapeMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'laser') {
         laserTool.onLaserMove(subEvt, ptWorld, pane, _viewport);
@@ -1076,6 +1169,10 @@ function attachPointerHandlers(wetCanvas) {
   });
 
   wetCanvas.addEventListener('pointerup', e => {
+    if (e.button === 2) {
+      // Right-click release: handled by contextmenu event
+      return;
+    }
     const tool = state.activeTool || 'pen';
 
     if (state.isErasing) {
@@ -1089,7 +1186,7 @@ function attachPointerHandlers(wetCanvas) {
       if (!state.isErasing) eraserTool.onEraserUp();
     } else if (tool === 'lasso') {
       lassoTool.onLassoUp(e, _viewport);
-    } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler') {
+    } else if (tool === 'rect' || tool === 'ellipse' || tool === 'ruler' || tool === 'line') {
       shapesTool.onShapeUp(e, _viewport);
     } else if (tool === 'laser') {
       laserTool.onLaserUp();

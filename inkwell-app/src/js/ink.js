@@ -578,11 +578,11 @@ function drawStroke(ctx, stroke) {
 
   ctx.fillStyle = stroke.cssColor || `rgb(${stroke.rgb.map(v => Math.round(v * 255)).join(',')})`;
 
-  if (!stroke._cachedPath2D && typeof Path2D !== 'undefined') {
+  if ((!stroke._cachedPath2D || !(stroke._cachedPath2D instanceof Path2D)) && typeof Path2D !== 'undefined') {
     stroke._cachedPath2D = getPath2D(stroke);
   }
 
-  if (stroke._cachedPath2D) {
+  if (stroke._cachedPath2D instanceof Path2D) {
     ctx.fill(stroke._cachedPath2D);
     if (isHighlighter) ctx.restore();
     return;

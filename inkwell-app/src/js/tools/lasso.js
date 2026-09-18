@@ -25,7 +25,7 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
     state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
       id: s.id,
       stroke: s,
-      points: s.points.map(p => ({ ...p })),
+      points: (s.points || s._pts || []).map(p => ({ ...p })),
       bbox: s.bbox ? [...s.bbox] : null,
     }));
     state.transformInitialImages = (state.selectedImages || []).map(img => ({
@@ -76,7 +76,7 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
       state.transformInitialStrokes = (state.selectedStrokes || []).map(s => ({
         id: s.id,
         stroke: s,
-        points: s.points.map(p => ({ ...p })),
+        points: (s.points || s._pts || []).map(p => ({ ...p })),
         bbox: s.bbox ? [...s.bbox] : null,
       }));
       state.transformInitialImages = (state.selectedImages || []).map(img => ({
@@ -171,15 +171,27 @@ export function onLassoUp(e, viewport) {
       }
     }
 
-    // Stationary click without drag: deselect or select specific clicked object
+    // Stationary click without drag: preserve selection if inside bounds, or select clicked object, or deselect
     if (mode === 'move' && Math.hypot(dx, dy) < 4) {
       state.transformMode = null;
       const startPt = state.transformStartPt;
+      const initBounds = state.transformInitialBounds;
       state.transformStartPt = null;
       state.transformInitialBounds = null;
       state.transformInitialStrokes = null;
       state.transformInitialImages = null;
       state.transformInitialTextObjects = null;
+
+      const pad = 6;
+      const isInsideBounds = startPt && initBounds &&
+        startPt[0] >= initBounds.x0 - pad && startPt[0] <= initBounds.x1 + pad &&
+        startPt[1] >= initBounds.y0 - pad && startPt[1] <= initBounds.y1 + pad;
+
+      if (isInsideBounds) {
+        compositor.clearWet();
+        compositor.redrawAll();
+        return;
+      }
 
       const clicked = startPt ? findObjectAtWorld(startPt[0], startPt[1], viewport) : null;
       if (!clicked) {
@@ -374,7 +386,8 @@ function selectObjectsInPolygon(polygon, viewport) {
   for (const s of (state.strokes || [])) {
     if (s.deleted) continue;
     const pl = viewport.getPageLayout(s.sheet || 0);
-    for (const pt of s.points) {
+    const pts = s.points || s._pts || [];
+    for (const pt of pts) {
       const wx = pl.x + pt.x;
       const wy = pl.y + pt.y;
       if (pointInPolygon(wx, wy, polygon)) {
@@ -424,7 +437,7 @@ function pointInPolygon(px, py, polygon) {
   return inside;
 }
 
-function findObjectAtWorld(wx, wy, viewport, radius = 10) {
+export function findObjectAtWorld(wx, wy, viewport, radius = 10) {
   const pageCoord = viewport.worldToPage(wx, wy);
   const targetSheet = pageCoord.sheet;
   const pl = viewport.getPageLayout(targetSheet);
@@ -457,16 +470,41 @@ function findObjectAtWorld(wx, wy, viewport, radius = 10) {
   for (let i = (state.strokes || []).length - 1; i >= 0; i--) {
     const s = state.strokes[i];
     if (s.deleted || s.sheet !== targetSheet) continue;
-    for (const pt of s.points) {
-      const sx = pl.x + pt.x;
-      const sy = pl.y + pt.y;
-      if (Math.hypot(wx - sx, wy - sy) <= radius + (pt.w || 2)) {
-        return { type: 'stroke', item: s };
+    const pts = s.points || s._pts || [];
+    if (!pts.length) continue;
+
+    let hit = false;
+    for (let j = 0; j < pts.length; j++) {
+      const sx = pl.x + pts[j].x;
+      const sy = pl.y + pts[j].y;
+      const w = pts[j].w || s.base_width || 2;
+      if (Math.hypot(wx - sx, wy - sy) <= radius + w / 2) {
+        hit = true;
+        break;
       }
+      if (j < pts.length - 1) {
+        const sx2 = pl.x + pts[j + 1].x;
+        const sy2 = pl.y + pts[j + 1].y;
+        if (distToSegment(wx, wy, sx, sy, sx2, sy2) <= radius + w / 2) {
+          hit = true;
+          break;
+        }
+      }
+    }
+    if (hit) {
+      return { type: 'stroke', item: s };
     }
   }
 
   return null;
+}
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+  const l2 = (x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1);
+  if (l2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * (x2 - x1) + (py - y1) * (y2 - y1)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * (x2 - x1)), py - (y1 + t * (y2 - y1)));
 }
 
 function applyInteractiveTransform(ptWorld, viewport, e) {
