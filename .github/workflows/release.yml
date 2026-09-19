@@ -47,6 +47,7 @@ jobs:
           tar.exe -xzf pdfium.tgz
           Copy-Item "bin/pdfium.dll" -Destination "inkwell-app/src-tauri/target/release/pdfium.dll" -Force
           Remove-Item -Force "pdfium.tgz"
+          New-Item -ItemType File -Force -Path "bin/libpdfium.so"
 
       - name: Build Windows App & Bundles
         working-directory: inkwell-app
@@ -119,6 +120,7 @@ jobs:
           cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
           sudo cp lib/libpdfium.so /usr/local/lib/libpdfium.so
           sudo ldconfig || true
+          touch bin/pdfium.dll
           rm -rf pdfium-linux-x64.tgz lib include args.gn
 
       - name: Build Linux App & Bundles
@@ -176,6 +178,7 @@ jobs:
           cp lib/libpdfium.so bin/libpdfium.so
           cp lib/libpdfium.so inkwell-app/src-tauri/target/release/libpdfium.so
           cp lib/libpdfium.so /usr/lib64/libpdfium.so || true
+          touch bin/pdfium.dll
           rm -rf pdfium-linux-x64.tgz lib include args.gn
 
       - name: Build Fedora RPM Package
