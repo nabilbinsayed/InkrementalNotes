@@ -609,6 +609,28 @@ fn pdf_size_remains_compact_for_dense_strokes() {
     assert!(added_bytes < 75 * 1024, "PDF size inflated: {} bytes added (expected < 75 KB)", added_bytes);
 }
 
+#[test]
+fn test_pdf_fill_rule_uses_nonzero_winding_f() {
+    let mut f = PdfFile::open(fixture()).unwrap();
+    let doc = sample_doc(1);
+    f.write_document(&doc, pdf::DEFAULT_GROUP).unwrap();
+    let bytes = f.finish();
+
+    let mut found_content = false;
+    for obj_num in 1..=50 {
+        if let Ok(stream_bytes) = pdf::read_stream(&bytes, obj_num) {
+            if inkwell_core::pdfobj::find(&stream_bytes, b"h f Q", 0).is_some() {
+                found_content = true;
+            }
+            assert!(
+                inkwell_core::pdfobj::find(&stream_bytes, b"h f* Q", 0).is_none(),
+                "Stream object {obj_num} must not contain even-odd rule 'h f* Q'"
+            );
+        }
+    }
+    assert!(found_content, "Expected appearance stream with 'h f Q' non-zero winding fill");
+}
+
 // ===========================================================================
 // helpers
 // ===========================================================================

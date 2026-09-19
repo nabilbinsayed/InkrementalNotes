@@ -311,3 +311,68 @@ fn test_closed_stroke_has_no_end_caps() {
     assert_eq!(close_count, 1, "Closed loop must have inner subpath close");
 }
 
+#[test]
+fn test_small_dot_marker_is_solid_not_hollow_cutout() {
+    let brush = Brush { base_width: 2.0, gamma: 1.0, min_ratio: 0.22 };
+    let mut b = StrokeBuilder::new(1, ToolKind::Pen, [0.0; 3], brush, false);
+    let steps = 12;
+    // Small point marker of radius 1.2px (e.g. dot at (a, 0))
+    for i in 0..=steps {
+        let theta = i as f64 / steps as f64 * std::f64::consts::TAU;
+        b.push(50.0 + 1.2 * theta.cos(), 50.0 + 1.2 * theta.sin(), 0.8, i as f64 * 10.0);
+    }
+    let s = b.finish(0.0);
+
+    // Must NOT be classified as a hollow closed loop
+    assert!(!is_closed_loop(&s.samples, 2.0), "Small dot marker must not be treated as a hollow loop");
+
+    let path = ribbon_path(&s, 16);
+    // Must be a single continuous closed ribbon contour, with NO CloseSubpath cutout holes
+    let mut close_subpath_count = 0;
+    let mut close_count = 0;
+    for cmd in &path {
+        match cmd {
+            PathCmd::CloseSubpath => close_subpath_count += 1,
+            PathCmd::Close => close_count += 1,
+            _ => {}
+        }
+    }
+    assert_eq!(close_subpath_count, 0, "Solid dot marker must not have CloseSubpath hole cutouts");
+    assert_eq!(close_count, 1, "Solid dot marker must close cleanly as a single filled contour");
+}
+
+#[test]
+fn test_turnaround_reversal_normals_do_not_flip_or_fork() {
+    let brush = Brush { base_width: 2.0, gamma: 1.0, min_ratio: 0.22 };
+    let mut b = StrokeBuilder::new(1, ToolKind::Pen, [0.0; 3], brush, false);
+    // Stroke drawing straight UP from (10, 100) to (10, 20), then hooking back down to (10.5, 60), (10.5, 100)
+    let pts_data = [(10.0, 100.0), (10.0, 60.0), (10.0, 20.0), (10.2, 20.5), (10.5, 60.0), (10.5, 100.0)];
+    for (i, &(x, y)) in pts_data.iter().enumerate() {
+        b.push(x, y, 0.7, i as f64 * 10.0);
+    }
+    let s = b.finish(0.0);
+
+    let (left, right) = ribbon_edges(&s);
+    assert_eq!(left.len(), s.samples.len());
+    assert_eq!(right.len(), s.samples.len());
+
+    // At the apex (idx 2, (10.0, 20.0)), normal must remain oriented horizontally (along x), not flipped vertically
+    // For going up: dx=0, dy=-40, segment normal is (-dy/l, dx/l) = (1, 0).
+    // The left offset x must be > 10.0 and right offset x must be < 10.0, not inverted.
+    let apex_idx = 2;
+    assert!(left[apex_idx].0 > s.samples[apex_idx].x - 1e-4, "Left edge must not invert at turnaround apex");
+    assert!(right[apex_idx].0 < s.samples[apex_idx].x + 1e-4, "Right edge must not invert at turnaround apex");
+
+    // Ribbon path must produce valid cubics without exploding
+    let path = ribbon_path(&s, 16);
+    for cmd in path {
+        if let PathCmd::CurveTo(c) = cmd {
+            for pt in c {
+                assert!(pt.0.is_finite() && pt.1.is_finite(), "Control points must be finite");
+                assert!((pt.0 - 10.0).abs() < 5.0, "Turnaround outline must not explode sideways: x={}", pt.0);
+            }
+        }
+    }
+}
+
+

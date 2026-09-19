@@ -34,7 +34,7 @@ export function onPenDown(e, ptWorld, pane, viewport) {
   state.cur.sheet = activeSheet;
   state.drawingPane = pane;
   if (window.Ink && typeof window.Ink.Streamline === 'function') {
-    state.streamline = new window.Ink.Streamline(1.0, 0.35);
+    state.streamline = new window.Ink.Streamline(0.65, 0.35);
   }
   if (typeof window !== 'undefined' && window.resetPressureDynamics) {
     window.resetPressureDynamics();
@@ -59,6 +59,9 @@ export function onPenUp(e, viewport) {
   state.streamline = null;
 
   if (stroke.points && stroke.points.length > 0) {
+    if (stroke.points.length > 2 && window.Ink && typeof window.Ink.smoothStrokePoints === 'function') {
+      stroke.points = window.Ink.smoothStrokePoints(stroke.points, 1);
+    }
     if (window.Ink && typeof window.Ink.computeStrokeBbox === 'function') {
       stroke.bbox = window.Ink.computeStrokeBbox(stroke.points, stroke.base_width);
     }
@@ -112,8 +115,8 @@ function consumeFilteredPoint(px, py, p, t, pane, viewport) {
 
   const pts = state.cur.points;
   const lastPt = pts && pts.length > 0 ? pts[pts.length - 1] : null;
-  // Deduplicate redundant events within 0.25px to eliminate identical jitter while preserving curve fidelity
-  if (lastPt && Math.hypot(px - lastPt.x, py - lastPt.y) < 0.25) {
+  // Deduplicate redundant events within 0.65px to eliminate identical jitter while preserving curve fidelity
+  if (lastPt && Math.hypot(px - lastPt.x, py - lastPt.y) < 0.65) {
     return;
   }
 

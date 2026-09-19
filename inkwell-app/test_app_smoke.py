@@ -675,6 +675,58 @@ with sync_playwright() as pw:
           spline_contour_check['hasBezier'] and spline_contour_check['vertexPreserved'],
           f"hasBezier={spline_contour_check['hasBezier']} vertexPreserved={spline_contour_check['vertexPreserved']}")
 
+    # Verify solid dot marker does not emit hollow hole cutouts
+    dot_marker_check = pg.evaluate("""() => {
+        const pathOps = [];
+        const mockTarget = {
+            moveTo: (x, y) => pathOps.push(['moveTo', x, y]),
+            lineTo: (x, y) => pathOps.push(['lineTo', x, y]),
+            bezierCurveTo: (c1x, c1y, c2x, c2y, x, y) => pathOps.push(['bezierCurveTo', c1x, c1y, c2x, c2y, x, y]),
+            arc: (x, y, r, a0, a1, ccw) => pathOps.push(['arc', x, y, r]),
+            closePath: () => pathOps.push(['closePath']),
+        };
+        // Small 1.2px radius circular dot marker
+        const dotPts = [];
+        for (let i = 0; i <= 10; i++) {
+            const theta = i / 10 * Math.PI * 2;
+            dotPts.push({ x: 50 + 1.2 * Math.cos(theta), y: 50 + 1.2 * Math.sin(theta), w: 2.0 });
+        }
+        window.Ink.traceRibbonContour(mockTarget, dotPts, 2.0);
+        const closeCount = pathOps.filter(op => op[0] === 'closePath').length;
+        const moveCount = pathOps.filter(op => op[0] === 'moveTo').length;
+        return { closeCount, moveCount };
+    }""")
+    check("small dot marker renders as solid contour without hollow cutout holes",
+          dot_marker_check['closeCount'] == 1 and dot_marker_check['moveCount'] == 1,
+          f"closeCount={dot_marker_check['closeCount']} moveCount={dot_marker_check['moveCount']}")
+
+    # Verify turnaround normal stability (no fork/twist on hairpin turn)
+    turnaround_check = pg.evaluate("""() => {
+        const pathOps = [];
+        const mockTarget = {
+            moveTo: (x, y) => pathOps.push(['moveTo', x, y]),
+            lineTo: (x, y) => pathOps.push(['lineTo', x, y]),
+            bezierCurveTo: (c1x, c1y, c2x, c2y, x, y) => pathOps.push(['bezierCurveTo', c1x, c1y, c2x, c2y, x, y]),
+            arc: (x, y, r, a0, a1, ccw) => pathOps.push(['arc', x, y, r]),
+            closePath: () => pathOps.push(['closePath']),
+        };
+        const hairpinPts = [
+            { x: 10, y: 100, w: 2 }, { x: 10, y: 50, w: 2 }, { x: 10, y: 20, w: 2 },
+            { x: 10.2, y: 20.5, w: 2 }, { x: 10.5, y: 50, w: 2 }, { x: 10.5, y: 100, w: 2 }
+        ];
+        window.Ink.traceRibbonContour(mockTarget, hairpinPts, 2.0);
+        let maxDev = 0;
+        for (const op of pathOps) {
+            if (op[0] === 'bezierCurveTo') {
+                maxDev = Math.max(maxDev, Math.abs(op[1] - 10), Math.abs(op[3] - 10), Math.abs(op[5] - 10));
+            }
+        }
+        return { maxDev, opsCount: pathOps.length };
+    }""")
+    check("turnaround apex normal remains bounded without split fork or twist",
+          turnaround_check['maxDev'] < 5.0 and turnaround_check['opsCount'] > 0,
+          f"maxDev={turnaround_check['maxDev']:.2f} opsCount={turnaround_check['opsCount']}")
+
     # -------------------------------------------------------------
     # T11: Zoom Controls & Percentage Readout
     # -------------------------------------------------------------

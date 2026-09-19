@@ -357,6 +357,50 @@ pub fn is_axis_aligned_rect(pts: &[Sample]) -> Option<([f64; 4], f64)> {
     }
 }
 
+/// Check whether a stroke forms a genuine hollow closed loop (e.g. geometric ellipse or ring).
+/// Small dots, markers, tight loops, and handwriting strokes that touch back are NOT hollow cutouts.
+pub fn is_closed_loop(pts: &[Sample], brush_width: f64) -> bool {
+    let n = pts.len();
+    if n < 8 {
+        return false;
+    }
+    let d_close = (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y);
+    if d_close >= 2.5 {
+        return false;
+    }
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut path_len = 0.0;
+    let mut area2 = 0.0;
+    for i in 0..n {
+        min_x = min_x.min(pts[i].x);
+        max_x = max_x.max(pts[i].x);
+        min_y = min_y.min(pts[i].y);
+        max_y = max_y.max(pts[i].y);
+        if i > 0 {
+            path_len += (pts[i].x - pts[i - 1].x).hypot(pts[i].y - pts[i - 1].y);
+        }
+        let j = (i + 1) % n;
+        area2 += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    // Perimeter must exceed a circle of radius 1.5 * width
+    if path_len < 2.0 * std::f64::consts::PI * (1.5 * brush_width).max(2.0) {
+        return false;
+    }
+    // Bbox dimensions must both exceed 2.5 * width so an inner hole can physically exist
+    if (max_x - min_x) < 2.5 * brush_width || (max_y - min_y) < 2.5 * brush_width {
+        return false;
+    }
+    // Enclosed area must exceed disk of radius 0.5 * width
+    let area = area2.abs() * 0.5;
+    if area < std::f64::consts::PI * (brush_width * 0.5).powi(2) {
+        return false;
+    }
+    true
+}
+
 /// Build the closed outline polygon of a variable-width stroke.
 ///
 /// PDF's stroke operator (`S`) has exactly one line width, so pressure cannot
@@ -389,7 +433,7 @@ pub fn ribbon_outline(stroke: &Stroke, cap_steps: usize) -> Vec<(f64, f64)> {
     }
 
     let n = pts.len();
-    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
+    let is_closed = is_closed_loop(pts, stroke.brush.base_width);
     let (left, right) = ribbon_edges(stroke);
 
     if is_closed {
@@ -605,7 +649,7 @@ pub fn ribbon_path(s: &Stroke, cap_steps: usize) -> Vec<PathCmd> {
     }
 
     let n = pts.len();
-    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
+    let is_closed = is_closed_loop(pts, s.brush.base_width);
     let (left, right) = ribbon_edges(s);
 
     if is_closed {
@@ -648,24 +692,77 @@ pub fn ribbon_edges(s: &Stroke) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
     if n == 0 {
         return (Vec::new(), Vec::new());
     }
-    let is_closed = n >= 4 && (pts[0].x - pts[n - 1].x).hypot(pts[0].y - pts[n - 1].y) < 2.0;
+    if n == 1 {
+        let h = s.brush.width_for(pts[0].p) / 2.0;
+        return (vec![(pts[0].x, pts[0].y + h)], vec![(pts[0].x, pts[0].y - h)]);
+    }
+
+    let is_closed = is_closed_loop(pts, s.brush.base_width);
+
+    // Segment unit normals
+    let mut seg_normals = Vec::with_capacity(n);
+    for i in 0..n - 1 {
+        let dx = pts[i + 1].x - pts[i].x;
+        let dy = pts[i + 1].y - pts[i].y;
+        let l = dx.hypot(dy);
+        if l < 1e-6 {
+            let prev = seg_normals.last().copied().unwrap_or((0.0, 1.0));
+            seg_normals.push(prev);
+        } else {
+            seg_normals.push((-dy / l, dx / l));
+        }
+    }
+    if is_closed {
+        let dx = pts[0].x - pts[n - 1].x;
+        let dy = pts[0].y - pts[n - 1].y;
+        let l = dx.hypot(dy);
+        if l < 1e-6 {
+            let prev = seg_normals.last().copied().unwrap_or((0.0, 1.0));
+            seg_normals.push(prev);
+        } else {
+            seg_normals.push((-dy / l, dx / l));
+        }
+    }
+
     let mut left = Vec::with_capacity(n);
     let mut right = Vec::with_capacity(n);
+
     for i in 0..n {
-        let (a, b) = if is_closed {
-            let prev_idx = if i == 0 { n - 2 } else { i - 1 };
-            let next_idx = if i == n - 1 { 1 } else { i + 1 };
-            (pts[prev_idx], pts[next_idx])
+        let norm = if is_closed {
+            let n0 = seg_normals[(i + n - 1) % n];
+            let n1 = seg_normals[i];
+            let dot = n0.0 * n1.0 + n0.1 * n1.1;
+            let nx = n0.0 + n1.0;
+            let ny = n0.1 + n1.1;
+            let l = nx.hypot(ny);
+            if l < 1e-4 || dot < -0.2 {
+                n0
+            } else {
+                (nx / l, ny / l)
+            }
+        } else if i == 0 {
+            seg_normals[0]
+        } else if i == n - 1 {
+            seg_normals[n - 2]
         } else {
-            (pts[i.saturating_sub(1)], pts[(i + 1).min(n - 1)])
+            let n0 = seg_normals[i - 1];
+            let n1 = seg_normals[i];
+            let dot = n0.0 * n1.0 + n0.1 * n1.1;
+            let nx = n0.0 + n1.0;
+            let ny = n0.1 + n1.1;
+            let l = nx.hypot(ny);
+            if l < 1e-4 || dot < -0.2 {
+                n0
+            } else {
+                (nx / l, ny / l)
+            }
         };
-        let (dx, dy) = (b.x - a.x, b.y - a.y);
-        let l = dx.hypot(dy).max(1e-9);
-        let (nx, ny) = (-dy / l, dx / l);
+
         let h = s.brush.width_for(pts[i].p) / 2.0;
-        left.push((pts[i].x + nx * h, pts[i].y + ny * h));
-        right.push((pts[i].x - nx * h, pts[i].y - ny * h));
+        left.push((pts[i].x + norm.0 * h, pts[i].y + norm.1 * h));
+        right.push((pts[i].x - norm.0 * h, pts[i].y - norm.1 * h));
     }
+
     (left, right)
 }
 

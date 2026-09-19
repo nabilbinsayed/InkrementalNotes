@@ -32,11 +32,11 @@ class OneEuro {
   }
 }
 
-// Responsive streamline stabilizer:
-// Direct 1:1 positional tracking preserves true stylus coordinate accuracy without lag or loop shrinkage,
-// while exponential moving average (EMA) on pressure ensures smoothly tapering stroke width.
+// Dynamic velocity-responsive streamline stabilizer:
+// Damps low-speed digitizer tremor and staircase quantization while dynamically
+// opening up for fast cursive handwriting and quick flicks with zero lag.
 class Streamline {
-  constructor(positionLerp = 1.0, pressureLerp = 0.35) {
+  constructor(positionLerp = 0.65, pressureLerp = 0.35) {
     this.positionLerp = positionLerp;
     this.pressureLerp = pressureLerp;
     this.curX = null;
@@ -50,20 +50,50 @@ class Streamline {
       this.curY = y;
       this.curP = p;
     } else {
-      this.curX += (x - this.curX) * this.positionLerp;
-      this.curY += (y - this.curY) * this.positionLerp;
+      const dist = Math.hypot(x - this.curX, y - this.curY);
+      // Fast handwriting / flicks: lerp opens to 0.92 (near-zero lag, full loop fidelity)
+      // Slow deliberate strokes: stays at 0.65 (kills staircase noise & hand tremor)
+      const dynamicLerp = Math.min(0.92, Math.max(this.positionLerp, this.positionLerp + dist * 0.03));
+      this.curX += (x - this.curX) * dynamicLerp;
+      this.curY += (y - this.curY) * dynamicLerp;
       this.curP += (p - this.curP) * this.pressureLerp;
     }
     return { x: this.curX, y: this.curY, p: this.curP };
   }
 }
 
-function smoothStrokePoints(pts, passes = 2) {
+function isClosedLoop(pts, baseWidth = 2.0) {
+  if (!pts || pts.length < 8) return false;
+  const n = pts.length;
+  const dClose = Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y);
+  if (dClose >= 2.5) return false;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let pathLen = 0, area2 = 0;
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+    if (i > 0) {
+      pathLen += Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y);
+    }
+    const nextP = pts[(i + 1) % n];
+    area2 += p.x * nextP.y - nextP.x * p.y;
+  }
+  if (pathLen < 2 * Math.PI * Math.max(2.0, 1.5 * baseWidth)) return false;
+  if ((maxX - minX) < 2.5 * baseWidth || (maxY - minY) < 2.5 * baseWidth) return false;
+  const area = Math.abs(area2) * 0.5;
+  if (area < Math.PI * Math.pow(baseWidth * 0.5, 2)) return false;
+  return true;
+}
+
+function smoothStrokePoints(pts, passes = 1) {
   if (!pts || pts.length < 3) return pts ? pts.slice() : [];
   if (typeof isAxisAlignedRect === 'function' && isAxisAlignedRect(pts)) return pts.slice();
   let cur = pts.slice();
   const n = cur.length;
-  const isClosed = Math.hypot(cur[0].x - cur[n - 1].x, cur[0].y - cur[n - 1].y) < 2.0;
+  const isClosed = isClosedLoop(cur, (cur[0].w || 2.0));
 
   for (let pass = 0; pass < passes; pass++) {
     const next = [];
@@ -75,16 +105,33 @@ function smoothStrokePoints(pts, passes = 2) {
       const p0 = isClosed ? cur[(i - 1 + n) % n] : cur[i - 1];
       const p1 = cur[i];
       const p2 = isClosed ? cur[(i + 1) % n] : cur[i + 1];
-      const w0 = p0.w !== undefined ? p0.w : (p0.p !== undefined ? p0.p * 2.0 : 2.0);
-      const w1 = p1.w !== undefined ? p1.w : (p1.p !== undefined ? p1.p * 2.0 : 2.0);
-      const w2 = p2.w !== undefined ? p2.w : (p2.p !== undefined ? p2.p * 2.0 : 2.0);
-      next.push({
-        x: 0.25 * p0.x + 0.5 * p1.x + 0.25 * p2.x,
-        y: 0.25 * p0.y + 0.5 * p1.y + 0.25 * p2.y,
-        w: 0.25 * w0 + 0.5 * w1 + 0.25 * w2,
-        p: p1.p,
-        t: p1.t,
-      });
+
+      // Corner preservation: if turn angle is sharp (>75 deg), preserve vertex p1 exactly!
+      const v0x = p1.x - p0.x, v0y = p1.y - p0.y;
+      const v1x = p2.x - p1.x, v1y = p2.y - p1.y;
+      const l0 = Math.hypot(v0x, v0y), l1 = Math.hypot(v1x, v1y);
+      let isCorner = false;
+      if (l0 > 1.0 && l1 > 1.0) {
+        const cosAngle = (v0x * v1x + v0y * v1y) / (l0 * l1);
+        if (cosAngle < 0.25) {
+          isCorner = true;
+        }
+      }
+
+      if (isCorner) {
+        next.push(p1);
+      } else {
+        const w0 = p0.w !== undefined ? p0.w : (p0.p !== undefined ? p0.p * 2.0 : 2.0);
+        const w1 = p1.w !== undefined ? p1.w : (p1.p !== undefined ? p1.p * 2.0 : 2.0);
+        const w2 = p2.w !== undefined ? p2.w : (p2.p !== undefined ? p2.p * 2.0 : 2.0);
+        next.push({
+          x: 0.25 * p0.x + 0.5 * p1.x + 0.25 * p2.x,
+          y: 0.25 * p0.y + 0.5 * p1.y + 0.25 * p2.y,
+          w: 0.25 * w0 + 0.5 * w1 + 0.25 * w2,
+          p: p1.p,
+          t: p1.t,
+        });
+      }
     }
     cur = next;
   }
@@ -330,22 +377,71 @@ function traceRibbonContour(target, rawPts, baseWidth = 2.0) {
   }
 
   const n = rawPts.length;
-  const isClosed = n >= 4 && Math.hypot(rawPts[0].x - rawPts[n - 1].x, rawPts[0].y - rawPts[n - 1].y) < 2.0;
+  const isClosed = isClosedLoop(rawPts, baseWidth);
+
+  // Segment unit normals
+  const segNormals = [];
+  for (let i = 0; i < n - 1; i++) {
+    const dx = rawPts[i + 1].x - rawPts[i].x;
+    const dy = rawPts[i + 1].y - rawPts[i].y;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-6) {
+      segNormals.push(segNormals.length ? segNormals[segNormals.length - 1] : { nx: 0, ny: 1 });
+    } else {
+      segNormals.push({ nx: -dy / l, ny: dx / l });
+    }
+  }
+  if (isClosed) {
+    const dx = rawPts[0].x - rawPts[n - 1].x;
+    const dy = rawPts[0].y - rawPts[n - 1].y;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-6) {
+      segNormals.push(segNormals.length ? segNormals[segNormals.length - 1] : { nx: 0, ny: 1 });
+    } else {
+      segNormals.push({ nx: -dy / l, ny: dx / l });
+    }
+  }
 
   const left = [];
   const right = [];
   for (let i = 0; i < n; i++) {
-    const a = isClosed ? rawPts[(i - 1 + n) % n] : rawPts[Math.max(0, i - 1)];
-    const b = isClosed ? rawPts[(i + 1) % n] : rawPts[Math.min(n - 1, i + 1)];
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const l = Math.hypot(dx, dy) || 1e-6;
-    const nx = -dy / l, ny = dx / l;
+    let norm;
+    if (isClosed) {
+      const n0 = segNormals[(i + n - 1) % n];
+      const n1 = segNormals[i];
+      const dot = n0.nx * n1.nx + n0.ny * n1.ny;
+      const nx = n0.nx + n1.nx;
+      const ny = n0.ny + n1.ny;
+      const l = Math.hypot(nx, ny);
+      if (l < 1e-4 || dot < -0.2) {
+        norm = n0;
+      } else {
+        norm = { nx: nx / l, ny: ny / l };
+      }
+    } else if (i === 0) {
+      norm = segNormals[0];
+    } else if (i === n - 1) {
+      norm = segNormals[n - 2];
+    } else {
+      const n0 = segNormals[i - 1];
+      const n1 = segNormals[i];
+      const dot = n0.nx * n1.nx + n0.ny * n1.ny;
+      const nx = n0.nx + n1.nx;
+      const ny = n0.ny + n1.ny;
+      const l = Math.hypot(nx, ny);
+      if (l < 1e-4 || dot < -0.2) {
+        norm = n0;
+      } else {
+        norm = { nx: nx / l, ny: ny / l };
+      }
+    }
+
     const w = (rawPts[i].w !== undefined && !isNaN(rawPts[i].w))
       ? rawPts[i].w
       : ((rawPts[i].p !== undefined) ? rawPts[i].p * 2.0 : baseWidth);
     const h = Math.max(0.05, w / 2);
-    left.push({ x: rawPts[i].x + nx * h, y: rawPts[i].y + ny * h, w: h });
-    right.push({ x: rawPts[i].x - nx * h, y: rawPts[i].y - ny * h, w: h });
+    left.push({ x: rawPts[i].x + norm.nx * h, y: rawPts[i].y + norm.ny * h, w: h });
+    right.push({ x: rawPts[i].x - norm.nx * h, y: rawPts[i].y - norm.ny * h, w: h });
   }
 
   const leftCubics = openPolylineToCubics(left);

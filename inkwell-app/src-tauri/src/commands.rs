@@ -688,7 +688,7 @@ pub async fn commit_stroke(
         .collect();
 
     let pts = if raw_pts.len() > 3 {
-        inkwell_core::ink::simplify(&raw_pts, 0.4)
+        inkwell_core::ink::simplify(&raw_pts, 0.10)
     } else {
         raw_pts
     };
@@ -732,7 +732,7 @@ fn frontend_stroke_to_core(fs: &FrontendStroke) -> Option<Stroke> {
 
     let is_rect = inkwell_core::ink::is_axis_aligned_rect(&raw_samples).is_some();
     let samples = if !is_rect && raw_samples.len() > 3 {
-        inkwell_core::ink::simplify(&raw_samples, 0.4)
+        inkwell_core::ink::simplify(&raw_samples, 0.10)
     } else {
         raw_samples
     };

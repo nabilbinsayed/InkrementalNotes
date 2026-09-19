@@ -293,26 +293,11 @@ impl PdfFile {
         let mut max_y = f64::NEG_INFINITY;
 
         for s in strokes {
-            let is_rect = crate::ink::is_axis_aligned_rect(&s.samples).is_some();
-            let simplified_stroke;
-            let s_ref = if !is_rect && s.samples.len() > 3 {
-                simplified_stroke = Stroke {
-                    id: s.id,
-                    kind: s.kind,
-                    rgb: s.rgb,
-                    brush: s.brush,
-                    samples: crate::ink::simplify(&s.samples, 0.4),
-                };
-                &simplified_stroke
-            } else {
-                *s
-            };
-
-            let path = ribbon_path(s_ref, 16);
+            let path = ribbon_path(s, 16);
             if path.len() < 3 {
                 continue;
             }
-            let gs = match s_ref.kind {
+            let gs = match s.kind {
                 ToolKind::Highlighter => {
                     needs_multiply = true;
                     "/GSm"
@@ -323,7 +308,7 @@ impl PdfFile {
             let _ = write!(
                 content,
                 "q\n{gs} gs\n{:.3} {:.3} {:.3} rg\n",
-                s_ref.rgb[0], s_ref.rgb[1], s_ref.rgb[2]
+                s.rgb[0], s.rgb[1], s.rgb[2]
             );
 
             // PDF user space: origin is bottom-left, y grows up.
@@ -373,7 +358,7 @@ impl PdfFile {
                         let _ = writeln!(content, "h");
                     }
                     PathCmd::Close => {
-                        let _ = writeln!(content, "h f* Q");
+                        let _ = writeln!(content, "h f Q");
                     }
                 }
             }
