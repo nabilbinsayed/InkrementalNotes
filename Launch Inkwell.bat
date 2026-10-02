@@ -6,6 +6,8 @@ if exist "%~dp0inkwell-app.exe" (
     set "BIN=%~dp0inkwell-app.exe"
 ) else if exist "%~dp0Inkwell.exe" (
     set "BIN=%~dp0Inkwell.exe"
+) else if exist "%~dp0inkwell-app\src-tauri\target\x86_64-pc-windows-msvc\release\inkwell-app.exe" (
+    set "BIN=%~dp0inkwell-app\src-tauri\target\x86_64-pc-windows-msvc\release\inkwell-app.exe"
 ) else if exist "%~dp0inkwell-app\src-tauri\target\release\inkwell-app.exe" (
     set "BIN=%~dp0inkwell-app\src-tauri\target\release\inkwell-app.exe"
 ) else if exist "%~dp0inkwell-app\src-tauri\target\release\Inkwell.exe" (

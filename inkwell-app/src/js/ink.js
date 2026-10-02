@@ -36,12 +36,22 @@ class OneEuro {
 // Damps low-speed digitizer tremor and staircase quantization while dynamically
 // opening up for fast cursive handwriting and quick flicks with zero lag.
 class Streamline {
-  constructor(positionLerp = 0.65, pressureLerp = 0.35) {
+  constructor(positionLerp = 0.72, pressureLerp = 0.35) {
     this.positionLerp = positionLerp;
     this.pressureLerp = pressureLerp;
     this.curX = null;
     this.curY = null;
     this.curP = null;
+    this.lastVx = 0;
+    this.lastVy = 0;
+  }
+
+  reset() {
+    this.curX = null;
+    this.curY = null;
+    this.curP = null;
+    this.lastVx = 0;
+    this.lastVy = 0;
   }
 
   filter(x, y, p) {
@@ -49,15 +59,39 @@ class Streamline {
       this.curX = x;
       this.curY = y;
       this.curP = p;
-    } else {
-      const dist = Math.hypot(x - this.curX, y - this.curY);
-      // Fast handwriting / flicks: lerp opens to 0.92 (near-zero lag, full loop fidelity)
-      // Slow deliberate strokes: stays at 0.65 (kills staircase noise & hand tremor)
-      const dynamicLerp = Math.min(0.92, Math.max(this.positionLerp, this.positionLerp + dist * 0.03));
-      this.curX += (x - this.curX) * dynamicLerp;
-      this.curY += (y - this.curY) * dynamicLerp;
-      this.curP += (p - this.curP) * this.pressureLerp;
+      this.lastVx = 0;
+      this.lastVy = 0;
+      return { x: this.curX, y: this.curY, p: this.curP };
     }
+
+    const dx = x - this.curX;
+    const dy = y - this.curY;
+    const dist = Math.hypot(dx, dy);
+
+    // Corner / turn preservation: if direction turns sharply (>75 deg),
+    // snap immediately to preserve apex vertex with 100% geometric accuracy.
+    const lastDist = Math.hypot(this.lastVx, this.lastVy);
+    if (dist > 0.3 && lastDist > 0.3) {
+      const cosAngle = (dx * this.lastVx + dy * this.lastVy) / (dist * lastDist);
+      if (cosAngle < 0.25) {
+        this.curX = x;
+        this.curY = y;
+        this.curP = p;
+        this.lastVx = dx;
+        this.lastVy = dy;
+        return { x: this.curX, y: this.curY, p: this.curP };
+      }
+    }
+
+    // Dynamic velocity response:
+    // When writing cursive or quick strokes (dist > 2.5px), lerp opens to 1.0 (zero lag)
+    // When drawing slow/deliberate lines, lerp stabilizes against digitizer tremor and staircase noise
+    const dynamicLerp = Math.min(1.0, Math.max(this.positionLerp, this.positionLerp + dist * 0.08));
+    this.curX += dx * dynamicLerp;
+    this.curY += dy * dynamicLerp;
+    this.curP += (p - this.curP) * this.pressureLerp;
+    this.lastVx = dx;
+    this.lastVy = dy;
     return { x: this.curX, y: this.curY, p: this.curP };
   }
 }
@@ -111,7 +145,7 @@ function smoothStrokePoints(pts, passes = 1) {
       const v1x = p2.x - p1.x, v1y = p2.y - p1.y;
       const l0 = Math.hypot(v0x, v0y), l1 = Math.hypot(v1x, v1y);
       let isCorner = false;
-      if (l0 > 1.0 && l1 > 1.0) {
+      if (l0 > 0.1 && l1 > 0.1) {
         const cosAngle = (v0x * v1x + v0y * v1y) / (l0 * l1);
         if (cosAngle < 0.25) {
           isCorner = true;

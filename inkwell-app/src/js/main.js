@@ -1135,7 +1135,8 @@ function attachPointerHandlers(wetCanvas) {
           }
           continue;
         }
-        penTool.onPenMove(subEvt, ptWorld, pane, _viewport);
+        const isLastInBatch = (i === events.length - 1);
+        penTool.onPenMove(subEvt, ptWorld, pane, _viewport, { render: isLastInBatch, rawEvent: e });
       } else if (tool === 'eraser') {
         eraserTool.onEraserMove(subEvt, ptWorld, pane, _viewport);
       } else if (tool === 'lasso') {
