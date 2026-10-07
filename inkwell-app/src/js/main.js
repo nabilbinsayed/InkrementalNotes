@@ -299,16 +299,14 @@ function registerCoreCommands() {
         }
       }
 
-      if (clipboard.hasClipboardContent()) {
+      const pasted = await clipboard.pasteFromSystemClipboard(activeSheet, targetPagePt);
+      if (pasted) {
+        compositor.redrawAll();
+        toast.showToast('Pasted from clipboard', 'info');
+      } else if (clipboard.hasClipboardContent()) {
         if (clipboard.pasteClipboard(activeSheet, 16, targetPagePt)) {
           compositor.redrawAll();
           toast.showToast('Pasted objects', 'info');
-        }
-      } else {
-        const pasted = await clipboard.pasteFromSystemClipboard(activeSheet, targetPagePt);
-        if (pasted) {
-          compositor.redrawAll();
-          toast.showToast('Pasted from clipboard', 'info');
         }
       }
       if (ctxTarget) {
@@ -851,20 +849,48 @@ function bindAllUIEvents() {
   window.addEventListener('drop', async e => {
     e.preventDefault();
     const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!file || !file.name.toLowerCase().endsWith('.pdf')) return;
-    try {
-      const filePath = file.path;
-      if (filePath) {
-        const r = await ipc.openPdf(filePath);
-        handlePdfLoadResult(file.name, filePath, r);
-        return;
+    if (!file) return;
+
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      try {
+        const filePath = file.path;
+        if (filePath) {
+          const r = await ipc.openPdf(filePath);
+          handlePdfLoadResult(file.name, filePath, r);
+          return;
+        }
+        const buf = await file.arrayBuffer();
+        const r2 = await ipc.openPdfBytes(file.name, Array.from(new Uint8Array(buf)));
+        handlePdfLoadResult(file.name, null, r2);
+      } catch (err) {
+        const msg = friendlyError(err);
+        if (msg) toast.showToast('Failed to open dropped PDF: ' + msg, 'error');
       }
-      const buf = await file.arrayBuffer();
-      const r2 = await ipc.openPdfBytes(file.name, Array.from(new Uint8Array(buf)));
-      handlePdfLoadResult(file.name, null, r2);
-    } catch (err) {
-      const msg = friendlyError(err);
-      if (msg) toast.showToast('Failed to open dropped PDF: ' + msg, 'error');
+      return;
+    }
+
+    if (file.type && file.type.startsWith('image/')) {
+      try {
+        const activeSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+        let targetPagePt = null;
+        if (_viewport) {
+          const pl = _viewport.getPageLayout(activeSheet);
+          if (pl) {
+            const [wx, wy] = _viewport.screenToWorld(e.clientX, e.clientY, state.drawingPane || 'left');
+            targetPagePt = { px: wx - pl.x, py: wy - pl.y };
+          }
+        }
+        const dataUrl = await clipboard.blobToDataUrl(file);
+        if (dataUrl) {
+          const pastedImg = await clipboard.pasteImageDataUrl(dataUrl, activeSheet, targetPagePt);
+          if (pastedImg) {
+            compositor.redrawAll();
+            toast.showToast('Pasted dropped image', 'info');
+          }
+        }
+      } catch (err) {
+        console.warn('[inkwell/main] Failed to paste dropped image:', err);
+      }
     }
   });
 
@@ -1418,6 +1444,34 @@ function attachKeyboardShortcuts() {
   window.addEventListener('blur', () => {
     toolManager.cancelSpringKeys();
   });
+
+  window.addEventListener('paste', async e => {
+    const isTyping = document.activeElement && (
+      document.activeElement.tagName === 'INPUT' ||
+      document.activeElement.tagName === 'TEXTAREA' ||
+      document.activeElement.isContentEditable
+    );
+    if (isTyping) return;
+
+    const activeSheet = _viewport ? _viewport.getActivePageInView(state.drawingPane || 'left') : 0;
+    let targetPagePt = null;
+    if (_viewport) {
+      const pl = _viewport.getPageLayout(activeSheet);
+      if (pl) {
+        const [centerWx, centerWy] = _viewport.screenToWorld(window.innerWidth / 2, window.innerHeight / 2, state.drawingPane || 'left');
+        targetPagePt = {
+          px: Math.max(50, Math.min(pl.width - 50, centerWx - pl.x)),
+          py: Math.max(50, Math.min(pl.height - 50, centerWy - pl.y)),
+        };
+      }
+    }
+
+    const handled = await clipboard.handlePasteEvent(e, activeSheet, targetPagePt);
+    if (handled) {
+      compositor.redrawAll();
+      toast.showToast('Pasted from clipboard', 'info');
+    }
+  });
 }
 
 // ---- Application Bootstrap Lifecycle ----
@@ -1611,6 +1665,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Global compatibility bridges
   window.state = state;
+  window.commands = commandsModule.commands;
   window.toolManager = toolManager;
   window.documentOps = Object.assign({}, documentOps, {
     addTextObject: (textObj, opts) => documentOps.upsertTextObject(textObj, { recordHistory: true, isNew: true, ...opts }),

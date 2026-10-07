@@ -17,6 +17,42 @@ export function getClipboardData() {
   return _clipboard;
 }
 
+export function setClipboardData(data) {
+  _clipboard = data;
+}
+
+export function dataUrlToBlob(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+  try {
+    const commaIdx = dataUrl.indexOf(',');
+    if (commaIdx === -1) return null;
+    const header = dataUrl.slice(0, commaIdx);
+    const b64 = dataUrl.slice(commaIdx + 1);
+    const mimeMatch = header.match(/:(.*?);/);
+    const mime = (mimeMatch && mimeMatch[1]) ? mimeMatch[1] : 'image/png';
+    const binaryStr = atob(b64);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  } catch (err) {
+    console.warn('[inkwell/clipboard] dataUrlToBlob failed:', err);
+    return null;
+  }
+}
+
+export function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    if (!blob) return resolve('');
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Failed to convert blob to data URL'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function copySelection() {
   const strokes = (state.selectedStrokes || []).filter(s => !s.deleted);
   const images = (state.selectedImages || []).filter(img => !img.deleted);
@@ -33,13 +69,53 @@ export function copySelection() {
     texts: texts.map(serializeText),
   };
 
-  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+  // Synchronize to system clipboard
+  if (typeof navigator !== 'undefined' && navigator.clipboard) {
     if (texts.length && !strokes.length && !images.length) {
-      navigator.clipboard.writeText(texts.map(t => t.text).join('\n')).catch(() => {});
+      if (typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(texts.map(t => t.text).join('\n')).catch(() => {});
+      }
+    } else if (images.length === 1 && !strokes.length && !texts.length) {
+      // Single image: write binary image blob if possible so external apps can paste it
+      const img = images[0];
+      const url = img.dataUrl || img.data_url || '';
+      const blob = dataUrlToBlob(url);
+      const jsonStr = JSON.stringify(_clipboard);
+
+      if (blob && typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard.write === 'function') {
+        const itemData = {
+          [blob.type || 'image/png']: blob,
+        };
+        try {
+          itemData['text/plain'] = new Blob([jsonStr], { type: 'text/plain' });
+        } catch (_) {}
+
+        try {
+          navigator.clipboard.write([new ClipboardItem(itemData)]).catch(() => {
+            if (blob) {
+              navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]).catch(() => {
+                if (typeof navigator.clipboard.writeText === 'function') {
+                  navigator.clipboard.writeText(jsonStr).catch(() => {});
+                }
+              });
+            } else if (typeof navigator.clipboard.writeText === 'function') {
+              navigator.clipboard.writeText(jsonStr).catch(() => {});
+            }
+          });
+        } catch (_) {
+          if (typeof navigator.clipboard.writeText === 'function') {
+            navigator.clipboard.writeText(jsonStr).catch(() => {});
+          }
+        }
+      } else if (typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(jsonStr).catch(() => {});
+      }
     } else {
-      try {
-        navigator.clipboard.writeText(JSON.stringify(_clipboard)).catch(() => {});
-      } catch (_) {}
+      if (typeof navigator.clipboard.writeText === 'function') {
+        try {
+          navigator.clipboard.writeText(JSON.stringify(_clipboard)).catch(() => {});
+        } catch (_) {}
+      }
     }
   }
 
@@ -68,6 +144,7 @@ function serializeStroke(s) {
 }
 
 function serializeImage(img) {
+  const url = img.dataUrl || img.data_url || '';
   return {
     id: img.id,
     sheet: img.sheet || 0,
@@ -75,7 +152,8 @@ function serializeImage(img) {
     y: img.y,
     width: img.width,
     height: img.height,
-    dataUrl: img.dataUrl || '',
+    dataUrl: url,
+    data_url: url,
     deleted: !!img.deleted,
   };
 }
@@ -196,6 +274,7 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
   }
 
   for (const img of (_clipboard.images || [])) {
+    const url = img.dataUrl || img.data_url || '';
     const clone = {
       id: 'img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
       sheet: activeSheet,
@@ -203,18 +282,17 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
       y: img.y + dy,
       width: img.width,
       height: img.height,
-      dataUrl: img.dataUrl || '',
+      dataUrl: url,
+      data_url: url,
       deleted: false,
     };
 
-    if (clone.dataUrl) {
-      const imgEl = new Image();
-      imgEl.src = clone.dataUrl;
-      clone._el = imgEl;
+    if (url) {
+      documentOps.ensureImageElement(clone);
     }
 
     documentOps.upsertImage(clone, { recordHistory: false, isNew: true });
-    ipc.journalImageMutation('upsert', clone).catch(() => {});
+    ipc.journalImageMutation('upsert', clone);
     newImages.push(clone);
   }
 
@@ -264,58 +342,250 @@ export function pasteClipboard(activeSheet = 0, offset = 16, targetPagePt = null
   return true;
 }
 
+/**
+ * Pastes an image given its Data URL onto the specified page.
+ * Automatically computes proportional dimensions and centers at target point or page center.
+ */
+export async function pasteImageDataUrl(dataUrl, activeSheet = 0, targetPagePt = null, customId = null) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null;
+
+  // 1. Decode HTMLImageElement to obtain natural dimensions
+  const imgEl = new Image();
+  await new Promise((resolve, reject) => {
+    imgEl.onload = () => resolve();
+    imgEl.onerror = err => reject(new Error('Failed to load image data URL: ' + err));
+    imgEl.src = dataUrl;
+  });
+
+  const naturalW = imgEl.naturalWidth || imgEl.width || 320;
+  const naturalH = imgEl.naturalHeight || imgEl.height || 240;
+
+  // 2. Determine target page layout & scale constraints
+  const pi = (state.pageInfos && state.pageInfos[activeSheet]) || { width_pt: 595, height_pt: 842 };
+  const pageW = pi.width_pt || 595;
+  const pageH = pi.height_pt || 842;
+
+  // Screen pixels to PDF points is ~0.75
+  let w = naturalW * 0.75;
+  let h = naturalH * 0.75;
+
+  // Fit within 75% of page width & height
+  const maxW = pageW * 0.75;
+  const maxH = pageH * 0.75;
+  if (w > maxW || h > maxH) {
+    const scale = Math.min(maxW / w, maxH / h);
+    w *= scale;
+    h *= scale;
+  }
+  w = Math.max(30, Math.round(w * 10) / 10);
+  h = Math.max(30, Math.round(h * 10) / 10);
+
+  // 3. Compute (x, y) coordinates
+  let x, y;
+  if (targetPagePt && typeof targetPagePt.px === 'number' && typeof targetPagePt.py === 'number') {
+    x = targetPagePt.px - w / 2;
+    y = targetPagePt.py - h / 2;
+  } else {
+    // Default to page center
+    x = (pageW - w) / 2;
+    y = (pageH - h) / 2;
+  }
+
+  // Clamp within page boundaries with a safe margin
+  x = Math.max(10, Math.min(pageW - w - 10, x));
+  y = Math.max(10, Math.min(pageH - h - 10, y));
+
+  x = Math.round(x * 10) / 10;
+  y = Math.round(y * 10) / 10;
+
+  const newImage = {
+    id: customId || ('img_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7)),
+    sheet: activeSheet,
+    x,
+    y,
+    width: w,
+    height: h,
+    dataUrl,
+    data_url: dataUrl,
+    _el: imgEl,
+    deleted: false,
+  };
+
+  documentOps.upsertImage(newImage, { recordHistory: true, isNew: true });
+  ipc.journalImageMutation('upsert', newImage);
+
+  // Select the newly pasted image and switch to lasso tool
+  state.selectedStrokes = [];
+  state.selectedImages = [newImage];
+  state.selectedTextObjects = [];
+
+  import('../tools/tool-manager.js').then(tm => {
+    tm.setTool('lasso', { isUserSwitch: false });
+    import('../ui/toolbar.js').then(tb => tb.updateToolbarUI()).catch(() => {});
+  }).catch(() => {});
+
+  emit('selectionChanged', { strokes: [], images: [newImage], textObjects: [] });
+  import('../render/compositor.js').then(c => c.scheduleRedrawAll()).catch(() => {});
+
+  return newImage;
+}
+
 export async function pasteFromSystemClipboard(activeSheet = 0, targetPagePt = null) {
+  // 1. Try reading system clipboard via modern navigator.clipboard.read()
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        // 1a. Check for image item
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) {
+          // If item also includes inkwell_objects in text/plain, prefer rich inkwell objects
+          if (item.types.includes('text/plain')) {
+            try {
+              const textBlob = await item.getType('text/plain');
+              const text = await textBlob.text();
+              const data = JSON.parse(text);
+              if (data && data.type === 'inkwell_objects') {
+                _clipboard = data;
+                return pasteClipboard(activeSheet, 16, targetPagePt);
+              }
+            } catch (_) {}
+          }
+
+          // Otherwise paste the image blob
+          const blob = await item.getType(imageType);
+          const dataUrl = await blobToDataUrl(blob);
+          if (dataUrl) {
+            const pastedImg = await pasteImageDataUrl(dataUrl, activeSheet, targetPagePt);
+            return !!pastedImg;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[inkwell/clipboard] navigator.clipboard.read error or permission denied:', err);
+    }
+  }
+
+  // 2. Try reading system clipboard text via navigator.clipboard.readText()
+  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        const trimmed = text.trim();
+
+        // 2a. Is the text an image Data URL?
+        if (trimmed.startsWith('data:image/')) {
+          const pastedImg = await pasteImageDataUrl(trimmed, activeSheet, targetPagePt);
+          return !!pastedImg;
+        }
+
+        // 2b. Is the text serialized Inkwell JSON?
+        try {
+          const data = JSON.parse(trimmed);
+          if (data && data.type === 'inkwell_objects') {
+            _clipboard = data;
+            return pasteClipboard(activeSheet, 16, targetPagePt);
+          }
+        } catch (_) {}
+
+        // 2c. Normal text -> create sticky text note
+        const px = (targetPagePt && typeof targetPagePt.px === 'number') ? targetPagePt.px : 80;
+        const py = (targetPagePt && typeof targetPagePt.py === 'number') ? targetPagePt.py : 120;
+        const newTextObj = {
+          id: 'txt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+          sheet: activeSheet,
+          x: px,
+          y: py,
+          text: trimmed,
+          fontSize: 16,
+          color: state.textColor || '#141724',
+          bold: false,
+          italic: false,
+          width: Math.max(140, Math.min(400, trimmed.length * 8)),
+          height: 36,
+          deleted: false,
+        };
+
+        documentOps.upsertTextObject(newTextObj, { recordHistory: true, isNew: true });
+        ipc.journalTextMutation('upsert', newTextObj);
+
+        state.selectedStrokes = [];
+        state.selectedImages = [];
+        state.selectedTextObjects = [newTextObj];
+
+        import('../tools/tool-manager.js').then(tm => {
+          tm.setTool('lasso', { isUserSwitch: false });
+          import('../ui/toolbar.js').then(tb => tb.updateToolbarUI()).catch(() => {});
+        }).catch(() => {});
+
+        emit('selectionChanged', { strokes: [], images: [], textObjects: [newTextObj] });
+        import('../render/compositor.js').then(c => c.scheduleRedrawAll()).catch(() => {});
+        return true;
+      }
+    } catch (err) {
+      console.warn('[inkwell/clipboard] pasteFromSystemClipboard error:', err);
+    }
+  }
+
+  // 3. Fallback to internal _clipboard if available
   if (hasClipboardContent()) {
     return pasteClipboard(activeSheet, 16, targetPagePt);
   }
 
-  if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text || !text.trim()) return false;
+  return false;
+}
 
-      try {
-        const data = JSON.parse(text);
-        if (data && data.type === 'inkwell_objects') {
-          _clipboard = data;
-          return pasteClipboard(activeSheet, 16, targetPagePt);
+export async function handlePasteEvent(e, activeSheet = 0, targetPagePt = null) {
+  if (!e || !e.clipboardData) return false;
+
+  const items = e.clipboardData.items;
+  if (items && items.length) {
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const file = it.getAsFile();
+        if (file) {
+          const dataUrl = await blobToDataUrl(file);
+          if (dataUrl) {
+            e.preventDefault();
+            const pastedImg = await pasteImageDataUrl(dataUrl, activeSheet, targetPagePt);
+            return !!pastedImg;
+          }
         }
-      } catch (_) {}
-
-      const px = (targetPagePt && typeof targetPagePt.px === 'number') ? targetPagePt.px : 80;
-      const py = (targetPagePt && typeof targetPagePt.py === 'number') ? targetPagePt.py : 120;
-      const newTextObj = {
-        id: 'txt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
-        sheet: activeSheet,
-        x: px,
-        y: py,
-        text: text.trim(),
-        fontSize: 16,
-        color: state.textColor || '#141724',
-        bold: false,
-        italic: false,
-        width: Math.max(140, Math.min(400, text.length * 8)),
-        height: 36,
-        deleted: false,
-      };
-
-      documentOps.upsertTextObject(newTextObj, { recordHistory: true, isNew: true });
-      ipc.journalTextMutation('upsert', newTextObj);
-
-      state.selectedStrokes = [];
-      state.selectedImages = [];
-      state.selectedTextObjects = [newTextObj];
-
-      import('../tools/tool-manager.js').then(tm => {
-        tm.setTool('lasso', { isUserSwitch: false });
-        import('../ui/toolbar.js').then(tb => tb.updateToolbarUI()).catch(() => {});
-      }).catch(() => {});
-
-      emit('selectionChanged', { strokes: [], images: [], textObjects: [newTextObj] });
-      return true;
-    } catch (err) {
-      console.warn('[inkwell/clipboard] pasteFromSystemClipboard error:', err);
+      }
     }
+  }
+
+  if (e.clipboardData.files && e.clipboardData.files.length) {
+    for (let i = 0; i < e.clipboardData.files.length; i++) {
+      const file = e.clipboardData.files[i];
+      if (file.type.startsWith('image/')) {
+        const dataUrl = await blobToDataUrl(file);
+        if (dataUrl) {
+          e.preventDefault();
+          const pastedImg = await pasteImageDataUrl(dataUrl, activeSheet, targetPagePt);
+          return !!pastedImg;
+        }
+      }
+    }
+  }
+
+  const text = e.clipboardData.getData('text/plain');
+  if (text && text.trim()) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('data:image/')) {
+      e.preventDefault();
+      const pastedImg = await pasteImageDataUrl(trimmed, activeSheet, targetPagePt);
+      return !!pastedImg;
+    }
+    try {
+      const data = JSON.parse(trimmed);
+      if (data && data.type === 'inkwell_objects') {
+        e.preventDefault();
+        _clipboard = data;
+        return pasteClipboard(activeSheet, 16, targetPagePt);
+      }
+    } catch (_) {}
   }
 
   return false;

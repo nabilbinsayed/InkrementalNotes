@@ -1605,3 +1605,9 @@ pub async fn toggle_maximize_window(window: tauri::Window) -> Result<(), String>
 pub async fn close_window(window: tauri::Window) -> Result<(), String> {
     window.close().map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn check_pdfium_status(state: State<AppState>) -> bool {
+    state.pdfium.lock().map(|guard| guard.is_some()).unwrap_or(false)
+}
+

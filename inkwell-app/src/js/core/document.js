@@ -120,13 +120,40 @@ export function clearPageInk(sheetIndex, { recordHistory = true } = {}) {
   return strokesOnSheet;
 }
 
-// ---- Image Operations ----
+export function ensureImageElement(img, onLoaded) {
+  if (!img) return null;
+  const url = img.dataUrl || img.data_url;
+  if (!url) return null;
+  img.dataUrl = url;
+  img.data_url = url;
+
+  if (typeof Image === 'undefined') return null;
+
+  if (!img._el || img._el.src !== url) {
+    const el = new Image();
+    el.onload = () => {
+      if (typeof onLoaded === 'function') {
+        onLoaded(img);
+      } else {
+        import('../render/compositor.js').then(c => c.scheduleRedrawAll()).catch(() => {});
+      }
+    };
+    el.src = url;
+    img._el = el;
+  }
+  return img._el;
+}
 
 export function upsertImage(imageObj, { recordHistory = true, isNew = false } = {}) {
   if (!imageObj || !imageObj.id) return;
   if (!state.images) state.images = [];
 
   imageObj.deleted = false;
+  const url = imageObj.dataUrl || imageObj.data_url || '';
+  imageObj.dataUrl = url;
+  imageObj.data_url = url;
+  ensureImageElement(imageObj);
+
   const existingIdx = state.images.findIndex(img => String(img.id) === String(imageObj.id));
   if (existingIdx >= 0) {
     state.images[existingIdx] = imageObj;
@@ -294,7 +321,15 @@ export function commitTransform({ initialStrokes = [], initialImages = [], initi
 export function setDocument({ pageInfos = [], strokes = [], images = [], textObjects = [], outline = [], bookmarks = [] } = {}) {
   state.pageInfos = pageInfos;
   state.strokes = strokes;
-  state.images = images;
+  state.images = (images || []).map(img => {
+    const url = img.dataUrl || img.data_url || '';
+    img.dataUrl = url;
+    img.data_url = url;
+    if (url) {
+      ensureImageElement(img);
+    }
+    return img;
+  });
   state.textObjects = textObjects;
   state.outline = outline;
   state.bookmarks = bookmarks;

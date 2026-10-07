@@ -1,6 +1,11 @@
 @echo off
 title Inkwell PDF Annotator
-set "PATH=%~dp0bin;%PATH%"
+set "PATH=%~dp0;%~dp0bin;%PATH%"
+if exist "%~dp0pdfium.dll" (
+    set "PDFIUM_DLL_DIR=%~dp0"
+) else if exist "%~dp0bin\pdfium.dll" (
+    set "PDFIUM_DLL_DIR=%~dp0bin"
+)
 set "BIN="
 if exist "%~dp0inkwell-app.exe" (
     set "BIN=%~dp0inkwell-app.exe"

@@ -66,6 +66,17 @@ fn main() {
                     }
                 }
             }
+            if pdfium_guard.is_none() {
+                if let Ok(app_dir) = app.path().app_local_data_dir() {
+                    if let Ok(pdfium) = inkwell_pdf::init_pdfium_from_dir(&app_dir) {
+                        eprintln!("[inkwell] PDFium initialized successfully from app local data dir: {app_dir:?}");
+                        *pdfium_guard = Some(pdfium);
+                    }
+                }
+            }
+            if pdfium_guard.is_none() {
+                eprintln!("[inkwell] WARNING: PDFium shared library could not be located in any standard paths. PDF rendering will be unavailable until PDFium binary is supplied.");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -140,6 +151,7 @@ fn main() {
             commands::minimize_window,
             commands::toggle_maximize_window,
             commands::close_window,
+            commands::check_pdfium_status,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Inkwell");

@@ -58,6 +58,10 @@ jobs:
         working-directory: inkwell-app
         run: python test_app_smoke.py
 
+      - name: Image Copy-Paste Suite
+        working-directory: inkwell-app
+        run: python test_image_copypaste.py
+
       - name: M0 Prototype Smoke Suite
         working-directory: inkwell-m0
         run: python test_smoke.py
@@ -95,6 +99,8 @@ jobs:
 
       - name: Build Windows App
         working-directory: inkwell-app
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
           npm install
           npx @tauri-apps/cli build --bundles nsis

@@ -31,10 +31,13 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
     state.transformInitialImages = (state.selectedImages || []).map(img => ({
       id: img.id,
       image: img,
+      sheet: img.sheet || 0,
       x: img.x,
       y: img.y,
       width: img.width,
       height: img.height,
+      dataUrl: img.dataUrl || img.data_url || '',
+      data_url: img.dataUrl || img.data_url || '',
     }));
     state.transformInitialTextObjects = (state.selectedTextObjects || []).map(t => ({
       id: t.id,
@@ -82,10 +85,13 @@ export function onLassoDown(e, ptWorld, screenPt, pane, viewport) {
       state.transformInitialImages = (state.selectedImages || []).map(img => ({
         id: img.id,
         image: img,
+        sheet: img.sheet || 0,
         x: img.x,
         y: img.y,
         width: img.width,
         height: img.height,
+        dataUrl: img.dataUrl || img.data_url || '',
+        data_url: img.dataUrl || img.data_url || '',
       }));
       state.transformInitialTextObjects = (state.selectedTextObjects || []).map(t => ({
         id: t.id,
@@ -330,7 +336,16 @@ export function onLassoUp(e, viewport) {
       initialImages: state.transformInitialImages || [],
       initialTextObjects: state.transformInitialTextObjects || [],
       finalStrokes: (state.selectedStrokes || []).map(s => ({ id: s.id, points: s.points.map(p => ({ ...p })) })),
-      finalImages: (state.selectedImages || []).map(img => ({ id: img.id, x: img.x, y: img.y, width: img.width, height: img.height })),
+      finalImages: (state.selectedImages || []).map(img => ({
+        id: img.id,
+        sheet: img.sheet || 0,
+        x: img.x,
+        y: img.y,
+        width: img.width,
+        height: img.height,
+        dataUrl: img.dataUrl || img.data_url || '',
+        data_url: img.dataUrl || img.data_url || '',
+      })),
       finalTextObjects: (state.selectedTextObjects || []).map(t => ({ id: t.id, x: t.x, y: t.y, fontSize: t.fontSize })),
     }, { recordHistory: true });
 
@@ -595,7 +610,7 @@ function renderWetTransform(pane, viewport) {
   const activePane = pane || state.drawingPane || 'left';
   const z = (activePane === 'right' && viewport.splitMode) ? viewport.rightZoom : viewport.zoom;
 
-  // Render selected strokes on wet canvas with 2D canvas matrix transformations
+  // Render selected strokes & images on wet canvas with 2D canvas matrix transformations
   const strokesBySheet = new Map();
   for (const s of (state.selectedStrokes || [])) {
     const sheet = s.sheet || 0;
@@ -603,8 +618,18 @@ function renderWetTransform(pane, viewport) {
     strokesBySheet.get(sheet).push(s);
   }
 
-  for (const [sheet, sheetStrokes] of strokesBySheet.entries()) {
+  const imagesBySheet = new Map();
+  for (const img of (state.selectedImages || [])) {
+    if (img.deleted) continue;
+    const sheet = img.sheet || 0;
+    if (!imagesBySheet.has(sheet)) imagesBySheet.set(sheet, []);
+    imagesBySheet.get(sheet).push(img);
+  }
+
+  const allSheets = new Set([...strokesBySheet.keys(), ...imagesBySheet.keys()]);
+  for (const sheet of allSheets) {
     const pl = viewport.getPageLayout(sheet);
+    if (!pl) continue;
     const [psx, psy] = viewport.worldToScreen(pl.x, pl.y, activePane);
 
     const cx = (mode === 'move') ? 0 : (originX - pl.x);
@@ -627,6 +652,17 @@ function renderWetTransform(pane, viewport) {
       wctx.translate(-cx, -cy);
     }
 
+    const sheetImages = imagesBySheet.get(sheet) || [];
+    for (const img of sheetImages) {
+      const el = img._el;
+      if (el && el.complete && el.naturalWidth > 0) {
+        try {
+          wctx.drawImage(el, img.x, img.y, img.width, img.height);
+        } catch (_) {}
+      }
+    }
+
+    const sheetStrokes = strokesBySheet.get(sheet) || [];
     for (const s of sheetStrokes) {
       const isHighlighter = s.kind === 'highlighter';
       if (isHighlighter) {

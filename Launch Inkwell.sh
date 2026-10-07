@@ -6,10 +6,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"
 export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-0}"
 
-RELEASE_BIN="$DIR/inkwell-app/src-tauri/target/release/inkwell-app"
-DEBUG_BIN="$DIR/inkwell-app/src-tauri/target/debug/inkwell-app"
+if [ -f "$DIR/libpdfium.so" ]; then
+    export PDFIUM_DLL_DIR="$DIR"
+elif [ -f "$DIR/bin/libpdfium.so" ]; then
+    export PDFIUM_DLL_DIR="$DIR/bin"
+fi
 
-export LD_LIBRARY_PATH="$DIR/bin:$DIR/inkwell-app/src-tauri/target/release:$DIR/inkwell-app/src-tauri/target/debug:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$DIR:$DIR/bin:$DIR/inkwell-app/src-tauri/target/release:$DIR/inkwell-app/src-tauri/target/debug:${LD_LIBRARY_PATH:-}"
 
 if [ -f "$DIR/inkwell-app" ]; then
     exec "$DIR/inkwell-app" "$@"

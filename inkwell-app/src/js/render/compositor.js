@@ -212,10 +212,23 @@ export function redrawAll() {
       // 1. Embedded images
       if (state.images && state.images.length) {
         for (const img of state.images) {
-          if (!img.deleted && img.sheet === pl.sheet && img._el) {
-            try {
-              _dctx.drawImage(img._el, img.x, img.y, img.width, img.height);
-            } catch (_) {}
+          if (!img.deleted && img.sheet === pl.sheet) {
+            if (state.transformMode && (state.selectedImages || []).some(si => String(si.id) === String(img.id))) {
+              continue;
+            }
+            let el = img._el;
+            const url = img.dataUrl || img.data_url;
+            if (!el && url && typeof Image !== 'undefined') {
+              el = new Image();
+              el.onload = () => scheduleRedrawAll();
+              el.src = url;
+              img._el = el;
+            }
+            if (el && el.complete && el.naturalWidth > 0) {
+              try {
+                _dctx.drawImage(el, img.x, img.y, img.width, img.height);
+              } catch (_) {}
+            }
           }
         }
       }

@@ -51,6 +51,8 @@ jobs:
 
       - name: Build Windows App & Bundles
         working-directory: inkwell-app
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
         run: |
           npm install
           npx @tauri-apps/cli build --bundles nsis
@@ -60,8 +62,11 @@ jobs:
         run: |
           $dist = "inkwell-windows-x64-portable"
           New-Item -ItemType Directory -Force -Path $dist
-          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/"
+          New-Item -ItemType Directory -Force -Path "$dist/bin"
+          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/inkwell-app.exe"
+          Copy-Item "inkwell-app/src-tauri/target/release/inkwell-app.exe" -Destination "$dist/Inkwell.exe"
           Copy-Item "bin/pdfium.dll" -Destination "$dist/"
+          Copy-Item "bin/pdfium.dll" -Destination "$dist/bin/"
           Copy-Item "Launch Inkwell.bat" -Destination "$dist/"
           Copy-Item "README.md" -Destination "$dist/"
           Compress-Archive -Path "$dist/*" -DestinationPath "$dist.zip"
@@ -133,7 +138,9 @@ jobs:
         run: |
           DIST="inkwell-linux-x64-portable"
           mkdir -p "$DIST/bin"
-          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/"
+          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/inkwell-app"
+          cp inkwell-app/src-tauri/target/release/inkwell-app "$DIST/Inkwell"
+          cp bin/libpdfium.so "$DIST/"
           cp bin/libpdfium.so "$DIST/bin/"
           cp "Launch Inkwell.sh" "$DIST/"
           cp README.md "$DIST/"
@@ -167,6 +174,7 @@ jobs:
             libevdev-devel \
             libxdo-devel \
             file-devel \
+            rpm-build \
             gcc gcc-c++ make curl wget tar nodejs npm rust cargo
 
       - name: Fetch Fedora PDFium Shared Library

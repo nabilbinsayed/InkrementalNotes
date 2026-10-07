@@ -134,34 +134,38 @@ export async function deleteStroke(strokeIdStr) {
 // ---- WAL Mutation Journaling (Images & Text) ----
 
 export function journalImageMutation(op, imgObj) {
-  if (!imgObj) return;
+  if (!imgObj) return Promise.resolve(false);
   if (op === 'add' || op === 'upsert') {
-    invokeTauri('journal_image_mutation', {
+    const url = imgObj.dataUrl || imgObj.data_url || '';
+    return invokeTauri('journal_image_mutation', {
       op: 'upsert',
       image: {
         id: String(imgObj.id),
         sheet: imgObj.sheet || 0,
-        x: imgObj.x,
-        y: imgObj.y,
-        width: imgObj.width,
-        height: imgObj.height,
-        data_url: imgObj.dataUrl || '',
+        x: imgObj.x ?? 0,
+        y: imgObj.y ?? 0,
+        width: imgObj.width ?? 0,
+        height: imgObj.height ?? 0,
+        data_url: url,
       },
       imageId: null,
     }).catch(e => {
       console.warn('[inkwell/ipc] journal_image_mutation error:', e);
       warnDurability('Change journal unavailable — unsaved work at risk');
+      return false;
     });
   } else if (op === 'delete' || op === 'remove') {
-    invokeTauri('journal_image_mutation', {
+    return invokeTauri('journal_image_mutation', {
       op: 'delete',
       image: null,
       imageId: String(imgObj.id),
     }).catch(e => {
       console.warn('[inkwell/ipc] journal_image_mutation error:', e);
       warnDurability('Change journal unavailable — unsaved work at risk');
+      return false;
     });
   }
+  return Promise.resolve(false);
 }
 
 export function journalTextMutation(op, textObj) {
@@ -249,3 +253,9 @@ export async function toggleMaximizeWindow() {
 export async function closeWindow() {
   return await invokeTauri('close_window');
 }
+
+export async function checkPdfiumStatus() {
+  const res = await invokeTauri('check_pdfium_status');
+  return res === true;
+}
+

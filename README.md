@@ -105,9 +105,12 @@ InkWell/
 | **Highlighter** | `M` | Chisel-tip translucent rectangular highlighter (Yellow preset) |
 | **Precision Eraser** | `E` | Proximity stroke eraser across visible continuous pages |
 | **Lasso / Move Tool** | `V` | Freeform polygon loop & click-to-select, drag-to-move, 8-handle resize |
-| **Laser Pointer** | `L` | Ephemeral glowing presentation pointer |
-| **Shape Tool** | `U` | Cycles Rectangle, Ellipse, and Ruler Line |
-| **Text Note** | `T` | Interactive floating keyboard sticky note |
+| **Rectangle Shape** | `R` | Sharp 90° vector rectangle shape |
+| **Ellipse Shape** | `O` | Smooth vector ellipse / circle shape |
+| **Line / Ruler** | `L` | Straight ruler line segment |
+| **Laser Pointer** | `K` | Ephemeral glowing presentation pointer |
+| **Sticky Note** | `T` | Interactive floating keyboard sticky note |
+| **Text Selection** | `S` | Character-level PDF text selection and copy |
 | **Pan / Hand Tool** | `H` / `Space` | Pan canvas viewport without drawing |
 | **Radial Quick Menu** | `Right Click` / Barrel | Stylus 6-slot floating quick action wheel |
 | **Select All (Current Page)** | `Ctrl` + `A` | Select all strokes and images on the active visible page |
