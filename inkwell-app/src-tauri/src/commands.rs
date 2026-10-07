@@ -181,6 +181,46 @@ fn extract_frontend_strokes(doc: &Document) -> Vec<FrontendStroke> {
     out
 }
 
+fn extract_frontend_images(doc: &Document) -> Vec<FrontendImage> {
+    let mut out = Vec::new();
+    for sheet in &doc.sheets {
+        for img in &sheet.images {
+            out.push(FrontendImage {
+                id: img.id.clone(),
+                sheet: img.sheet,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                data_url: img.data_url.clone(),
+            });
+        }
+    }
+    out
+}
+
+fn extract_frontend_texts(doc: &Document) -> Vec<FrontendText> {
+    let mut out = Vec::new();
+    for sheet in &doc.sheets {
+        for txt in &sheet.text_objects {
+            out.push(FrontendText {
+                id: txt.id.clone(),
+                sheet: txt.sheet,
+                x: txt.x,
+                y: txt.y,
+                text: txt.text.clone(),
+                font_size: txt.font_size,
+                color: txt.color.clone(),
+                bold: txt.bold,
+                italic: txt.italic,
+                width: txt.width,
+                height: txt.height,
+            });
+        }
+    }
+    out
+}
+
 /// Extract page count, dimensions, and table of contents from PDF bytes using PDFium.
 /// Falls back to the shallow `PdfFile` reader if PDFium is unavailable.
 fn extract_pdf_meta(
@@ -285,17 +325,41 @@ fn replay_wal_journal(
                     }
                     WalEntry::PageRotated { .. } => {}
                     WalEntry::ImageAdded { sheet, id, x, y, width, height, data_url } => {
+                        doc.push_image(sheet, inkwell_core::doc::ImageObject {
+                            id: id.clone(),
+                            sheet,
+                            x,
+                            y,
+                            width,
+                            height,
+                            data_url: data_url.clone(),
+                        });
                         images_map.insert(id.clone(), FrontendImage { id, sheet, x, y, width, height, data_url });
                         recovered_images += 1;
                     }
                     WalEntry::ImageRemoved { id } => {
+                        doc.remove_image(&id);
                         images_map.remove(&id);
                     }
                     WalEntry::TextUpsert { sheet, id, x, y, text, font_size, color, bold, italic, width, height } => {
+                        doc.upsert_text(sheet, inkwell_core::doc::TextObject {
+                            id: id.clone(),
+                            sheet,
+                            x,
+                            y,
+                            text: text.clone(),
+                            font_size,
+                            color: color.clone(),
+                            bold,
+                            italic,
+                            width,
+                            height,
+                        });
                         texts_map.insert(id.clone(), FrontendText { id, sheet, x, y, text, font_size, color, bold, italic, width, height });
                         recovered_texts += 1;
                     }
                     WalEntry::TextRemoved { id } => {
+                        doc.remove_text(&id);
                         texts_map.remove(&id);
                     }
                 }
@@ -333,8 +397,24 @@ pub async fn open_pdf(path_str: String, state: State<'_, AppState>) -> Result<Op
     };
 
     // Replay WAL entries if journal exists from a previous crash
-    let (recovered_strokes, recovered_images, recovered_texts, loaded_images, loaded_texts) =
+    let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
         replay_wal_journal(&path, &mut doc);
+
+    let mut loaded_images = extract_frontend_images(&doc);
+    let mut loaded_texts = extract_frontend_texts(&doc);
+
+    for w_img in wal_images {
+        if !loaded_images.iter().any(|im| im.id == w_img.id) {
+            loaded_images.push(w_img);
+        }
+    }
+    for w_txt in wal_texts {
+        if let Some(pos) = loaded_texts.iter().position(|t| t.id == w_txt.id) {
+            loaded_texts[pos] = w_txt;
+        } else {
+            loaded_texts.push(w_txt);
+        }
+    }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
 
@@ -442,8 +522,24 @@ pub async fn open_pdf_bytes(name: String, bytes: Vec<u8>, state: State<'_, AppSt
         _ => Document::for_pdf(n_pages),
     };
 
-    let (recovered_strokes, recovered_images, recovered_texts, loaded_images, loaded_texts) =
+    let (recovered_strokes, recovered_images, recovered_texts, wal_images, wal_texts) =
         replay_wal_journal(&path, &mut doc);
+
+    let mut loaded_images = extract_frontend_images(&doc);
+    let mut loaded_texts = extract_frontend_texts(&doc);
+
+    for w_img in wal_images {
+        if !loaded_images.iter().any(|im| im.id == w_img.id) {
+            loaded_images.push(w_img);
+        }
+    }
+    for w_txt in wal_texts {
+        if let Some(pos) = loaded_texts.iter().position(|t| t.id == w_txt.id) {
+            loaded_texts[pos] = w_txt;
+        } else {
+            loaded_texts.push(w_txt);
+        }
+    }
 
     let loaded_strokes = extract_frontend_strokes(&doc);
 
@@ -771,20 +867,41 @@ pub async fn journal_image_mutation(
 ) -> Result<bool, String> {
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         if op == "add" || op == "upsert" {
-            if let Some(img) = image {
+            if let Some(ref img) = image {
                 let _ = tx.send(WalOp::Append(WalEntry::ImageAdded {
                     sheet: img.sheet,
-                    id: img.id,
+                    id: img.id.clone(),
                     x: img.x,
                     y: img.y,
                     width: img.width,
                     height: img.height,
-                    data_url: img.data_url,
+                    data_url: img.data_url.clone(),
                 }));
             }
         } else if op == "remove" || op == "delete" {
-            if let Some(id) = image_id {
-                let _ = tx.send(WalOp::Append(WalEntry::ImageRemoved { id }));
+            if let Some(ref id) = image_id {
+                let _ = tx.send(WalOp::Append(WalEntry::ImageRemoved { id: id.clone() }));
+            }
+        }
+    }
+    if let Ok(mut doc_guard) = state.doc.lock() {
+        if let Some(doc) = doc_guard.as_mut() {
+            if op == "add" || op == "upsert" {
+                if let Some(ref img) = image {
+                    doc.push_image(img.sheet, inkwell_core::doc::ImageObject {
+                        id: img.id.clone(),
+                        sheet: img.sheet,
+                        x: img.x,
+                        y: img.y,
+                        width: img.width,
+                        height: img.height,
+                        data_url: img.data_url.clone(),
+                    });
+                }
+            } else if op == "remove" || op == "delete" {
+                if let Some(ref id) = image_id {
+                    doc.remove_image(id);
+                }
             }
         }
     }
@@ -801,15 +918,15 @@ pub async fn journal_text_mutation(
 ) -> Result<bool, String> {
     if let Some(tx) = state.wal.lock().unwrap().as_ref() {
         if op == "add" || op == "upsert" {
-            if let Some(t) = text {
+            if let Some(ref t) = text {
                 let _ = tx.send(WalOp::Append(WalEntry::TextUpsert {
                     sheet: t.sheet,
-                    id: t.id,
+                    id: t.id.clone(),
                     x: t.x,
                     y: t.y,
-                    text: t.text,
+                    text: t.text.clone(),
                     font_size: t.font_size,
-                    color: t.color,
+                    color: t.color.clone(),
                     bold: t.bold,
                     italic: t.italic,
                     width: t.width,
@@ -817,8 +934,33 @@ pub async fn journal_text_mutation(
                 }));
             }
         } else if op == "remove" || op == "delete" {
-            if let Some(id) = text_id {
-                let _ = tx.send(WalOp::Append(WalEntry::TextRemoved { id }));
+            if let Some(ref id) = text_id {
+                let _ = tx.send(WalOp::Append(WalEntry::TextRemoved { id: id.clone() }));
+            }
+        }
+    }
+    if let Ok(mut doc_guard) = state.doc.lock() {
+        if let Some(doc) = doc_guard.as_mut() {
+            if op == "add" || op == "upsert" {
+                if let Some(ref t) = text {
+                    doc.upsert_text(t.sheet, inkwell_core::doc::TextObject {
+                        id: t.id.clone(),
+                        sheet: t.sheet,
+                        x: t.x,
+                        y: t.y,
+                        text: t.text.clone(),
+                        font_size: t.font_size,
+                        color: t.color.clone(),
+                        bold: t.bold,
+                        italic: t.italic,
+                        width: t.width,
+                        height: t.height,
+                    });
+                }
+            } else if op == "remove" || op == "delete" {
+                if let Some(ref id) = text_id {
+                    doc.remove_text(id);
+                }
             }
         }
     }
@@ -829,7 +971,7 @@ pub async fn journal_text_mutation(
 #[tauri::command]
 pub async fn save_pdf(
     out_path_str: Option<String>,
-    images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
+    images: Option<Vec<FrontendImage>>,
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     state: State<'_, AppState>,
@@ -865,11 +1007,63 @@ pub async fn save_pdf(
         }
     }
 
+    // If frontend provided the active images list, sync doc state completely
+    if let Some(ref img_list) = images {
+        let mut doc_guard = state.doc.lock().unwrap();
+        if let Some(doc) = doc_guard.as_mut() {
+            for sheet in &mut doc.sheets {
+                sheet.images.clear();
+            }
+            for img in img_list {
+                while doc.sheets.len() <= img.sheet {
+                    doc.sheets.push(inkwell_core::doc::Sheet::bounded(doc.sheets.len()));
+                }
+                doc.sheets[img.sheet].images.push(inkwell_core::doc::ImageObject {
+                    id: img.id.clone(),
+                    sheet: img.sheet,
+                    x: img.x,
+                    y: img.y,
+                    width: img.width,
+                    height: img.height,
+                    data_url: img.data_url.clone(),
+                });
+            }
+        }
+    }
+
+    // If frontend provided the active text objects list, sync doc state completely
+    if let Some(ref text_list) = texts {
+        let mut doc_guard = state.doc.lock().unwrap();
+        if let Some(doc) = doc_guard.as_mut() {
+            for sheet in &mut doc.sheets {
+                sheet.text_objects.clear();
+            }
+            for t in text_list {
+                if !t.text.trim().is_empty() {
+                    while doc.sheets.len() <= t.sheet {
+                        doc.sheets.push(inkwell_core::doc::Sheet::bounded(doc.sheets.len()));
+                    }
+                    doc.sheets[t.sheet].text_objects.push(inkwell_core::doc::TextObject {
+                        id: t.id.clone(),
+                        sheet: t.sheet,
+                        x: t.x,
+                        y: t.y,
+                        text: t.text.clone(),
+                        font_size: t.font_size,
+                        color: t.color.clone(),
+                        bold: t.bold,
+                        italic: t.italic,
+                        width: t.width,
+                        height: t.height,
+                    });
+                }
+            }
+        }
+    }
+
     let doc_guard = state.doc.lock().unwrap();
     let doc = doc_guard.as_ref().ok_or("No document open")?;
 
-    // Use the original pristine PDF bytes as the base for image and text embedding.
-    // This prevents compounding duplicate objects across save cycles.
     let orig_guard = state.original_pdf_bytes.lock().unwrap();
     let original_bytes = orig_guard.as_ref().ok_or("No original PDF loaded")?;
 
@@ -895,57 +1089,16 @@ pub async fn save_pdf(
         state.pdf_path.lock().map_err(|e| format!("Lock error: {e}"))?.clone().ok_or("No target file path")?
     };
 
-    // 1. If images were provided, embed them into the ORIGINAL base PDF using PDFium.
-    let base_with_images = if let Some(ref img_list) = images {
-        if !img_list.is_empty() {
-            let pdfium_guard = state.pdfium.lock().unwrap();
-            let pdfium = pdfium_guard.as_ref().ok_or("PDFium is unavailable for image embedding")?;
-            inkwell_pdf::embed_images_in_pdf(pdfium, original_bytes, img_list)
-                .map_err(|e| format!("Failed to embed images in PDF: {e:?}"))?
-        } else {
-            original_bytes.to_vec()
-        }
-    } else {
-        original_bytes.to_vec()
-    };
-
-    // 2. If sticky note text objects were provided, embed them as real PDF text objects.
-    let base_with_texts = if let Some(ref text_list) = texts {
-        if !text_list.is_empty() {
-            let annotations: Vec<inkwell_pdf::TextAnnotation> = text_list.iter()
-                .filter(|t| !t.text.trim().is_empty())
-                .map(|t| inkwell_pdf::TextAnnotation {
-                    sheet: t.sheet,
-                    x: t.x,
-                    y: t.y,
-                    text: t.text.clone(),
-                    font_size: t.font_size,
-                    color: t.color.clone(),
-                    bold: t.bold,
-                    italic: t.italic,
-                }).collect();
-            let pdfium_guard = state.pdfium.lock().unwrap();
-            let pdfium = pdfium_guard.as_ref()
-                .ok_or("PDFium is unavailable for text embedding")?;
-            inkwell_pdf::embed_texts_in_pdf(pdfium, &base_with_images, &annotations)
-                .map_err(|e| format!("Failed to embed text in PDF: {e:?}"))?
-        } else {
-            base_with_images
-        }
-    } else {
-        base_with_images
-    };
-
-    // 3. Open PDF and append vector ink layers
-    let (_norm_bytes, mut pdf_file) = match PdfFile::open(base_with_texts.clone()) {
-        Ok(f) => (base_with_texts.clone(), f),
+    // Open PDF and append vector ink layers, image annotations, and text annotations
+    let (_norm_bytes, mut pdf_file) = match PdfFile::open(original_bytes.to_vec()) {
+        Ok(f) => (original_bytes.to_vec(), f),
         Err(e) => {
             eprintln!("[inkwell] Base PDF requires normalisation for writing ({e:?})...");
             let pdfium_guard = state.pdfium.lock().unwrap();
             let pdfium = pdfium_guard.as_ref().ok_or_else(|| {
                 format!("Failed to open base PDF ({e}) and PDFium is unavailable for normalisation.")
             })?;
-            let nb = inkwell_pdf::normalise(pdfium, &base_with_texts)
+            let nb = inkwell_pdf::normalise(pdfium, original_bytes)
                 .map_err(|norm_err| format!("PDFium normalisation failed during save: {norm_err:?}"))?;
             let f = PdfFile::open(nb.clone())
                 .map_err(|open_err| format!("Failed to parse normalised PDF for writing: {open_err}"))?;
@@ -954,7 +1107,7 @@ pub async fn save_pdf(
     };
 
     pdf_file.write_document(doc, inkwell_core::pdf::DEFAULT_GROUP)
-        .map_err(|e| format!("Failed to write document ink layers: {e}"))?;
+        .map_err(|e| format!("Failed to write document annotations: {e}"))?;
 
     let final_bytes = pdf_file.finish();
     atomic_write(&target_path, &final_bytes)
@@ -999,7 +1152,7 @@ pub async fn save_pdf(
 
 #[tauri::command]
 pub async fn save_pdf_dialog(
-    images: Option<Vec<inkwell_pdf::ImageAnnotation>>,
+    images: Option<Vec<FrontendImage>>,
     strokes: Option<Vec<FrontendStroke>>,
     texts: Option<Vec<FrontendText>>,
     window: tauri::Window,

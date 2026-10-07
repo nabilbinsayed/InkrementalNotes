@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
+use base64::Engine;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use sha2::{Digest, Sha256};
@@ -245,6 +246,18 @@ impl PdfFile {
                     annots.push(a);
                 }
             }
+            for img in &sheet.images {
+                if let Some(a) = self.emit_image_annot(img, pbox) {
+                    annots.push(a);
+                }
+            }
+            for txt in &sheet.text_objects {
+                if !txt.text.trim().is_empty() {
+                    if let Some(a) = self.emit_text_annot(txt, pbox) {
+                        annots.push(a);
+                    }
+                }
+            }
             self.rewrite_page(page_num, &annots)?;
         }
 
@@ -432,6 +445,149 @@ impl PdfFile {
                 head.id_hex(),
                 head.id_hex(),
                 strokes.len(),
+            )
+            .into_bytes(),
+        );
+        Some(annot)
+    }
+
+    fn emit_image_annot(&mut self, img: &doc::ImageObject, page_box: [f64; 4]) -> Option<u32> {
+        let llx = page_box[0];
+        let ury = page_box[3];
+
+        if img.width <= 0.0 || img.height <= 0.0 {
+            return None;
+        }
+
+        let x0 = llx + img.x;
+        let y0 = ury - (img.y + img.height);
+        let x1 = x0 + img.width;
+        let y1 = y0 + img.height;
+        let annot_rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+
+        let idx = img.data_url.find("base64,")?;
+        let b64 = &img.data_url[idx + 7..];
+        let raw_bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
+
+        let dynamic_img = image::ImageReader::new(std::io::Cursor::new(raw_bytes))
+            .with_guessed_format().ok()?
+            .decode().ok()?;
+        let rgb = dynamic_img.to_rgb8();
+        let (w, h) = rgb.dimensions();
+        let rgb_bytes = rgb.into_raw();
+
+        let img_xobject = self.add_stream(
+            &format!(
+                "/Type /XObject /Subtype /Image /Width {w} /Height {h} \
+                 /ColorSpace /DeviceRGB /BitsPerComponent 8"
+            ),
+            &rgb_bytes,
+            true,
+        );
+
+        let annot_w = (x1 - x0).abs();
+        let annot_h = (y1 - y0).abs();
+        let mut form_content = Vec::new();
+        let _ = writeln!(form_content, "q\n{:.3} 0 0 {:.3} 0 0 cm\n/Im Do\nQ", annot_w, annot_h);
+
+        let ap = self.add_stream(
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 {:.3} {:.3}] \
+                 /Resources << /XObject << /Im {img_xobject} 0 R >> >>",
+                annot_w, annot_h
+            ),
+            &form_content,
+            false,
+        );
+
+        let sid = if img.id.starts_with("img_") {
+            img.id.clone()
+        } else {
+            format!("img_{}", img.id)
+        };
+        let annot = self.add(
+            format!(
+                "<< /Type /Annot /Subtype /Stamp /F 4 /Rect [{}] \
+                 /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
+                fmt_rect(&annot_rect)
+            )
+            .into_bytes(),
+        );
+        Some(annot)
+    }
+
+    fn emit_text_annot(&mut self, text_obj: &doc::TextObject, page_box: [f64; 4]) -> Option<u32> {
+        let llx = page_box[0];
+        let ury = page_box[3];
+
+        let trimmed = text_obj.text.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let fs = text_obj.font_size.max(6.0);
+        let line_height = fs * 1.35;
+        let lines: Vec<&str> = text_obj.text.split('\n').collect();
+        let approx_h = (lines.len() as f64 * line_height).max(text_obj.height.max(20.0));
+        let approx_w = text_obj.width.max(60.0);
+
+        let x0 = llx + text_obj.x;
+        let y0 = ury - (text_obj.y + approx_h);
+        let x1 = x0 + approx_w;
+        let y1 = y0 + approx_h;
+        let annot_rect = [x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)];
+        let annot_w = (x1 - x0).abs();
+        let annot_h = (y1 - y0).abs();
+
+        let (cr, cg, cb) = parse_hex_color_rgb(&text_obj.color);
+        let font_tag = if text_obj.bold && text_obj.italic {
+            "/HelvBI"
+        } else if text_obj.bold {
+            "/HelvB"
+        } else if text_obj.italic {
+            "/HelvI"
+        } else {
+            "/Helv"
+        };
+
+        let font_res = "<< /Font << /Helv << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> \
+                          /HelvB << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> \
+                          /HelvI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >> \
+                          /HelvBI << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >> >> >>";
+
+        let mut form_content = Vec::new();
+        let _ = writeln!(form_content, "q\nBT\n{font_tag} {:.2} Tf\n{:.3} {:.3} {:.3} rg", fs, cr, cg, cb);
+        for (idx, line) in lines.iter().enumerate() {
+            let y_offset = annot_h - (idx as f64 + 1.0) * line_height;
+            let escaped = escape_pdf_string(line);
+            let _ = writeln!(form_content, "1 0 0 1 0 {:.2} Tm\n({escaped}) Tj", y_offset.max(0.0));
+        }
+        let _ = writeln!(form_content, "ET\nQ");
+
+        let ap = self.add_stream(
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 {:.3} {:.3}] \
+                 /Resources {font_res}",
+                annot_w, annot_h
+            ),
+            &form_content,
+            false,
+        );
+
+        let escaped_contents = escape_pdf_string(&text_obj.text);
+        let sid = if text_obj.id.starts_with("txt_") {
+            text_obj.id.clone()
+        } else {
+            format!("txt_{}", text_obj.id)
+        };
+        let annot = self.add(
+            format!(
+                "<< /Type /Annot /Subtype /FreeText /F 4 /Rect [{}] \
+                 /Contents ({escaped_contents}) \
+                 /DA ({font_tag} {:.2} Tf {:.3} {:.3} {:.3} rg) \
+                 /AP << /N {ap} 0 R >> /Inkw_Sid ({sid}) >>",
+                fmt_rect(&annot_rect),
+                fs, cr, cg, cb
             )
             .into_bytes(),
         );
@@ -668,6 +824,33 @@ fn refs_in_array(d: &[u8], range: (usize, usize)) -> Vec<u32> {
             i += 3;
         } else {
             i += 1;
+        }
+    }
+    out
+}
+
+fn parse_hex_color_rgb(hex: &str) -> (f64, f64, f64) {
+    let clean = hex.trim().trim_start_matches('#');
+    if clean.len() == 6 {
+        let r = u8::from_str_radix(&clean[0..2], 16).unwrap_or(20);
+        let g = u8::from_str_radix(&clean[2..4], 16).unwrap_or(23);
+        let b = u8::from_str_radix(&clean[4..6], 16).unwrap_or(36);
+        (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)
+    } else {
+        (0.08, 0.09, 0.14)
+    }
+}
+
+fn escape_pdf_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '(' => out.push_str("\\("),
+            ')' => out.push_str("\\)"),
+            '\\' => out.push_str("\\\\"),
+            '\r' => {},
+            '\n' => out.push(' '),
+            _ => out.push(c),
         }
     }
     out

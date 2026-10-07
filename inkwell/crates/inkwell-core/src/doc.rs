@@ -28,9 +28,39 @@ impl Layer {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageObject {
+    pub id: String,
+    pub sheet: usize,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub data_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextObject {
+    pub id: String,
+    pub sheet: usize,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    pub font_size: f64,
+    pub color: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub kind: SheetKind,
     pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub images: Vec<ImageObject>,
+    #[serde(default)]
+    pub text_objects: Vec<TextObject>,
 }
 
 impl Sheet {
@@ -38,12 +68,16 @@ impl Sheet {
         Self {
             kind: SheetKind::BoundedPage { source_pdf_page: page },
             layers: vec![Layer::new("Ink")],
+            images: Vec::new(),
+            text_objects: Vec::new(),
         }
     }
     pub fn blank() -> Self {
         Self {
             kind: SheetKind::BoundedPage { source_pdf_page: usize::MAX },
             layers: vec![Layer::new("Ink")],
+            images: Vec::new(),
+            text_objects: Vec::new(),
         }
     }
     pub fn strokes(&self) -> impl Iterator<Item = &Stroke> {
@@ -51,6 +85,36 @@ impl Sheet {
     }
     pub fn stroke_count(&self) -> usize {
         self.layers.iter().map(|l| l.strokes.len()).sum()
+    }
+    pub fn push_image(&mut self, image: ImageObject) {
+        if let Some(existing) = self.images.iter_mut().find(|im| im.id == image.id) {
+            *existing = image;
+        } else {
+            self.images.push(image);
+        }
+    }
+    pub fn remove_image(&mut self, id: &str) -> bool {
+        if let Some(pos) = self.images.iter().position(|im| im.id == id) {
+            self.images.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn upsert_text(&mut self, text_obj: TextObject) {
+        if let Some(existing) = self.text_objects.iter_mut().find(|t| t.id == text_obj.id) {
+            *existing = text_obj;
+        } else {
+            self.text_objects.push(text_obj);
+        }
+    }
+    pub fn remove_text(&mut self, id: &str) -> bool {
+        if let Some(pos) = self.text_objects.iter().position(|t| t.id == id) {
+            self.text_objects.remove(pos);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -185,6 +249,42 @@ impl Document {
                     l.strokes.remove(i);
                     return true;
                 }
+            }
+        }
+        false
+    }
+
+    pub fn push_image(&mut self, sheet: usize, image: ImageObject) {
+        while self.sheets.len() <= sheet {
+            self.sheets.push(Sheet::bounded(self.sheets.len()));
+        }
+        if let Some(sh) = self.sheets.get_mut(sheet) {
+            sh.push_image(image);
+        }
+    }
+
+    pub fn remove_image(&mut self, id: &str) -> bool {
+        for sh in &mut self.sheets {
+            if sh.remove_image(id) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn upsert_text(&mut self, sheet: usize, text_obj: TextObject) {
+        while self.sheets.len() <= sheet {
+            self.sheets.push(Sheet::bounded(self.sheets.len()));
+        }
+        if let Some(sh) = self.sheets.get_mut(sheet) {
+            sh.upsert_text(text_obj);
+        }
+    }
+
+    pub fn remove_text(&mut self, id: &str) -> bool {
+        for sh in &mut self.sheets {
+            if sh.remove_text(id) {
+                return true;
             }
         }
         false

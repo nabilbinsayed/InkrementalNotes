@@ -631,6 +631,195 @@ fn test_pdf_fill_rule_uses_nonzero_winding_f() {
     assert!(found_content, "Expected appearance stream with 'h f Q' non-zero winding fill");
 }
 
+#[test]
+fn test_sidecar_roundtrip_with_images_and_text() {
+    let mut doc = Document::for_pdf(2);
+    let mut ids = IdGen::seeded(0x1234);
+
+    // 1. Add a stroke
+    let mut b = StrokeBuilder::new(ids.next_id(), ToolKind::Pen, [0.0, 0.0, 0.0], Brush::default(), true);
+    b.push(10.0, 20.0, 0.5, 0.0);
+    b.push(30.0, 40.0, 0.8, 10.0);
+    doc.push_stroke(0, b.finish(0.4));
+
+    // 2. Add an image
+    doc.push_image(0, inkwell_core::doc::ImageObject {
+        id: "img_test_1".to_string(),
+        sheet: 0,
+        x: 100.0,
+        y: 150.0,
+        width: 200.0,
+        height: 120.0,
+        data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+    });
+
+    // 3. Add a sticky note text object
+    doc.upsert_text(1, inkwell_core::doc::TextObject {
+        id: "txt_test_1".to_string(),
+        sheet: 1,
+        x: 50.0,
+        y: 80.0,
+        text: "Formula:\nE = mc^2".to_string(),
+        font_size: 14.0,
+        color: "#ff0000".to_string(),
+        bold: true,
+        italic: false,
+        width: 120.0,
+        height: 40.0,
+    });
+
+    // Encode sidecar
+    let sidecar_bytes = inkwell_core::doc::encode_sidecar(&doc);
+    assert!(!sidecar_bytes.is_empty());
+
+    // Decode sidecar
+    let decoded = inkwell_core::doc::decode_sidecar(&sidecar_bytes).unwrap();
+    assert_eq!(decoded.sheets.len(), 2);
+
+    // Verify stroke
+    assert_eq!(decoded.sheets[0].stroke_count(), 1);
+
+    // Verify image
+    assert_eq!(decoded.sheets[0].images.len(), 1);
+    let img = &decoded.sheets[0].images[0];
+    assert_eq!(img.id, "img_test_1");
+    assert_eq!(img.x, 100.0);
+    assert_eq!(img.y, 150.0);
+    assert_eq!(img.width, 200.0);
+    assert_eq!(img.height, 120.0);
+
+    // Verify text
+    assert_eq!(decoded.sheets[1].text_objects.len(), 1);
+    let txt = &decoded.sheets[1].text_objects[0];
+    assert_eq!(txt.id, "txt_test_1");
+    assert_eq!(txt.text, "Formula:\nE = mc^2");
+    assert_eq!(txt.font_size, 14.0);
+    assert!(txt.bold);
+    assert!(!txt.italic);
+}
+
+#[test]
+fn test_legacy_v1_sidecar_backwards_compatibility() {
+    let skeleton = serde_json::json!({
+        "generation": 1,
+        "device": { "model": "test", "report_hz": 60.0, "tilt": false },
+        "sheets": [
+            {
+                "kind": { "BoundedPage": { "source_pdf_page": 0 } },
+                "layers": [{ "name": "Ink", "visible": true }]
+            }
+        ],
+        "viewports": [{ "sheet": 0, "pan": [0.0, 0.0], "zoom": 1.0 }],
+        "layer_stroke_counts": [[0]]
+    });
+    let json = serde_json::to_vec(&skeleton).unwrap();
+    let payload = inkwell_core::codec::encode(&[]);
+
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"IWDC");
+    buf.push(1); // version 1
+    buf.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&json);
+    buf.extend_from_slice(&payload);
+
+    let decoded = inkwell_core::doc::decode_sidecar(&buf).unwrap();
+    assert_eq!(decoded.sheets.len(), 1);
+    assert!(decoded.sheets[0].images.is_empty());
+    assert!(decoded.sheets[0].text_objects.is_empty());
+}
+
+#[test]
+fn test_pdf_file_incremental_save_with_images_and_text() {
+    let mut f = PdfFile::open(fixture()).unwrap();
+    let mut doc = Document::for_pdf(1);
+    let mut ids = IdGen::seeded(0xABCD);
+
+    // 1. Add stroke
+    let mut b = StrokeBuilder::new(ids.next_id(), ToolKind::Pen, [0.1, 0.2, 0.3], Brush::default(), true);
+    b.push(50.0, 50.0, 0.6, 0.0);
+    b.push(60.0, 70.0, 0.7, 10.0);
+    doc.push_stroke(0, b.finish(0.4));
+
+    // 2. Add image
+    doc.push_image(0, inkwell_core::doc::ImageObject {
+        id: "img_test_1".to_string(),
+        sheet: 0,
+        x: 100.0,
+        y: 100.0,
+        width: 150.0,
+        height: 100.0,
+        data_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string(),
+    });
+
+    // 3. Add text
+    doc.upsert_text(0, inkwell_core::doc::TextObject {
+        id: "txt_test_1".to_string(),
+        sheet: 0,
+        x: 80.0,
+        y: 250.0,
+        text: "Meeting Notes:\n- Item 1\n- Item 2".to_string(),
+        font_size: 16.0,
+        color: "#08090e".to_string(),
+        bold: true,
+        italic: false,
+        width: 200.0,
+        height: 80.0,
+    });
+
+    // Write generation 1
+    f.write_document(&doc, 64).unwrap();
+    let gen1_bytes = f.finish();
+
+    // Verify PDF structures in gen 1
+    assert!(inkwell_core::pdfobj::find(&gen1_bytes, b"/Subtype /Stamp", 0).is_some(), "Expected /Stamp annotation");
+    assert!(inkwell_core::pdfobj::find(&gen1_bytes, b"/Subtype /FreeText", 0).is_some(), "Expected /FreeText annotation");
+    assert!(inkwell_core::pdfobj::find(&gen1_bytes, b"/Inkw_Sid (img_test_1)", 0).is_some(), "Expected img_test_1 annotation tag");
+    assert!(inkwell_core::pdfobj::find(&gen1_bytes, b"/Inkw_Sid (txt_test_1)", 0).is_some(), "Expected txt_test_1 annotation tag");
+
+    // Verify sidecar extraction
+    match pdf::read_sidecar(&gen1_bytes).unwrap() {
+        SidecarStatus::Ok(d) => {
+            assert_eq!(d.sheets[0].stroke_count(), 1);
+            assert_eq!(d.sheets[0].images.len(), 1);
+            assert_eq!(d.sheets[0].images[0].id, "img_test_1");
+            assert_eq!(d.sheets[0].text_objects.len(), 1);
+            assert_eq!(d.sheets[0].text_objects[0].id, "txt_test_1");
+        }
+        ref other => panic!("Expected SidecarStatus::Ok, got {}", status_name(other)),
+    }
+
+    // Generation 2: Open saved bytes, update text, delete image, and re-save
+    let mut f2 = PdfFile::open(gen1_bytes).unwrap();
+    doc.remove_image("img_test_1");
+    doc.upsert_text(0, inkwell_core::doc::TextObject {
+        id: "txt_test_1".to_string(),
+        sheet: 0,
+        x: 80.0,
+        y: 250.0,
+        text: "Updated Notes:\n- Item Done".to_string(),
+        font_size: 16.0,
+        color: "#08090e".to_string(),
+        bold: true,
+        italic: false,
+        width: 200.0,
+        height: 80.0,
+    });
+
+    f2.write_document(&doc, 64).unwrap();
+    let gen2_bytes = f2.finish();
+
+    // Verify sidecar in generation 2
+    match pdf::read_sidecar(&gen2_bytes).unwrap() {
+        SidecarStatus::Ok(d2) => {
+            assert_eq!(d2.sheets[0].stroke_count(), 1);
+            assert_eq!(d2.sheets[0].images.len(), 0, "Image should be deleted in gen 2");
+            assert_eq!(d2.sheets[0].text_objects.len(), 1);
+            assert_eq!(d2.sheets[0].text_objects[0].text, "Updated Notes:\n- Item Done");
+        }
+        ref other => panic!("Expected SidecarStatus::Ok in gen 2, got {}", status_name(other)),
+    }
+}
+
 // ===========================================================================
 // helpers
 // ===========================================================================

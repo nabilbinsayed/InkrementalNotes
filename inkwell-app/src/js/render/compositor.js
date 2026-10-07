@@ -241,7 +241,7 @@ export function redrawAll() {
             _dctx.fillStyle = t.color || '#141724';
             const weight = t.bold ? 'bold ' : '';
             const slant = t.italic ? 'italic ' : '';
-            const size = t.fontSize || 16;
+            const size = t.fontSize || t.font_size || 16;
             _dctx.font = `${slant}${weight}${size}px Inter, system-ui, -apple-system, sans-serif`;
             _dctx.textBaseline = 'top';
             const lines = (t.text || '').split('\n');

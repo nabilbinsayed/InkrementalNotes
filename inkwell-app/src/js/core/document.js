@@ -330,7 +330,12 @@ export function setDocument({ pageInfos = [], strokes = [], images = [], textObj
     }
     return img;
   });
-  state.textObjects = textObjects;
+  state.textObjects = (textObjects || []).map(t => {
+    const fs = t.fontSize || t.font_size || 16;
+    t.fontSize = fs;
+    t.font_size = fs;
+    return t;
+  });
   state.outline = outline;
   state.bookmarks = bookmarks;
   state.selectedStrokes = [];
